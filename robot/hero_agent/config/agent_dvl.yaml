@@ -1,0 +1,12 @@
+# agent_dvl node parameters
+
+# Serial port settings
+serial:
+  port: "/dev/ttyUSB0"
+  baudrate: 115200
+
+# Loop rate
+loop_rate_hz: 100
+
+# Logging
+log_period: 1.0
