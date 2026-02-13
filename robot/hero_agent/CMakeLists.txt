@@ -42,8 +42,7 @@ add_executable(agent_command
   src/qr_recovery_control.cpp
   src/darknet_control.cpp
   src/mosaic_survey.cpp
-  src/keyboard_handler.cpp
-  src/keyboard_utils.cpp
+  src/teleop.cpp
 )
 add_dependencies(agent_command ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS} ${ros_opencv_ipcam_qr_EXPORTED_TARGETS})
 target_link_libraries(agent_command ${catkin_LIBRARIES})

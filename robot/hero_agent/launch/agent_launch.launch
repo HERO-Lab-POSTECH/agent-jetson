@@ -3,6 +3,7 @@
   <!-- Launch options -->
   <arg name="dvl"     default="false" />
   <arg name="rtsp"    default="false" />
+  <arg name="teleop"  default="true" />
 
   <!-- UVC camera (USB) -->
   <node pkg="uvc_camera" name="uvc_camera" type="uvc_camera_node" />
@@ -21,7 +22,7 @@
     <param name="baud"    value="76800"/>
   </node>
 
-  <!-- Agent command (QR recovery, DARKNET, mosaic, keyboard) -->
+  <!-- Agent command (QR recovery, DARKNET, mosaic, teleop) -->
   <node pkg="hero_agent" name="agent_command" type="agent_command" output="screen">
     <rosparam file="$(find hero_agent)/config/agent_command.yaml" command="load" />
   </node>
@@ -35,5 +36,11 @@
 
   <!-- Agent main (FSM, monitoring, rosbag) -->
   <node pkg="hero_agent" name="agent_main" type="agent_main" output="screen" />
+
+  <!-- Teleop (needs terminal window for keyboard input) -->
+  <group if="$(arg teleop)">
+    <node pkg="hero_agent" name="key_teleop" type="key_teleop.py"
+          output="screen" launch-prefix="xterm -e" />
+  </group>
 
 </launch>

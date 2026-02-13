@@ -33,6 +33,8 @@
 #include <ctime>
 #include <cstdlib>
 #include <regex>
+#include <atomic>
+#include <set>
 
 // ==============================
 // System and POSIX headers
@@ -83,7 +85,7 @@ float start_target_depth = 0.2f;
 // Object detection (vision)
 // ==============================
 const int FRAME_RATE = 10;
-const int BUFFER_SIZE = FRAME_RATE * 2;  // Sliding window = 2 seconds
+const int BUFFER_SIZE = FRAME_RATE * 2;
 std::deque<bool> detection_buffer;
 int detection_count = 0;
 int object_detected = 0;
@@ -115,8 +117,9 @@ std::string csv_status_msg = "";
 
 // ==============================
 // rosbag recording control
+// [BUG FIX C4] std::atomic for thread-safe access with AsyncSpinner
 // ==============================
-int record_flag = 0;
+std::atomic<int> record_flag(0);
 int prev_record_flag = 0;
 pid_t rosbag_pid = -1;
 std::ofstream fout_csv;
@@ -126,41 +129,23 @@ std::ofstream fout_csv;
 // ==============================
 const float DEPTH_TOLERANCE = 0.01f;
 
-// Utility: command sender
+// Forward declarations
 void send_command(char cmd);
-
-// Utility: timestamp string generator
 std::string get_timestamp_string();
-
-// Utility: directory creation
 void ensure_directory(const std::string& path);
 int get_next_log_index(const std::string& base_path);
-
-// Utility: adjust depth based on FSM reference
 void adjust_depth_if_needed();
-
-// Utility: rosbag recording
 void start_rosbag_record();
 void stop_rosbag_record();
-
-// Utility: monitoring system output
 void print_monitor_status();
-
-// Utility: signal interrupt handler
 void handle_signal(int sig);
 
-// Callback: keyboard input from key_teleop node
+// [BUG FIX H4] key_input_callback: only handles FSM control for agent_main
+// Does NOT forward generic commands - agent_command handles those via its own subscriber
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg);
 
 /**
- * @brief Image topic callback for object detection.
- * 
- * This function receives raw RGB images, converts them to HSV,
- * applies filtering and contour analysis to detect an object.
- * It also determines whether the object is approximately centered
- * in the image and updates detection flags accordingly.
- *
- * @param msg ROS image message (sensor_msgs::Image)
+ * Image topic callback for object detection.
  */
 void image_callback(const sensor_msgs::ImageConstPtr& msg)
 {
@@ -179,12 +164,10 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
         int image_center_x = input_image.cols / 2;
         int image_center_y = input_image.rows / 2;
 
-        // Convert to HSV and apply color filtering
         cv::Mat hsv, sat_mask;
         cv::cvtColor(input_image, hsv, cv::COLOR_BGR2HSV);
         cv::inRange(hsv, cv::Scalar(0, 50, 0), cv::Scalar(255, 200, 255), sat_mask);
 
-        // Find contours
         std::vector<std::vector<cv::Point>> contours;
         std::vector<cv::Vec4i> hierarchy;
         cv::findContours(sat_mask, contours, hierarchy, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
@@ -194,7 +177,6 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
         std::vector<cv::Point> largest_contour;
         double max_area = 0.0;
 
-        // Find the largest contour that exceeds the area threshold
         for (const auto& contour : contours) {
             double area = cv::contourArea(contour);
             if (area > MIN_CONTOUR_AREA && area > max_area) {
@@ -204,7 +186,6 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
             }
         }
 
-        // Check if the detected object is centered in the image
         if (frame_detected && !largest_contour.empty()) {
             cv::Rect bbox = cv::boundingRect(largest_contour);
             int center_x = bbox.x + bbox.width / 2;
@@ -216,7 +197,6 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
             );
         }
 
-        // Update detection buffer
         detection_buffer.push_back(frame_detected);
         if (frame_detected) detection_count++;
 
@@ -225,7 +205,6 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
             detection_buffer.pop_front();
         }
 
-        // Final decision based on detection history
         if (detection_buffer.size() == BUFFER_SIZE &&
             static_cast<float>(detection_count) / BUFFER_SIZE >= 0.9f) {
             object_detected = 1;
@@ -235,7 +214,6 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
 
         object_centered = (object_detected && is_centered) ? 1 : 0;
 
-        // Update debug message
         if (object_detected) {
             vision_info_msg = object_centered
                 ? "Object detected and centered."
@@ -247,19 +225,13 @@ void image_callback(const sensor_msgs::ImageConstPtr& msg)
     } catch (cv_bridge::Exception& e) {
         image_error_msg = std::string("cv_bridge exception: ") + e.what();
     }
-} 
+}
 
 /**
- * @brief Full agent state callback from ROS topic.
- *
- * Updates internal robot state variables and executes the finite state machine (FSM)
- * for controlling robot behavior such as yaw control, depth control, movement, and gripping.
- *
- * @param msg Incoming hero_agent_state message containing sensor and control data.
+ * Full agent state callback - updates state and runs FSM.
  */
 void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
 {
-    // Update basic state variables
     yaw           = msg->Yaw;
     target_yaw    = msg->Target_yaw;
     throttle      = msg->Throttle;
@@ -270,59 +242,52 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
     control_state = msg->Cont_state;
     control_flags = msg->State_addit;
 
-    // Decode control_flags into boolean flags
     control_yaw_enabled   = (control_flags & 1)  ? 1 : 0;
     control_depth_enabled = (control_flags & 2)  ? 1 : 0;
     relay_enabled         = (control_flags & 4)  ? 1 : 0;
     laser_enabled         = (control_flags & 8)  ? 1 : 0;
     recovery_enabled      = (control_flags & 16) ? 1 : 0;
 
-    const float DEPTH_TOLERANCE = 0.01;
+    const float DEPTH_TOL = 0.01;
 
-    // FSM control logic
     switch (control_process)
     {
         case 0:
-            // Initialization
             start_target_depth  = 0.1;
             process_count       = 0;
             gripper_state       = 0;
 
-            send_command('h');  // Disable yaw controller
-            send_command(';');  // Disable depth controller
-            send_command('g');  // Stop motors
+            send_command('h');
+            send_command(';');
+            send_command('g');
 
-            cont_ver_msg.data = 3;  // ALBC to position 0.01
+            cont_ver_msg.data = 3;
             pub_cont_ver.publish(cont_ver_msg);
             break;
 
         case 1:
-            // Controller enable phase
-            cont_ver_msg.data = cont_ver;  // TD or PID
+            cont_ver_msg.data = cont_ver;
             pub_cont_ver.publish(cont_ver_msg);
 
-            send_command('c');  // Open gripper
+            send_command('c');
 
             process_count++;
 
-            // Enable yaw and depth controllers
             if (!control_yaw_enabled) send_command('y');
-            if (!control_depth_enabled) send_command('p');             
+            if (!control_depth_enabled) send_command('p');
 
-            // Adjust depth if necessary
             if (process_count % 100 == 0) {
                 adjust_depth_if_needed();
             }
             break;
 
         case 2:
-            // Object search phase (forward movement)
             process_count++;
 
             if (move_speed < 10) {
-                send_command('z');  // Increase speed
+                send_command('z');
             } else if (move_speed > 10) {
-                send_command('x');  // Decrease speed
+                send_command('x');
             }
 
             if (process_count % 100 == 0) {
@@ -330,7 +295,7 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
             }
 
             if (control_state != 2) {
-                send_command('w');  // Move forward
+                send_command('w');
             }
 
             if (object_centered == 1) {
@@ -340,9 +305,8 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
             break;
 
         case 3:
-            // Object detected - hold position
             if (control_state != 5) {
-                send_command('1');  // Hold
+                send_command('1');
             }
 
             process_count++;
@@ -353,12 +317,11 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
             break;
 
         case 4:
-            // Descend toward object
             process_count++;
 
             if (process_count > 20) {
                 process_count = 0;
-                send_command('o');  // Descend
+                send_command('o');
 
                 if (gripping_depth < depth) {
                     control_process = 5;
@@ -369,9 +332,8 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
             break;
 
         case 5:
-            // Gripping phase
             if (gripper_state == 0) {
-                send_command('b');  // Close gripper
+                send_command('b');
             }
 
             process_count++;
@@ -387,70 +349,49 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
             break;
 
         case 6:
-            // Lift object
             process_count++;
 
             if (process_count % 100 == 0) {
                 adjust_depth_if_needed();
             }
 
-            if (target_depth <= start_target_depth + DEPTH_TOLERANCE) {
+            if (target_depth <= start_target_depth + DEPTH_TOL) {
                 gripper_state = 0;
                 process_count = 0;
-                send_command('1');  // Hold position
+                send_command('1');
             }
             break;
     }
 }
 
 /**
- * @brief Callback function to log ALBC status to CSV file.
- * 
- * This function subscribes to the /albc_status topic and writes the received
- * Float64MultiArray data to a CSV file when record_flag is set to 1.
- * 
- * Data layout in CSV:
- *   [0] current_tile (sec)
- *   [1] target_roll (deg)
- *   [2] current_roll (deg)
- *   [3] target_pitch (deg)
- *   [4] current_pitch (deg)
- *   [5] target_x (m)
- *   [6] target_y (m)
- *   [7] current_x (m)
- *   [8] current_y (m)
+ * ALBC status CSV logging callback.
  */
 void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
 {
-    if (record_flag == 1 && msg->data.size() >= 8)
+    // [BUG FIX C4] record_flag is std::atomic<int>, safe to read from AsyncSpinner
+    if (record_flag.load() == 1 && msg->data.size() >= 8)
     {
-        // Get current ROS time as float (in seconds)
         double current_time = ros::Time::now().toSec();
 
-        fout_csv 
-            << current_time << ","  // ROS timestamp
-            << msg->data[0] << "," << msg->data[1] << ","   // roll
-            << msg->data[2] << "," << msg->data[3] << ","   // pitch
-            << msg->data[4] << "," << msg->data[5] << ","   // target x, y
-            << msg->data[6] << "," << msg->data[7] << ","   // current x, y
-            << target_depth << "," << depth << "\n";         // depth
+        fout_csv
+            << current_time << ","
+            << msg->data[0] << "," << msg->data[1] << ","
+            << msg->data[2] << "," << msg->data[3] << ","
+            << msg->data[4] << "," << msg->data[5] << ","
+            << msg->data[6] << "," << msg->data[7] << ","
+            << target_depth << "," << depth << "\n";
     }
 }
 
-/**
- * @brief Callback for desired gripping depth value.
- *
- * Updates the target depth value used for gripping alignment.
- *
- * @param depth_msg ROS Float64 message with gripping depth
- */
 void gripping_depth_callback(const std_msgs::Float64& depth_msg)
 {
     gripping_depth = depth_msg.data;
 }
 
 /**
- * @brief Callback for keyboard input from key_teleop node.
+ * [BUG FIX H4] key_input_callback: only handles agent_main FSM commands.
+ * Does not forward to /hero_agent/command - agent_command has its own subscriber.
  */
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
@@ -465,32 +406,29 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
     else if (ch == '=' && control_process < 6) {
         control_process++;
     }
-    else {
-        send_command(ch);
+    else if (ch == 'R') {
+        // Toggle recording
+        record_flag.store(record_flag.load() == 0 ? 1 : 0);
     }
+    // [BUG FIX H4] Removed generic send_command(ch) forwarding
+    // agent_command handles all other keys via its own /hero_agent/key_input subscriber
 }
 
 /**
- * @brief Main entry point of the ROS agent node.
- *
- * Handles initialization, ROS communication setup, rosbag recording,
- * keyboard input, and FSM execution loop.
+ * Main entry point.
  */
 int main(int argc, char** argv)
 {
-    // Setup result file paths
     std::string base_traj_dir = "/home/nvidia/catkin_ws/agent_results/trajectory";
     std::string base_rosbag_dir = "/home/nvidia/catkin_ws/agent_results/rosbags";
     ensure_directory(base_traj_dir);
     ensure_directory(base_rosbag_dir);
 
-    // Initialize ROS (disable default SIGINT handler so we can install our own)
     ros::init(argc, argv, "agent_main", ros::init_options::NoSigintHandler);
     ros::NodeHandle nh;
     ros::AsyncSpinner spinner(2);
     spinner.start();
 
-    // Install signal handlers AFTER ros::init to prevent override
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
@@ -507,29 +445,26 @@ int main(int argc, char** argv)
     pub_vision_command = nh.advertise<std_msgs::Int8>("/hero_agent/vision_command", 100);
     pub_cont_ver       = nh.advertise<std_msgs::Int32>("/cont_ver", 10);
 
-    // Init loop
     ros::Rate loop_rate(100);
 
-    // Startup banner (logged to rosout for records)
-    ROS_INFO("Agent Main initialized (FSM 0-6, ctrl_ver=%d, grip=%.2fm)", cont_ver, gripping_depth);
+    ROS_INFO("===================================");
+    ROS_INFO("  Agent Main Initialized");
+    ROS_INFO("  FSM: 0-6, ctrl_ver=%d, grip=%.2fm", cont_ver, gripping_depth);
+    ROS_INFO("===================================");
 
     while (ros::ok())
     {
-        // Note: record_flag is written by key_input_callback (via AsyncSpinner) and
-        // read here in the main loop. With AsyncSpinner(2), this is a potential race.
-        // Using int (not bool) ensures atomic reads/writes on most architectures.
-        // For strict correctness, consider std::atomic<int> if issues arise.
-        if (record_flag != prev_record_flag) {
-            if (record_flag == 1) {
-                // Close previous file if open
+        // [BUG FIX C4] Atomic load for thread-safe read
+        int current_record = record_flag.load();
+        if (current_record != prev_record_flag) {
+            if (current_record == 1) {
                 if (fout_csv.is_open()) fout_csv.close();
-        
+
                 int log_index = get_next_log_index(base_traj_dir);
 
                 albc_csv_path = base_traj_dir + "/albc_status_" + std::to_string(log_index) + ".csv";
-                rosbag_file_path = base_rosbag_dir + "/record_" + std::to_string(log_index) + ".bag";                
-        
-                // Open new CSV file and write header
+                rosbag_file_path = base_rosbag_dir + "/record_" + std::to_string(log_index) + ".bag";
+
                 fout_csv.open(albc_csv_path);
                 if (!fout_csv.is_open()) {
                     csv_status_msg = "[ERROR] Failed to open new CSV file.";
@@ -537,23 +472,19 @@ int main(int argc, char** argv)
                     fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,target_depth,depth\n";
                     csv_status_msg = "[INFO] Logging started.";
                 }
-        
-                // Start rosbag recording after CSV is ready
+
                 start_rosbag_record();
                 rosbag_status_msg = "[INFO] Rosbag recording started.";
             } else {
-                // Stop logging: close CSV file first
                 if (fout_csv.is_open()) fout_csv.close();
                 csv_status_msg = "[INFO] Logging stopped.";
-        
-                // Then stop rosbag
+
                 stop_rosbag_record();
                 rosbag_status_msg = "[INFO] Rosbag recording stopped.";
             }
-        
-            // Update previous flag state
-            prev_record_flag = record_flag;
-        }          
+
+            prev_record_flag = current_record;
+        }
 
         print_monitor_status();
         loop_rate.sleep();
@@ -565,11 +496,6 @@ int main(int argc, char** argv)
     return 0;
 }
 
-/**
- * @brief Start rosbag recording using fork and exec.
- *
- * Spawns a child process to execute `rosbag record -a`. Verifies early failure and updates rosbag_pid.
- */
 void start_rosbag_record()
 {
     rosbag_pid = fork();
@@ -580,14 +506,12 @@ void start_rosbag_record()
     }
 
     if (rosbag_pid == 0) {
-        // Child process: replace with rosbag
         execlp("rosbag", "rosbag", "record", "-O", rosbag_file_path.c_str(), "-a", NULL);
         perror("rosbag exec failed");
-        _exit(1);  // Use _exit to avoid flushing shared stdio buffers
+        _exit(1);
     }
 
-    // Parent process: check if child exits immediately
-    usleep(500000);  // 0.5s
+    usleep(500000);
     int status = 0;
     pid_t result = waitpid(rosbag_pid, &status, WNOHANG);
 
@@ -597,14 +521,8 @@ void start_rosbag_record()
     } else {
         rosbag_status_msg = "[INFO] Rosbag recording process started.";
     }
-} 
- 
-/**
- * @brief Stop the rosbag recording process and finalize the .bag file.
- *
- * Terminates the rosbag child process, waits for exit, renames .bag.active,
- * and verifies .bag file exists and has content.
- */
+}
+
 void stop_rosbag_record()
 {
     if (rosbag_pid <= 0) return;
@@ -612,7 +530,6 @@ void stop_rosbag_record()
     int status = 0;
     pid_t result;
 
-    // Attempt graceful termination
     kill(rosbag_pid, SIGTERM);
 
     for (int i = 0; i < 30; ++i) {
@@ -622,10 +539,9 @@ void stop_rosbag_record()
             rosbag_status_msg = "[ERROR] waitpid failed while stopping rosbag.";
             break;
         }
-        usleep(100000);  // 100ms × 30 = 3s
+        usleep(100000);
     }
 
-    // If still running, force kill
     if (result == 0) {
         kill(rosbag_pid, SIGKILL);
         waitpid(rosbag_pid, &status, 0);
@@ -638,7 +554,6 @@ void stop_rosbag_record()
 
     rosbag_pid = -1;
 
-    // Finalize .bag file
     std::string active_file = rosbag_file_path + ".active";
     std::ifstream infile(active_file.c_str());
 
@@ -653,7 +568,6 @@ void stop_rosbag_record()
     } else {
         infile.close();
 
-        // .active doesn't exist, check if .bag exists and has non-zero size
         std::ifstream check_bag(rosbag_file_path.c_str(), std::ios::binary | std::ios::ate);
         if (check_bag.good()) {
             std::streamsize size = check_bag.tellg();
@@ -668,31 +582,17 @@ void stop_rosbag_record()
         }
     }
 }
- 
-/**
- * @brief Ensure a directory exists, and create it if not.
- * 
- * If the path exists and is not a directory, an error is printed.
- *
- * @param path Filesystem path to check or create
- */
+
 void ensure_directory(const std::string& path)
 {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) {
-        // Directory does not exist
         mkdir(path.c_str(), 0775);
     } else if (!S_ISDIR(st.st_mode)) {
         std::cerr << "[ERROR] Path exists but is not a directory: " << path << std::endl;
     }
 }
 
-/**
- * @brief Get the next available log file index by scanning existing files.
- *
- * Scans the base path for files matching "albc_status_<number>.csv"
- * and returns the next available integer index.
- */
 int get_next_log_index(const std::string& base_path)
 {
     int index = 0;
@@ -714,43 +614,27 @@ int get_next_log_index(const std::string& base_path)
 
     closedir(dir);
 
-    // Find the smallest unused index
     while (used_indices.count(index)) ++index;
     return index;
 }
 
-/**
- * @brief Adjust vertical depth based on FSM reference (`start_target_depth`).
- * 
- * Sends motor control commands 'l' or 'o' if current target depth deviates.
- */
 void adjust_depth_if_needed()
 {
     float delta = target_depth - start_target_depth;
 
     if (delta > DEPTH_TOLERANCE) {
-        send_command('l');  // rise
+        send_command('l');
     } else if (delta < -DEPTH_TOLERANCE) {
-        send_command('o');  // descend
+        send_command('o');
     }
-} 
+}
 
-/**
- * @brief Publish a single character command to the robot.
- * 
- * Wrapper function to simplify command publishing through `/hero_agent/command`.
- * 
- * @param cmd Character command to send
- */
 void send_command(char cmd)
 {
     command_msg.data = cmd;
     pub_command.publish(command_msg);
 }
 
-/**
- * @brief Signal handler for clean shutdown
- */
 void handle_signal(int sig)
 {
     if (rosbag_pid > 0) {
@@ -759,13 +643,7 @@ void handle_signal(int sig)
     }
     ros::shutdown();
 }
- 
-/**
- * @brief Print real-time robot and system status to the terminal.
- * 
- * This function clears the terminal and prints robot control state, FSM status, 
- * sensor flags, and any active warnings or system messages.
- */
+
 void print_monitor_status()
 {
     static const char* fsm_names[] = {
@@ -781,7 +659,7 @@ void print_monitor_status()
         depth, target_depth, control_depth_enabled ? "ON" : "OFF",
         move_speed, gripper_state,
         object_detected ? (object_centered ? "CTR" : "DET") : "---",
-        record_flag ? "REC" : "---");
+        record_flag.load() ? "REC" : "---");
 
     if (!rosbag_status_msg.empty())
         ROS_INFO_THROTTLE(1.0, "Rosbag: %s", rosbag_status_msg.c_str());

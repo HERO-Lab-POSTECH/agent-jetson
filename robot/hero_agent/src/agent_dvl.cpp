@@ -1,14 +1,7 @@
 #include <ros/ros.h>
-#include <ros/package.h>
 #include <std_msgs/Int8.h>
-#include <std_msgs/String.h>
 
-#include "hero_msgs/hero_agent_dvl.h"
 #include "hero_msgs/hero_agent_dvl_velocity.h"
-#include "hero_msgs/hero_agent_sensor.h"
-#include "hero_msgs/hero_agent_cont_para.h"
-#include "hero_msgs/hero_agent_cont_xy.h"
-#include "hero_msgs/hero_agent_position_result.h"
 
 #include <cstdio>
 #include <cstring>
@@ -83,7 +76,7 @@ int main(int argc, char **argv)
             break;
     }
 
-    int c, res;
+    int res;
     struct termios oldtio, newtio;
     char buf[512];
 
@@ -101,30 +94,16 @@ int main(int argc, char **argv)
     }
 
     tcgetattr(fd, &oldtio);
-    bzero(&newtio, sizeof(newtio));
+    memset(&newtio, 0, sizeof(newtio));
 
     newtio.c_cflag = baudrate | CS8 | CLOCAL | CREAD;
     newtio.c_iflag = IGNPAR | ICRNL;
     newtio.c_oflag = 0;
     newtio.c_lflag = ICANON;
 
-    newtio.c_cc[VINTR]    = 0;
-    newtio.c_cc[VQUIT]    = 0;
-    newtio.c_cc[VERASE]   = 0;
-    newtio.c_cc[VKILL]    = 0;
-    newtio.c_cc[VEOF]     = 4;
-    newtio.c_cc[VTIME]    = 0;
-    newtio.c_cc[VMIN]     = 1;
-    newtio.c_cc[VSWTC]    = 0;
-    newtio.c_cc[VSTART]   = 0;
-    newtio.c_cc[VSTOP]    = 0;
-    newtio.c_cc[VSUSP]    = 0;
-    newtio.c_cc[VEOL]     = 0;
-    newtio.c_cc[VREPRINT] = 0;
-    newtio.c_cc[VDISCARD] = 0;
-    newtio.c_cc[VWERASE]  = 0;
-    newtio.c_cc[VLNEXT]   = 0;
-    newtio.c_cc[VEOL2]    = 0;
+    newtio.c_cc[VEOF]  = 4;
+    newtio.c_cc[VTIME] = 0;
+    newtio.c_cc[VMIN]  = 1;
 
     tcflush(fd, TCIFLUSH);
     tcsetattr(fd, TCSANOW, &newtio);

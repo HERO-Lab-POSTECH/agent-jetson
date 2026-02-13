@@ -1,4 +1,4 @@
-#include "hero_agent/agent_command_types.h"
+#include "hero_agent/hero_agent_types.h"
 
 // ==============================
 // Mosaic survey pattern control
@@ -6,44 +6,44 @@
 
 void executeMosaicSurvey(int count)
 {
-    if (cont_mosaic == 1) {
+    if (ctrl.mosaic == 1) {
         // Sway positive direction
         if (count == 0) {
-            sway_count++;
-            target_y += move_dis;
-        } else if (count == 9 && sway_count > sway_num) {
-            cont_mosaic = 2;
-            sway_count = 0;
+            mosaic.sway_count++;
+            target.y += mosaic.move_dis;
+        } else if (count == 9 && mosaic.sway_count > mosaic.sway_num) {
+            ctrl.mosaic = 2;
+            mosaic.sway_count = 0;
         }
     }
-    else if (cont_mosaic == 2) {
+    else if (ctrl.mosaic == 2) {
         // Surge forward
         if (count == 0) {
-            surge_count++;
-            target_x += move_dis;
-        } else if (count == 9 && surge_count > surge_num) {
-            cont_mosaic = 3;
-            surge_count = 0;
+            mosaic.surge_count++;
+            target.x += mosaic.move_dis;
+        } else if (count == 9 && mosaic.surge_count > mosaic.surge_num) {
+            ctrl.mosaic = 3;
+            mosaic.surge_count = 0;
         }
     }
-    else if (cont_mosaic == 3) {
+    else if (ctrl.mosaic == 3) {
         // Sway negative direction
         if (count == 0) {
-            sway_count++;
-            target_y -= move_dis;
-        } else if (count == 9 && sway_count > sway_num) {
-            cont_mosaic = 4;
-            sway_count = 0;
+            mosaic.sway_count++;
+            target.y -= mosaic.move_dis;
+        } else if (count == 9 && mosaic.sway_count > mosaic.sway_num) {
+            ctrl.mosaic = 4;
+            mosaic.sway_count = 0;
         }
     }
-    else if (cont_mosaic == 4) {
+    else if (ctrl.mosaic == 4) {
         // Surge forward (return leg)
         if (count == 0) {
-            surge_count++;
-            target_x += move_dis;
-        } else if (count == 9 && surge_count > surge_num) {
-            cont_mosaic = 0;
-            surge_count = 0;
+            mosaic.surge_count++;
+            target.x += mosaic.move_dis;
+        } else if (count == 9 && mosaic.surge_count > mosaic.surge_num) {
+            ctrl.mosaic = 0;
+            mosaic.surge_count = 0;
         }
     }
 }

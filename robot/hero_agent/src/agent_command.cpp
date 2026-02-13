@@ -1,17 +1,19 @@
-#include "hero_agent/agent_command_types.h"
+#include "hero_agent/hero_agent_types.h"
 
 // ==============================
-// Global variable definitions
+// Global variable definitions (struct-based)
 // ==============================
 
-// Navigation state
-float navi_x = 0, navi_y = 0, navi_z = 0, navi_yaw = 0;
-float target_x = 0, target_y = 0, target_z = 0, target_yaw = 0;
-
-// Winch state
-int64_t current_position = 0, target_position = 0, calib_position = 0;
-float target_meter = 0, pre_target_meter = 0, target_rotation = 0;
-int qr_based_calibration = 0;
+NavigationState navi;
+TargetState target;
+WinchState winch;
+QRState qr;
+QRGains qr_gains;
+DarknetState darknet;
+MosaicState mosaic;
+ControlFlags ctrl;
+AutoRecoveryState auto_recovery;
+ThrustOutput thrust;
 
 // ROS publishers
 ros::Publisher pub_command;
@@ -26,44 +28,6 @@ hero_msgs::hero_agent_dvl msg_target;
 std_msgs::Int64 msg_winch_target;
 hero_msgs::hero_agent_cont_xy cont_xy_msg;
 hero_msgs::hero_agent_position_result agent_qr_result_msg;
-
-// DARKNET state
-int found_darknet = 0;
-int darknet_x = 0, darknet_y = 0, darknet_width = 0, darknet_height = 0, darknet_area = 0;
-
-// Recovery state
-int start_recovery = 0, start_count = 0, start_step = 0, start_step_pre = 0;
-int cont_darknet = 0, cont_recovery = 0, cont_mosaic = 0;
-int cont_qr_tdc = 0;
-
-// QR state
-float qr_x = 0, qr_y = 0, qr_z = 0, qr_yaw = 0;
-int qr_valid = 0;
-float pre_qr_x = 0, pre_qr_y = 0, pre_qr_z = 0;
-float qr_x_target = 0, qr_y_target = 0, qr_z_target = 0, qr_yaw_target = 0;
-float qr_x_error = 0, qr_y_error = 0, qr_z_error = 0, qr_yaw_error = 0;
-float qr_x_error_pre = 0, qr_y_error_pre = 0, qr_z_error_pre = 0, qr_yaw_error_pre = 0;
-float qr_x_error_d = 0, qr_y_error_d = 0, qr_z_error_d = 0, qr_yaw_error_d = 0;
-float qr_x_error_d_pre = 0, qr_z_error_d_pre = 0;
-float qr_x_error_sum = 0, qr_z_error_sum = 0;
-float qr_x_ax = 0, qr_z_az = 0, qr_x_ax_pre = 0, qr_z_az_pre = 0;
-float qr_Mb = 0.16f, qr_KKp = 5.0f, qr_KKv = 26.0f;
-float Kp = 0.005f, Kd = 0.005f;
-float qr_Kp = 65.0f, qr_Kd = 65.0f, qr_Ki = 0.05f;
-double Tx = 0, Ty = 0;
-int qr_count = 0, flag_count = 0;
-
-// Mosaic state
-int sway_count = 0, sway_num = 300, surge_count = 0, surge_num = 50;
-float move_dis = 0.01f;
-int deep_count = 0, start_position = 0;
-
-// DARKNET control
-float darknet_x_target = 320.0f, darknet_y_target = 300.0f;
-float darknet_x_error = 0, darknet_y_error = 0;
-float darknet_x_error_pre = 0, darknet_y_error_pre = 0;
-float darknet_x_error_d = 0, darknet_y_error_d = 0;
-float darknet_Kp = 0.1f, darknet_Kd = 0.1f;
 
 // Recording
 int time_count = 0, start_record = 0;
@@ -97,9 +61,9 @@ std::queue<int> key_input_queue;
 
 void msgCallback_result(const hero_msgs::hero_agent_position_result::ConstPtr &msg)
 {
-    navi_x = msg->X;
-    navi_y = msg->Y;
-    navi_z = msg->Z;
+    navi.x = msg->X;
+    navi.y = msg->Y;
+    navi.z = msg->Z;
 }
 
 void key_input_callback(const std_msgs::Int8::ConstPtr &msg) {
@@ -108,11 +72,8 @@ void key_input_callback(const std_msgs::Int8::ConstPtr &msg) {
 
 void msgCallback_winch_pos(const std_msgs::Int64::ConstPtr &msg)
 {
-    current_position = msg->data;
+    winch.current_position = msg->data;
 }
-
-// Forward declaration
-extern void initRecoveryConfigs();
 
 // ==============================
 // Parameter loading from YAML
@@ -121,27 +82,28 @@ extern void initRecoveryConfigs();
 static void loadParameters(ros::NodeHandle& nh)
 {
     // QR control gains
-    nh.param<float>("qr_control/Kp", Kp, 0.005f);
-    nh.param<float>("qr_control/Kd", Kd, 0.005f);
-    nh.param<float>("qr_control/qr_Kp", qr_Kp, 65.0f);
-    nh.param<float>("qr_control/qr_Kd", qr_Kd, 65.0f);
-    nh.param<float>("qr_control/qr_Ki", qr_Ki, 0.05f);
-    nh.param<float>("qr_control/qr_Mb", qr_Mb, 0.16f);
-    nh.param<float>("qr_control/qr_KKp", qr_KKp, 5.0f);
-    nh.param<float>("qr_control/qr_KKv", qr_KKv, 26.0f);
+    nh.param<float>("qr_control/Kp", qr_gains.Kp, 0.005f);
+    nh.param<float>("qr_control/Kd", qr_gains.Kd, 0.005f);
+    nh.param<float>("qr_control/qr_Kp", qr_gains.qr_Kp, 65.0f);
+    nh.param<float>("qr_control/qr_Kd", qr_gains.qr_Kd, 65.0f);
+    nh.param<float>("qr_control/qr_Ki", qr_gains.qr_Ki, 0.05f);
+    nh.param<float>("qr_control/qr_Mb", qr_gains.Mb, 0.16f);
+    nh.param<float>("qr_control/qr_KKp", qr_gains.KKp, 5.0f);
+    nh.param<float>("qr_control/qr_KKv", qr_gains.KKv, 26.0f);
     nh.param<double>("qr_control/saturation_default", param_saturation_default, 200.0);
     nh.param<double>("qr_control/saturation_recovery", param_saturation_recovery, 100.0);
 
     // DARKNET
-    nh.param<float>("darknet/Kp", darknet_Kp, 0.1f);
-    nh.param<float>("darknet/Kd", darknet_Kd, 0.1f);
-    nh.param<float>("darknet/x_target", darknet_x_target, 320.0f);
-    nh.param<float>("darknet/y_target", darknet_y_target, 300.0f);
+    nh.param<float>("darknet/Kp", darknet.Kp, 0.1f);
+    nh.param<float>("darknet/Kd", darknet.Kd, 0.1f);
+    nh.param<float>("darknet/x_target", darknet.x_target, 320.0f);
+    nh.param<float>("darknet/y_target", darknet.y_target, 300.0f);
+    nh.param<double>("darknet/saturation", darknet.saturation, 100.0);
 
     // Mosaic
-    nh.param<int>("mosaic/sway_num", sway_num, 300);
-    nh.param<int>("mosaic/surge_num", surge_num, 50);
-    nh.param<float>("mosaic/move_dis", move_dis, 0.01f);
+    nh.param<int>("mosaic/sway_num", mosaic.sway_num, 300);
+    nh.param<int>("mosaic/surge_num", mosaic.surge_num, 50);
+    nh.param<float>("mosaic/move_dis", mosaic.move_dis, 0.01f);
 
     // Winch model
     nh.param<double>("winch/coeff_a", winch_coeff_a, 0.00171073);
@@ -181,19 +143,19 @@ static void handleRecording()
         // Disturbance window (placeholder)
     }
 
-    fout << time_count << '\t' << qr_x_target << '\t' << qr_y_target << '\t'
-         << qr_z_target << '\t' << qr_x << '\t' << qr_y << '\t' << qr_z << '\t'
-         << Tx << '\t' << Ty << std::endl;
+    fout << time_count << '\t' << qr.x_target << '\t' << qr.y_target << '\t'
+         << qr.z_target << '\t' << qr.x << '\t' << qr.y << '\t' << qr.z << '\t'
+         << thrust.Tx << '\t' << thrust.Ty << std::endl;
 
     if (time_count == 4000) {
         resetQrErrors();
-        cont_qr_tdc = 1;
+        ctrl.qr_tdc = 1;
     } else if (time_count > 6000) {
         start_record = 0;
         time_count = 0;
-        cont_recovery = -2;
-        flag_count = 0;
-        cont_qr_tdc = 0;
+        ctrl.recovery = -2;
+        qr.flag_count = 0;
+        ctrl.qr_tdc = 0;
         resetQrErrors();
     }
 }
@@ -204,133 +166,140 @@ static void handleRecording()
 
 static void handleAutoRecovery(ros::Rate& loop_rate)
 {
-    if (start_recovery != 1) return;
+    if (auto_recovery.active != 1) return;
 
-    start_count++;
+    auto_recovery.count++;
 
-    if (start_step == 0) {
-        start_position = current_position;
-        if (start_count > 300) start_step = 1;
+    // [BUG FIX H2] Reset count on all state transitions (done in switch below)
+
+    if (auto_recovery.step == 0) {
+        mosaic.start_position = winch.current_position;
+        if (auto_recovery.count > 300) auto_recovery.step = 1;
     }
-    else if (start_step == 1 && start_count > 300) { start_step = 2; }
-    else if (start_step == 2 && start_count > 300 && cont_recovery == 0) { start_step = 3; }
-    else if (start_step == 3) {
-        if (target_z < -0.55) start_step = 4;
-        else if (std::abs(navi_z - target_z) < 0.02 || start_count > 100) {
-            start_step_pre = 2; start_step = 3;
+    else if (auto_recovery.step == 1 && auto_recovery.count > 300) {
+        auto_recovery.step = 2;
+    }
+    else if (auto_recovery.step == 2 && auto_recovery.count > 300 && ctrl.recovery == 0) {
+        auto_recovery.step = 3;
+    }
+    else if (auto_recovery.step == 3) {
+        if (target.z < -0.55) auto_recovery.step = 4;
+        else if (std::abs(navi.z - target.z) < 0.02 || auto_recovery.count > 100) {
+            auto_recovery.step_pre = 2; auto_recovery.step = 3;
         }
     }
-    else if (start_step == 4) {
-        if (std::abs(target_position - current_position) < 50 || std::abs(navi_x - target_x) < 0.02) {
-            if (found_darknet >= 1) start_step = 5;
-            else { start_step_pre = 3; start_step = 4; }
+    else if (auto_recovery.step == 4) {
+        if (std::abs(winch.target_position - winch.current_position) < 50 || std::abs(navi.x - target.x) < 0.02) {
+            if (darknet.found >= 1) auto_recovery.step = 5;
+            else { auto_recovery.step_pre = 3; auto_recovery.step = 4; }
         }
     }
-    else if (start_step == 5 && start_count > 300) {
-        target_meter = std::sqrt(navi_x*navi_x + navi_y*navi_y + navi_z*navi_z);
-        updateWinchTarget(target_meter);
-        start_step = 6;
+    else if (auto_recovery.step == 5 && auto_recovery.count > 300) {
+        winch.target_meter = std::sqrt(navi.x*navi.x + navi.y*navi.y + navi.z*navi.z);
+        updateWinchTarget(winch.target_meter);
+        auto_recovery.step = 6;
     }
-    else if (start_step == 6) {
-        if (start_count > 800) { cont_darknet = 0; start_step = 7; }
-        else if (start_count >= 100 && std::abs(navi_z - target_z) < 0.03) {
-            target_meter = std::sqrt(navi_x*navi_x + navi_y*navi_y + navi_z*navi_z);
-            updateWinchTarget(target_meter);
-            start_step_pre = 5; start_step = 6;
+    else if (auto_recovery.step == 6) {
+        if (auto_recovery.count > 800) { ctrl.darknet = 0; auto_recovery.step = 7; }
+        else if (auto_recovery.count >= 100 && std::abs(navi.z - target.z) < 0.03) {
+            winch.target_meter = std::sqrt(navi.x*navi.x + navi.y*navi.y + navi.z*navi.z);
+            updateWinchTarget(winch.target_meter);
+            auto_recovery.step_pre = 5; auto_recovery.step = 6;
         }
     }
-    else if (start_step == 7 && start_count > 300) { start_step = 8; }
-    else if (start_step == 8) {
-        if (target_z < -0.55) start_step = 9;
-        else if (std::abs(navi_z - target_z) < 0.02 || start_count > 100) {
-            start_step_pre = 7; start_step = 8;
+    else if (auto_recovery.step == 7 && auto_recovery.count > 300) {
+        auto_recovery.step = 8;
+    }
+    else if (auto_recovery.step == 8) {
+        if (target.z < -0.55) auto_recovery.step = 9;
+        else if (std::abs(navi.z - target.z) < 0.02 || auto_recovery.count > 100) {
+            auto_recovery.step_pre = 7; auto_recovery.step = 8;
         }
     }
-    else if (start_step == 9) {
-        if (start_count >= 100 &&
-            (std::abs(target_position - current_position) < 50 || std::abs(navi_x - target_x) < 0.02)) {
-            if ((qr_valid == 1 && qr_z < 1) || (target_x >= 0 && target_z > 0))
-                start_step = 10;
-            else { start_step_pre = 8; start_step = 9; }
+    else if (auto_recovery.step == 9) {
+        if (auto_recovery.count >= 100 &&
+            (std::abs(winch.target_position - winch.current_position) < 50 || std::abs(navi.x - target.x) < 0.02)) {
+            if ((qr.valid == 1 && qr.z < 1) || (target.x >= 0 && target.z > 0))
+                auto_recovery.step = 10;
+            else { auto_recovery.step_pre = 8; auto_recovery.step = 9; }
         }
     }
-    else if (start_step == 10 && start_count > 300 && cont_recovery == 0) { start_step = 11; }
-    else if (start_step == 11 && start_count > 300 && cont_recovery == 0) {
-        start_recovery = 0; start_count = 0; start_step = 0; start_step_pre = 0;
+    else if (auto_recovery.step == 10 && auto_recovery.count > 300 && ctrl.recovery == 0) {
+        auto_recovery.step = 11;
+    }
+    else if (auto_recovery.step == 11 && auto_recovery.count > 300 && ctrl.recovery == 0) {
+        auto_recovery.active = 0; auto_recovery.count = 0;
+        auto_recovery.step = 0; auto_recovery.step_pre = 0;
     }
 
     // State transition actions
-    if (start_step != start_step_pre) {
+    if (auto_recovery.step != auto_recovery.step_pre) {
         auto sendCmd = [&](char cmd) {
             command_msg.data = cmd;
             pub_command.publish(command_msg);
             loop_rate.sleep();
-            ros::spinOnce();
         };
 
-        switch (start_step) {
+        // [BUG FIX H2] Always reset count on state transition
+        auto_recovery.count = 0;
+
+        switch (auto_recovery.step) {
         case 1:
-            target_z -= 0.05;
+            target.z -= 0.05;
             sendCmd('n'); sendCmd('s');
-            start_count = 0;
             break;
         case 2:
             sendCmd('1');
             msg_target.command = 1;
-            msg_target.TARGET_X = target_x; msg_target.TARGET_Y = target_y; msg_target.TARGET_Z = target_z;
-            pub_target.publish(msg_target); loop_rate.sleep(); ros::spinOnce();
+            msg_target.TARGET_X = target.x; msg_target.TARGET_Y = target.y; msg_target.TARGET_Z = target.z;
+            pub_target.publish(msg_target); loop_rate.sleep();
             msg_target.command = 0;
-            start_count = 0;
-            target_x = 0; target_y = 0; target_z = 0; target_yaw = 0;
-            qr_based_calibration = 0;
-            cont_recovery = 1; flag_count = 0;
+            target.x = 0; target.y = 0; target.z = 0; target.yaw = 0;
+            winch.qr_based_calibration = 0;
+            ctrl.recovery = 1; qr.flag_count = 0;
             break;
         case 3:
             sendCmd('4');
-            start_count = 0; msg_target.command = 0;
-            target_z -= 0.02;
+            msg_target.command = 0;
+            target.z -= 0.02;
             break;
         case 4:
-            target_x -= 0.03;
-            start_count = 0;
+            target.x -= 0.03;
             break;
         case 5:
             sendCmd('1'); sendCmd('1'); sendCmd('1');
-            start_count = 0; cont_darknet = 1; deep_count = 0;
+            ctrl.darknet = 1; mosaic.deep_count = 0;
             break;
         case 6:
-            deep_count++;
-            target_z += 0.01;
-            start_count = 0; flag_count = 0;
+            mosaic.deep_count++;
+            target.z += 0.01;
+            qr.flag_count = 0;
             break;
         case 7:
             sendCmd('b'); sendCmd('b'); sendCmd('b');
-            start_count = 0;
             break;
         case 8:
-            target_z -= 0.02;
-            start_count = 0;
+            target.z -= 0.02;
             break;
         case 9:
             sendCmd('4');
-            if (target_x < 0) target_x += 0.03;
-            if (target_z < 0) target_z += 0.02;
-            start_count = 0;
+            if (target.x < 0) target.x += 0.03;
+            if (target.z < 0) target.z += 0.02;
             break;
         case 10:
             sendCmd('1');
-            target_position = start_position;
-            msg_winch_target.data = target_position;
-            pub_winch_target.publish(msg_winch_target); loop_rate.sleep(); ros::spinOnce();
+            winch.target_position = mosaic.start_position;
+            msg_winch_target.data = winch.target_position;
+            pub_winch_target.publish(msg_winch_target); loop_rate.sleep();
             msg_target.command = 0;
-            cont_recovery = 1; flag_count = 0; start_count = 0;
+            ctrl.recovery = 1; qr.flag_count = 0;
             break;
         case 11:
             msg_target.command = 0;
-            cont_recovery = 2; flag_count = 0; start_count = 0;
+            ctrl.recovery = 2; qr.flag_count = 0;
             break;
         }
-        start_step_pre = start_step;
+        auto_recovery.step_pre = auto_recovery.step;
     }
 }
 
@@ -373,16 +342,16 @@ int main(int argc, char **argv)
     nh.param<std::string>("log_file_path", log_file_path, "/home/nvidia/catkin_ws/agent_results/tdc_out.txt");
     fout.open(log_file_path);
 
-    init_keyboard();
+    // Subscribe to key_input topic (topic-only teleop, no stdin)
     ros::Subscriber sub_key_input = nh.subscribe("/hero_agent/key_input", 10, key_input_callback);
 
     // Startup banner
     ROS_INFO("===================================");
     ROS_INFO("  Agent Command Node Initialized");
     ROS_INFO("  QR Kp=%.3f Kd=%.3f Sat=%.0f/%.0f",
-             Kp, Kd, param_saturation_default, param_saturation_recovery);
-    ROS_INFO("  qr_Kp=%.1f qr_Kd=%.1f qr_Ki=%.2f", qr_Kp, qr_Kd, qr_Ki);
-    ROS_INFO("  Controller: %s", cont_qr_tdc == 1 ? "TDC" : "PID");
+             qr_gains.Kp, qr_gains.Kd, param_saturation_default, param_saturation_recovery);
+    ROS_INFO("  qr_Kp=%.1f qr_Kd=%.1f qr_Ki=%.2f", qr_gains.qr_Kp, qr_gains.qr_Kd, qr_gains.qr_Ki);
+    ROS_INFO("  Controller: %s", ctrl.qr_tdc == 1 ? "TDC" : "PID");
     ROS_INFO("  Loop rate: %d Hz", loop_rate_hz);
     ROS_INFO("===================================");
 
@@ -401,35 +370,32 @@ int main(int argc, char **argv)
         handleKeyboardInput(loop_rate);
 
         // Winch auto-update from QR calibration
-        if (qr_based_calibration == 1 && cont_recovery == 0 && cont_darknet == 0) {
-            target_meter = std::sqrt(target_x*target_x + target_y*target_y + target_z*target_z);
-            updateWinchTarget(target_meter);
+        if (winch.qr_based_calibration == 1 && ctrl.recovery == 0 && ctrl.darknet == 0) {
+            winch.target_meter = std::sqrt(target.x*target.x + target.y*target.y + target.z*target.z);
+            updateWinchTarget(winch.target_meter);
         }
 
         // Publish target if changed
-        if (pre_x != target_x || pre_y != target_y || pre_z != target_z || pre_yaw != target_yaw) {
-            msg_target.TARGET_X = target_x;
-            msg_target.TARGET_Y = target_y;
-            msg_target.TARGET_Z = target_z;
+        if (pre_x != target.x || pre_y != target.y || pre_z != target.z || pre_yaw != target.yaw) {
+            msg_target.TARGET_X = target.x;
+            msg_target.TARGET_Y = target.y;
+            msg_target.TARGET_Z = target.z;
             pub_target.publish(msg_target);
-            loop_rate.sleep();
-            ros::spinOnce();
         }
 
-        pre_x = target_x; pre_y = target_y; pre_z = target_z; pre_yaw = target_yaw;
+        pre_x = target.x; pre_y = target.y; pre_z = target.z; pre_yaw = target.yaw;
 
-        // Status logging (DEBUG level to avoid polluting agent_main dashboard)
-        ROS_DEBUG_THROTTLE(param_log_period,
-            "cont_recovery=%d darknet=%d mosaic=%d | Pos(%.2f,%.2f,%.2f) Tgt(%.2f,%.2f,%.2f) | Tx=%.1f Ty=%.1f | Winch=%ld",
-            cont_recovery, cont_darknet, cont_mosaic,
-            navi_x, navi_y, navi_z, target_x, target_y, target_z,
-            Tx, Ty, (long)current_position);
+        // Status logging
+        ROS_INFO_THROTTLE(param_log_period,
+            "rec=%d dk=%d mosaic=%d | Pos(%.2f,%.2f,%.2f) Tgt(%.2f,%.2f,%.2f) | Tx=%.1f Ty=%.1f | Winch=%ld",
+            ctrl.recovery, ctrl.darknet, ctrl.mosaic,
+            navi.x, navi.y, navi.z, target.x, target.y, target.z,
+            thrust.Tx, thrust.Ty, (long)winch.current_position);
 
         loop_rate.sleep();
         ros::spinOnce();
     }
 
     fout.close();
-    close_keyboard();
     return 0;
 }
