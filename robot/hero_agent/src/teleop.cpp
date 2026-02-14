@@ -1,57 +1,63 @@
 #include "hero_agent/hero_agent_types.h"
 
 #include <termios.h>
-#include <sys/select.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 // ==============================
 // Keyboard Teleop Handler
 // ==============================
-// Dual-input: reads from /hero_agent/key_input topic queue AND stdin.
-// stdin allows direct control from the roslaunch terminal (SSH, no xterm).
+// Dual-input: reads from /hero_agent/key_input topic queue AND /dev/tty.
+// /dev/tty bypasses roslaunch stdin redirection, allowing direct keyboard
+// control from the terminal even when launched via roslaunch.
 
 static struct termios original_termios;
+static int tty_fd = -1;
 static bool terminal_initialized = false;
 
 void init_keyboard()
 {
     if (terminal_initialized) return;
+
+    tty_fd = open("/dev/tty", O_RDONLY | O_NONBLOCK);
+    if (tty_fd < 0) {
+        ROS_WARN("Cannot open /dev/tty - direct keyboard input disabled");
+        return;
+    }
+
     struct termios raw;
-    tcgetattr(STDIN_FILENO, &original_termios);
+    tcgetattr(tty_fd, &original_termios);
     raw = original_termios;
     raw.c_lflag &= ~(ICANON | ECHO);
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    tcsetattr(tty_fd, TCSANOW, &raw);
     terminal_initialized = true;
 }
 
 void close_keyboard()
 {
-    if (!terminal_initialized) return;
-    tcsetattr(STDIN_FILENO, TCSANOW, &original_termios);
+    if (!terminal_initialized || tty_fd < 0) return;
+    tcsetattr(tty_fd, TCSANOW, &original_termios);
+    close(tty_fd);
+    tty_fd = -1;
     terminal_initialized = false;
 }
 
-static int readStdinKey()
+static int readTtyKey()
 {
-    fd_set fds;
-    struct timeval tv = {0, 0};
-    FD_ZERO(&fds);
-    FD_SET(STDIN_FILENO, &fds);
-    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
-        unsigned char c;
-        if (read(STDIN_FILENO, &c, 1) == 1) return c;
-    }
+    if (tty_fd < 0) return -1;
+    unsigned char c;
+    if (read(tty_fd, &c, 1) == 1) return c;
     return -1;
 }
 
-static void processKey(int ch, ros::Rate& loop_rate, bool from_stdin)
+static void processKey(int ch, ros::Rate& loop_rate, bool forward_to_hw)
 {
     if (ch < 0) return;
 
-    // Forward stdin keys to Arduino (topic keys are already forwarded by agent_main)
-    if (from_stdin) {
+    // Forward to Arduino via /hero_agent/command
+    if (forward_to_hw) {
         command_msg.data = ch;
         pub_command.publish(command_msg);
     }
@@ -198,17 +204,17 @@ static void processKey(int ch, ros::Rate& loop_rate, bool from_stdin)
 
 void handleKeyboardInput(ros::Rate& loop_rate)
 {
-    // 1) Process topic-based input (from key_teleop.py)
-    //    agent_main forwards these to Arduino, so from_stdin=false
+    // 1) Topic-based input (from key_teleop.py)
+    //    agent_main already forwards these to Arduino
     while (!key_input_queue.empty()) {
         int ch = key_input_queue.front();
         key_input_queue.pop();
         processKey(ch, loop_rate, false);
     }
 
-    // 2) Process stdin input (direct terminal typing)
-    //    Must also forward to Arduino, so from_stdin=true
-    int ch = readStdinKey();
+    // 2) /dev/tty input (direct terminal keyboard)
+    //    Must forward to Arduino since no other path does
+    int ch = readTtyKey();
     if (ch >= 0) {
         processKey(ch, loop_rate, true);
     }
