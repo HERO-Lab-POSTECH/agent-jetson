@@ -447,10 +447,8 @@ int main(int argc, char** argv)
 
     ros::Rate loop_rate(100);
 
-    ROS_INFO("===================================");
-    ROS_INFO("  Agent Main Initialized");
-    ROS_INFO("  FSM: 0-6, ctrl_ver=%d, grip=%.2fm", cont_ver, gripping_depth);
-    ROS_INFO("===================================");
+    // Startup banner (printed once before dashboard takes over)
+    printf("\n  Agent Main Initialized (FSM 0-6, ctrl_ver=%d, grip=%.2fm)\n\n", cont_ver, gripping_depth);
 
     while (ros::ok())
     {
@@ -652,21 +650,29 @@ void print_monitor_status()
     const char* fsm_desc = (control_process >= 0 && control_process <= 6)
         ? fsm_names[control_process] : "Unknown";
 
-    ROS_INFO_THROTTLE(0.5,
-        "FSM:%d(%s) cnt=%d | Yaw:%.1f/%.1f[%s] Dep:%.3f/%.3f[%s] | Spd:%d Grip:%d | Obj:%s | Rec:%s",
-        control_process, fsm_desc, process_count,
-        yaw, target_yaw, control_yaw_enabled ? "ON" : "OFF",
-        depth, target_depth, control_depth_enabled ? "ON" : "OFF",
-        move_speed, gripper_state,
+    // ANSI clear screen + cursor home for dashboard effect
+    printf("\033[2J\033[H");
+    printf("╔══════════════════════════════════════════════════════╗\n");
+    printf("║            HERO Agent Monitor Dashboard             ║\n");
+    printf("╠══════════════════════════════════════════════════════╣\n");
+    printf("║ FSM: %d (%s)  cnt=%d                       \n", control_process, fsm_desc, process_count);
+    printf("║ Yaw:   %7.1f / %7.1f  [%s]                \n", yaw, target_yaw, control_yaw_enabled ? " ON" : "OFF");
+    printf("║ Depth: %7.3f / %7.3f  [%s]                \n", depth, target_depth, control_depth_enabled ? " ON" : "OFF");
+    printf("║ Speed: %d   Gripper: %d                    \n", move_speed, gripper_state);
+    printf("╠══════════════════════════════════════════════════════╣\n");
+    printf("║ Object: %-5s  Record: %-3s                 \n",
         object_detected ? (object_centered ? "CTR" : "DET") : "---",
         record_flag.load() ? "REC" : "---");
 
     if (!rosbag_status_msg.empty())
-        ROS_INFO_THROTTLE(1.0, "Rosbag: %s", rosbag_status_msg.c_str());
+        printf("║ Rosbag: %s\n", rosbag_status_msg.c_str());
     if (!csv_status_msg.empty())
-        ROS_INFO_THROTTLE(1.0, "CSV: %s", csv_status_msg.c_str());
+        printf("║ CSV:    %s\n", csv_status_msg.c_str());
     if (!image_error_msg.empty())
-        ROS_WARN_THROTTLE(1.0, "%s", image_error_msg.c_str());
+        printf("║ [WARN]  %s\n", image_error_msg.c_str());
     if (!vision_info_msg.empty())
-        ROS_INFO_THROTTLE(1.0, "Vision: %s", vision_info_msg.c_str());
+        printf("║ Vision: %s\n", vision_info_msg.c_str());
+
+    printf("╚══════════════════════════════════════════════════════╝\n");
+    fflush(stdout);
 }

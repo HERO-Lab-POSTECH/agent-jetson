@@ -342,8 +342,11 @@ int main(int argc, char **argv)
     nh.param<std::string>("log_file_path", log_file_path, "/home/nvidia/catkin_ws/agent_results/tdc_out.txt");
     fout.open(log_file_path);
 
-    // Subscribe to key_input topic (topic-only teleop, no stdin)
+    // Subscribe to key_input topic
     ros::Subscriber sub_key_input = nh.subscribe("/hero_agent/key_input", 10, key_input_callback);
+
+    // Initialize stdin keyboard (raw mode, no echo)
+    init_keyboard();
 
     // Startup banner
     ROS_INFO("===================================");
@@ -385,8 +388,8 @@ int main(int argc, char **argv)
 
         pre_x = target.x; pre_y = target.y; pre_z = target.z; pre_yaw = target.yaw;
 
-        // Status logging
-        ROS_INFO_THROTTLE(param_log_period,
+        // Status logging (DEBUG level to avoid interfering with agent_main dashboard)
+        ROS_DEBUG_THROTTLE(param_log_period,
             "rec=%d dk=%d mosaic=%d | Pos(%.2f,%.2f,%.2f) Tgt(%.2f,%.2f,%.2f) | Tx=%.1f Ty=%.1f | Winch=%ld",
             ctrl.recovery, ctrl.darknet, ctrl.mosaic,
             navi.x, navi.y, navi.z, target.x, target.y, target.z,
@@ -396,6 +399,7 @@ int main(int argc, char **argv)
         ros::spinOnce();
     }
 
+    close_keyboard();
     fout.close();
     return 0;
 }

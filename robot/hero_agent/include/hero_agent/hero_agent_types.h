@@ -241,6 +241,8 @@ void executeDarknetControl(int count);
 void executeMosaicSurvey(int count);
 
 // teleop.cpp
+void init_keyboard();
+void close_keyboard();
 void handleKeyboardInput(ros::Rate& loop_rate);
 
 // Callbacks

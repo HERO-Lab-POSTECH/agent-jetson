@@ -1,18 +1,53 @@
 #include "hero_agent/hero_agent_types.h"
 
-// ==============================
-// Keyboard Teleop Handler (topic-only)
-// ==============================
-// Reads from key_input_queue which is populated by the /hero_agent/key_input
-// topic subscriber. No stdin reading - use key_teleop.py node for keyboard.
+#include <termios.h>
+#include <sys/select.h>
+#include <unistd.h>
 
-void handleKeyboardInput(ros::Rate& loop_rate)
+// ==============================
+// Keyboard Teleop Handler
+// ==============================
+// Dual-input: reads from /hero_agent/key_input topic queue AND stdin.
+// stdin allows direct control from the roslaunch terminal (SSH, no xterm).
+
+static struct termios original_termios;
+static bool terminal_initialized = false;
+
+void init_keyboard()
 {
-    if (key_input_queue.empty()) return;
+    if (terminal_initialized) return;
+    struct termios raw;
+    tcgetattr(STDIN_FILENO, &original_termios);
+    raw = original_termios;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+    terminal_initialized = true;
+}
 
-    int ch = key_input_queue.front();
-    key_input_queue.pop();
+void close_keyboard()
+{
+    if (!terminal_initialized) return;
+    tcsetattr(STDIN_FILENO, TCSANOW, &original_termios);
+    terminal_initialized = false;
+}
 
+static int readStdinKey()
+{
+    fd_set fds;
+    struct timeval tv = {0, 0};
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    if (select(STDIN_FILENO + 1, &fds, NULL, NULL, &tv) > 0) {
+        unsigned char c;
+        if (read(STDIN_FILENO, &c, 1) == 1) return c;
+    }
+    return -1;
+}
+
+static void processKey(int ch, ros::Rate& loop_rate)
+{
     if (ch < 0) return;
     msg_target.command = 0;
 
@@ -151,5 +186,21 @@ void handleKeyboardInput(ros::Rate& loop_rate)
 
     default:
         break;
+    }
+}
+
+void handleKeyboardInput(ros::Rate& loop_rate)
+{
+    // 1) Process topic-based input (from key_teleop.py)
+    while (!key_input_queue.empty()) {
+        int ch = key_input_queue.front();
+        key_input_queue.pop();
+        processKey(ch, loop_rate);
+    }
+
+    // 2) Process stdin input (direct terminal typing)
+    int ch = readStdinKey();
+    if (ch >= 0) {
+        processKey(ch, loop_rate);
     }
 }
