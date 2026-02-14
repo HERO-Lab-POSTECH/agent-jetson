@@ -44,7 +44,7 @@
   </group>
 
 
-  <!-- Foxglove Bridge (rosbridge WebSocket on port 9090) -->
-  <include file="$(find rosbridge_server)/launch/rosbridge_websocket_launch.launch" />
+  <!-- Foxglove Bridge (disabled: rosbridge_server not available for lunar) -->
+  <!-- <include file="$(find rosbridge_server)/launch/rosbridge_websocket_launch.launch" /> -->
 
 </launch>
