@@ -5,11 +5,14 @@
 #include <cstdio>
 
 // ==============================
-// Terminal keyboard (identical to original keyboard_utils.cpp)
+// Terminal keyboard
 // ==============================
 
 static struct termios initial_settings, new_settings;
 static int peek_character = -1;
+
+// Flag to ignore self-published messages in key_input_queue
+static bool ignore_next_queue = false;
 
 void init_keyboard()
 {
@@ -68,7 +71,6 @@ static int _getch()
 static void processKey(int ch, ros::Rate& loop_rate)
 {
     if (ch < 0) return;
-    msg_target.command = 0;
 
     switch (ch) {
 
@@ -111,7 +113,7 @@ static void processKey(int ch, ros::Rate& loop_rate)
         msg_target.TARGET_Y = target.y;
         msg_target.TARGET_Z = target.z;
         pub_target.publish(msg_target);
-        loop_rate.sleep();
+        msg_target.command = 0;  // [BUG FIX] Reset command after publish
         break;
 
     // --- Winch calibrate ---
@@ -197,7 +199,11 @@ static void processKey(int ch, ros::Rate& loop_rate)
 
     // --- Mosaic control ---
     case 'o': ctrl.mosaic = 0; break;
-    case 'p': ctrl.mosaic = 1; break;
+    case 'p':
+        ctrl.mosaic = 1;
+        mosaic.sway_count = 0;   // [BUG FIX] Reset counts on start
+        mosaic.surge_count = 0;
+        break;
 
     // --- DARKNET control ---
     case 'n': ctrl.darknet = 1; break;
@@ -216,18 +222,26 @@ void handleKeyboardInput(ros::Rate& loop_rate)
 {
     int ch = -1;
 
-    // Check stdin first (original behavior)
+    // Check stdin first (for rosrun usage)
     if (_kbhit()) {
         ch = _getch();
-        // Publish to /hero_agent/key_input so agent_main receives it too
+        // Publish to /hero_agent/key_input so agent_main receives it
         std_msgs::Int8 key_msg;
         key_msg.data = ch;
         pub_key_input.publish(key_msg);
+        // [BUG FIX] Mark to skip the self-published message from queue
+        ignore_next_queue = true;
     }
-    // Then check topic queue (from key_teleop.py)
+    // Check topic queue (from key_teleop.py or external publishers)
     else if (!key_input_queue.empty()) {
-        ch = key_input_queue.front();
-        key_input_queue.pop();
+        if (ignore_next_queue) {
+            // Discard the self-published message
+            key_input_queue.pop();
+            ignore_next_queue = false;
+        } else {
+            ch = key_input_queue.front();
+            key_input_queue.pop();
+        }
     }
 
     if (ch < 0) return;

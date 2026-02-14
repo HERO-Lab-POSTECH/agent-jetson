@@ -64,19 +64,17 @@ static void executeQrRecoveryStep(const RecoveryModeConfig& cfg)
     qr.x_ax = (qr.x_error_d - qr.x_error_d_pre) * 30;
     qr.z_az = (qr.z_error_d - qr.z_error_d_pre) * 30;
 
-    // [BUG FIX C1] Position-level PD output: use assignment (=) for target_z
-    // Previously: target_z += ... caused infinite accumulation
-    target.y = -(qr_gains.Kp * qr.x_error + qr_gains.Kd * qr.x_error_d);
-    target.z =  (2 * qr_gains.Kp * qr.y_error + qr_gains.Kd * (qr.y_error_d / 30.0));  // [BUG FIX H1] explicit parentheses
-    target.x = -(qr_gains.Kp * qr.z_error + qr_gains.Kd * qr.z_error_d);
-
-    // [BUG FIX C2] Accumulate target for close-approach modes
-    // Previously: PD terms were applied twice (once above, once in accumulate block)
-    // Now: accumulate mode uses += instead of = for target, applied once
+    // Position-level PD output
+    // Non-accumulate: proportional to current error (single-shot)
+    // Accumulate: incremental adjustment (modes 2,3 for close approach)
     if (cfg.accumulate_target) {
         target.y += -(qr_gains.Kp * qr.x_error + qr_gains.Kd * qr.x_error_d);
         target.z +=  (2 * qr_gains.Kp * qr.y_error + qr_gains.Kd * (qr.y_error_d / 30.0));
         target.x += -(qr_gains.Kp * qr.z_error + qr_gains.Kd * qr.z_error_d);
+    } else {
+        target.y = -(qr_gains.Kp * qr.x_error + qr_gains.Kd * qr.x_error_d);
+        target.z =  (2 * qr_gains.Kp * qr.y_error + qr_gains.Kd * (qr.y_error_d / 30.0));
+        target.x = -(qr_gains.Kp * qr.z_error + qr_gains.Kd * qr.z_error_d);
     }
 
     // Thrust computation (PID or TDC)

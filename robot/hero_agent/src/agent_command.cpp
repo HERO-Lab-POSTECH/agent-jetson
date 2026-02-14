@@ -140,10 +140,6 @@ static void handleRecording()
 
     time_count++;
 
-    if (time_count >= 2000 && time_count < 6000) {
-        // Disturbance window (placeholder)
-    }
-
     fout << time_count << '\t' << qr.x_target << '\t' << qr.y_target << '\t'
          << qr.z_target << '\t' << qr.x << '\t' << qr.y << '\t' << qr.z << '\t'
          << thrust.Tx << '\t' << thrust.Ty << std::endl;
@@ -380,8 +376,9 @@ int main(int argc, char **argv)
             updateWinchTarget(winch.target_meter);
         }
 
-        // Publish target if changed
+        // Publish target if changed (command=0 for incremental updates)
         if (pre_x != target.x || pre_y != target.y || pre_z != target.z || pre_yaw != target.yaw) {
+            msg_target.command = 0;
             msg_target.TARGET_X = target.x;
             msg_target.TARGET_Y = target.y;
             msg_target.TARGET_Z = target.z;

@@ -34,7 +34,7 @@
     </node>
   </group>
 
-  <!-- Agent main (FSM, monitoring, rosbag) -->
+  <!-- Agent main (monitoring, rosbag recording) -->
   <node pkg="hero_agent" name="agent_main" type="agent_main" output="screen" />
 
   <!-- Teleop (needs terminal window for keyboard input) -->
@@ -42,5 +42,9 @@
     <node pkg="hero_agent" name="key_teleop" type="key_teleop.py"
           output="screen" launch-prefix="xterm -e" />
   </group>
+
+
+  <!-- Foxglove Bridge (rosbridge WebSocket on port 9090) -->
+  <include file="$(find rosbridge_server)/launch/rosbridge_websocket_launch.launch" />
 
 </launch>
