@@ -1,0 +1,15 @@
+yolo_model:
+
+  config_file:
+    name: 2020yolov3-tiny.cfg
+  weight_file:
+    name: 2020yolov3-tiny.weights
+  threshold:
+    value: 0.8
+  detection_classes:
+    names:
+      - weight
+      - red-brick
+      - con-brick
+      - pipe
+      - target

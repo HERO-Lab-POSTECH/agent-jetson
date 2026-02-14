@@ -1,0 +1,5 @@
+int16 T0
+int16 T1
+int16 T2
+int16 T3
+float32 TARGET_DEPTH

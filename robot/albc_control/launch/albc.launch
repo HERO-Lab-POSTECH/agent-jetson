@@ -1,0 +1,9 @@
+<launch>
+  <!-- ALBC Controller -->
+  <node pkg="albc_control" name="albc_controller" type="albc_controller" output="screen">
+    <rosparam file="$(find albc_control)/config/albc_controller.yaml" command="load" />
+  </node>
+
+  <!-- Joint Angle Command (Dynamixel driver) -->
+  <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen" />
+</launch>

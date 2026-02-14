@@ -1,0 +1,41 @@
+# albc_controller node parameters
+# All values match original hardcoded defaults
+
+# TD controller gains (base values)
+td_control:
+  M_td: 0.0085
+  Kp_td: 0.085
+  Kd_td: 1.1
+
+# PID controller gains (base values)
+pid_roll:
+  kp: 0.05
+  ki: 0.001
+  kd: 0.0005
+
+pid_pitch:
+  kp: 0.05
+  ki: 0.001
+  kd: 0.0005
+
+# Gain multiplier
+gain_mult: 1.5
+
+# Inverse kinematics
+ik:
+  num_iterations: 3000
+  learning_rate: 0.02
+  lambda_base: 0.15
+
+# Loop rate
+loop_rate_hz: 50
+
+# Initial joint angles (degrees)
+initial_theta1_deg: 45.0
+initial_theta2_deg: 45.0
+
+# Controller version (1=TD, 2=PID, 3=position)
+controller_version: 1
+
+# Logging
+log_period: 0.5

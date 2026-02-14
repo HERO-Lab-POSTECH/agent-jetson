@@ -1,0 +1,5 @@
+classes = 1
+train = mycfg/train.txt
+valid = mycfg/test.txt
+names = mycfg/ghost.names
+backup = backup_tiny/

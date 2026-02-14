@@ -1,0 +1,4 @@
+float32 TARGET_X
+float32 TARGET_Y
+float32 TARGET_Z
+int8 command

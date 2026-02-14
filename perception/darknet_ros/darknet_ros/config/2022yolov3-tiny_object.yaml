@@ -1,0 +1,11 @@
+yolo_model:
+
+  config_file:
+    name: yolov3-tiny_2022_object.cfg
+  weight_file:
+    name: yolov3-tiny_2022_object_6000.weights
+  threshold:
+    value: 0.5
+  detection_classes:
+    names:
+      - object

@@ -1,9 +1,0 @@
-float64 TIME_STAMP
-float32 X
-float32 Y
-float32 Z
-float32 POS_STD
-float32 ROLL
-float32 PITCH
-float32 YAW
-int8 VALID

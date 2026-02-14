@@ -1,0 +1,11 @@
+yolo_model:
+
+  config_file:
+    name: myyolov3-tiny.cfg
+  weight_file:
+    name: my_yolov3-tiny_20000.weights
+  threshold:
+    value: 0.8
+  detection_classes:
+    names:
+      - GhostNet
