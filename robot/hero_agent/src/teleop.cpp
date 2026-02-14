@@ -46,9 +46,16 @@ static int readStdinKey()
     return -1;
 }
 
-static void processKey(int ch, ros::Rate& loop_rate)
+static void processKey(int ch, ros::Rate& loop_rate, bool from_stdin)
 {
     if (ch < 0) return;
+
+    // Forward stdin keys to Arduino (topic keys are already forwarded by agent_main)
+    if (from_stdin) {
+        command_msg.data = ch;
+        pub_command.publish(command_msg);
+    }
+
     msg_target.command = 0;
 
     switch (ch) {
@@ -192,15 +199,17 @@ static void processKey(int ch, ros::Rate& loop_rate)
 void handleKeyboardInput(ros::Rate& loop_rate)
 {
     // 1) Process topic-based input (from key_teleop.py)
+    //    agent_main forwards these to Arduino, so from_stdin=false
     while (!key_input_queue.empty()) {
         int ch = key_input_queue.front();
         key_input_queue.pop();
-        processKey(ch, loop_rate);
+        processKey(ch, loop_rate, false);
     }
 
     // 2) Process stdin input (direct terminal typing)
+    //    Must also forward to Arduino, so from_stdin=true
     int ch = readStdinKey();
     if (ch >= 0) {
-        processKey(ch, loop_rate);
+        processKey(ch, loop_rate, true);
     }
 }
