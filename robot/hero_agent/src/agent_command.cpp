@@ -21,6 +21,7 @@ ros::Publisher pub_target;
 ros::Publisher pub_winch_target;
 ros::Publisher pub_cont_xy;
 ros::Publisher pub_agent_qr_result;
+ros::Publisher pub_key_input;
 
 // ROS messages
 std_msgs::Int8 command_msg;
@@ -328,6 +329,7 @@ int main(int argc, char **argv)
     pub_winch_target = nh.advertise<std_msgs::Int64>("/winch/target", 100);
     pub_cont_xy = nh.advertise<hero_msgs::hero_agent_cont_xy>("/hero_agent/cont_xy_darknet", 100);
     pub_agent_qr_result = nh.advertise<hero_msgs::hero_agent_position_result>("/hero_agent/qr_result", 100);
+    pub_key_input = nh.advertise<std_msgs::Int8>("/hero_agent/key_input", 10);
 
     // Subscribers
     ros::Subscriber sub_winch_pos = nh.subscribe("/winch/pos", 100, msgCallback_winch_pos);

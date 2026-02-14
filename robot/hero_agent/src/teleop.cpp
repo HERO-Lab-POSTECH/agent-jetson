@@ -204,18 +204,21 @@ static void processKey(int ch, ros::Rate& loop_rate, bool forward_to_hw)
 
 void handleKeyboardInput(ros::Rate& loop_rate)
 {
-    // 1) Topic-based input (from key_teleop.py)
-    //    agent_main already forwards these to Arduino
+    // 1) Topic-based input (from key_teleop.py or self-published /dev/tty keys)
+    //    agent_main already forwards these to Arduino via send_command()
     while (!key_input_queue.empty()) {
         int ch = key_input_queue.front();
         key_input_queue.pop();
         processKey(ch, loop_rate, false);
     }
 
-    // 2) /dev/tty input (direct terminal keyboard)
-    //    Must forward to Arduino since no other path does
+    // 2) /dev/tty input → publish to /hero_agent/key_input topic
+    //    This way agent_main also receives the key (FSM + Arduino forwarding)
+    //    agent_command will receive it back via key_input_queue on next cycle
     int ch = readTtyKey();
     if (ch >= 0) {
-        processKey(ch, loop_rate, true);
+        std_msgs::Int8 key_msg;
+        key_msg.data = ch;
+        pub_key_input.publish(key_msg);
     }
 }

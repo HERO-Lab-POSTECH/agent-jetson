@@ -164,6 +164,7 @@ extern ros::Publisher pub_target;
 extern ros::Publisher pub_winch_target;
 extern ros::Publisher pub_cont_xy;
 extern ros::Publisher pub_agent_qr_result;
+extern ros::Publisher pub_key_input;
 
 // ROS messages
 extern std_msgs::Int8 command_msg;
