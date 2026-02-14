@@ -19,13 +19,13 @@ import signal
 HELP_TEXT = """
 ========== HERO Key Teleop ==========
  Move:     w/s=Surge  a/d=Sway  r/f=Heave
- Target:   e=Send(+RelayOFF)  q=Reset
+ Target:   e=Send(+RelayON)  q=Reset
  TDC:      ,=On  .=Off
  TDC Tune: y/h=Mb  u=KKp  i=KKv
  Winch:    1=Calib  2/3=Meter  4/5=Step
  Recovery: z=Approach x=Close c=Final v=Deploy
            b=Off  /=ExpHold  ]=ExpClose
- Auto:     t=Start(+RelayON)  g=Stop
+ Auto:     t=Start(+RelayOFF)  g=Stop
  Mosaic:   p=Start  o=Stop
  Darknet:  n=On  m=Off
  Record:   [=Experiment  R=Rosbag
