@@ -407,11 +407,12 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         control_process++;
     }
     else if (ch == 'R') {
-        // Toggle recording
         record_flag.store(record_flag.load() == 0 ? 1 : 0);
     }
-    // [BUG FIX H4] Removed generic send_command(ch) forwarding
-    // agent_command handles all other keys via its own /hero_agent/key_input subscriber
+
+    // Forward ALL keys to Arduino via /hero_agent/command
+    // agent_command handles software state, agent_main forwards to hardware
+    send_command(ch);
 }
 
 /**
