@@ -1,67 +1,73 @@
 #include "hero_agent/hero_agent_types.h"
 
 #include <termios.h>
-#include <fcntl.h>
 #include <unistd.h>
+#include <cstdio>
 
 // ==============================
-// Keyboard Teleop Handler
+// Terminal keyboard (identical to original keyboard_utils.cpp)
 // ==============================
-// Dual-input: reads from /hero_agent/key_input topic queue AND /dev/tty.
-// /dev/tty bypasses roslaunch stdin redirection, allowing direct keyboard
-// control from the terminal even when launched via roslaunch.
 
-static struct termios original_termios;
-static int tty_fd = -1;
-static bool terminal_initialized = false;
+static struct termios initial_settings, new_settings;
+static int peek_character = -1;
 
 void init_keyboard()
 {
-    if (terminal_initialized) return;
-
-    tty_fd = open("/dev/tty", O_RDONLY | O_NONBLOCK);
-    if (tty_fd < 0) {
-        ROS_WARN("Cannot open /dev/tty - direct keyboard input disabled");
-        return;
-    }
-
-    struct termios raw;
-    tcgetattr(tty_fd, &original_termios);
-    raw = original_termios;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 0;
-    tcsetattr(tty_fd, TCSANOW, &raw);
-    terminal_initialized = true;
+    tcgetattr(0, &initial_settings);
+    new_settings = initial_settings;
+    new_settings.c_lflag &= ~ICANON;
+    new_settings.c_lflag &= ~ECHO;
+    new_settings.c_cc[VMIN] = 1;
+    new_settings.c_cc[VTIME] = 0;
+    tcsetattr(0, TCSANOW, &new_settings);
 }
 
 void close_keyboard()
 {
-    if (!terminal_initialized || tty_fd < 0) return;
-    tcsetattr(tty_fd, TCSANOW, &original_termios);
-    close(tty_fd);
-    tty_fd = -1;
-    terminal_initialized = false;
+    tcsetattr(0, TCSANOW, &initial_settings);
 }
 
-static int readTtyKey()
+static int _kbhit()
 {
-    if (tty_fd < 0) return -1;
-    unsigned char c;
-    if (read(tty_fd, &c, 1) == 1) return c;
-    return -1;
+    unsigned char ch;
+    int nread;
+
+    if (peek_character != -1)
+        return 1;
+
+    new_settings.c_cc[VMIN] = 0;
+    tcsetattr(0, TCSANOW, &new_settings);
+    nread = read(0, &ch, 1);
+    new_settings.c_cc[VMIN] = 1;
+    tcsetattr(0, TCSANOW, &new_settings);
+
+    if (nread == 1) {
+        peek_character = ch;
+        return 1;
+    }
+    return 0;
 }
 
-static void processKey(int ch, ros::Rate& loop_rate, bool forward_to_hw)
+static int _getch()
+{
+    char ch;
+
+    if (peek_character != -1) {
+        ch = peek_character;
+        peek_character = -1;
+        return ch;
+    }
+    read(0, &ch, 1);
+    return ch;
+}
+
+// ==============================
+// Key processing
+// ==============================
+
+static void processKey(int ch, ros::Rate& loop_rate)
 {
     if (ch < 0) return;
-
-    // Forward to Arduino via /hero_agent/command
-    if (forward_to_hw) {
-        command_msg.data = ch;
-        pub_command.publish(command_msg);
-    }
-
     msg_target.command = 0;
 
     switch (ch) {
@@ -202,23 +208,28 @@ static void processKey(int ch, ros::Rate& loop_rate, bool forward_to_hw)
     }
 }
 
+// ==============================
+// Main handler (called from agent_command main loop)
+// ==============================
+
 void handleKeyboardInput(ros::Rate& loop_rate)
 {
-    // 1) Topic-based input (from key_teleop.py or self-published /dev/tty keys)
-    //    agent_main already forwards these to Arduino via send_command()
-    while (!key_input_queue.empty()) {
-        int ch = key_input_queue.front();
-        key_input_queue.pop();
-        processKey(ch, loop_rate, false);
-    }
+    int ch = -1;
 
-    // 2) /dev/tty input → publish to /hero_agent/key_input topic
-    //    This way agent_main also receives the key (FSM + Arduino forwarding)
-    //    agent_command will receive it back via key_input_queue on next cycle
-    int ch = readTtyKey();
-    if (ch >= 0) {
+    // Check stdin first (original behavior)
+    if (_kbhit()) {
+        ch = _getch();
+        // Publish to /hero_agent/key_input so agent_main receives it too
         std_msgs::Int8 key_msg;
         key_msg.data = ch;
         pub_key_input.publish(key_msg);
     }
+    // Then check topic queue (from key_teleop.py)
+    else if (!key_input_queue.empty()) {
+        ch = key_input_queue.front();
+        key_input_queue.pop();
+    }
+
+    if (ch < 0) return;
+    processKey(ch, loop_rate);
 }
