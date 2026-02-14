@@ -1,20 +1,18 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(hero_agent)
 
-find_package(OpenCV REQUIRED)
-find_package(catkin REQUIRED COMPONENTS std_msgs roscpp sensor_msgs image_transport cv_bridge hero_msgs)
+find_package(catkin REQUIRED COMPONENTS std_msgs roscpp sensor_msgs hero_msgs)
 find_package(ros_opencv_ipcam_qr REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES hero_agent
-  CATKIN_DEPENDS std_msgs roscpp sensor_msgs image_transport cv_bridge hero_msgs
+  CATKIN_DEPENDS std_msgs roscpp sensor_msgs hero_msgs
 )
 
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
   ${ros_opencv_ipcam_qr_INCLUDE_DIRS}
 )
 
@@ -23,15 +21,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(agent_main src/agent_main.cpp)
 add_dependencies(agent_main ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(agent_main
-  ${catkin_LIBRARIES}
-  ${OpenCV_LIBS}
-  opencv_core
-  opencv_imgproc
-  opencv_highgui
-  opencv_imgcodecs
-  opencv_videoio
-)
+target_link_libraries(agent_main ${catkin_LIBRARIES})
 
 add_executable(agent_dvl src/agent_dvl.cpp)
 add_dependencies(agent_dvl ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
