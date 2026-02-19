@@ -1,5 +1,16 @@
 // ==============================
-// agent_main: Key command forwarding, state monitoring, rosbag recording
+// agent_main: V3 key translation layer, state monitoring, rosbag recording
+//
+// Architecture:
+//   key_teleop.py → /hero_agent/key_input (V3 keys)
+//                          ↓
+//                agent_main.cpp (THIS FILE — TRANSLATION LAYER)
+//                 ↓                    ↓
+//   /hero_agent/command          /hero_agent/key_translated
+//   (Arduino original keys)      (Jetson original keys)
+//                                      ↓
+//                          agent_command processKey()
+//
 // FSM code backed up in agent_main_fsm_backup.cpp
 // ==============================
 
@@ -37,10 +48,35 @@ int control_yaw_enabled = 0, control_depth_enabled = 0;
 int relay_enabled = 0, laser_enabled = 0, recovery_enabled = 0;
 
 // ==============================
+// Jetson-only toggle states (not available from Arduino)
+// ==============================
+static bool tdc_on = false;
+static bool mosaic_on = false;
+static bool darknet_on = false;
+
+// ==============================
+// Toggle debounce (500ms)
+// ==============================
+static ros::Time last_toggle_time[256];
+static const double DEBOUNCE_SEC = 0.5;
+
+static bool debounce_ok(int ch)
+{
+    ros::Time now = ros::Time::now();
+    unsigned char idx = (unsigned char)ch;
+    if ((now - last_toggle_time[idx]).toSec() < DEBOUNCE_SEC)
+        return false;
+    last_toggle_time[idx] = now;
+    return true;
+}
+
+// ==============================
 // ROS publishers and messages
 // ==============================
 ros::Publisher pub_command;
+ros::Publisher pub_key_translated;
 std_msgs::Int8 command_msg;
+std_msgs::Int8 translated_msg;
 
 // ==============================
 // Rosbag recording
@@ -56,6 +92,7 @@ std::string csv_status_msg = "";
 
 // Forward declarations
 void send_command(char cmd);
+void send_translated(char cmd);
 void ensure_directory(const std::string& path);
 int get_next_log_index(const std::string& base_path);
 void start_rosbag_record();
@@ -101,18 +138,157 @@ void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
 }
 
 // ==============================
-// Key input: forward ALL keys to Arduino + handle recording toggle
+// V3 Key Translation Layer
+//
+// Receives V3 key codes from /hero_agent/key_input and routes to:
+//   - /hero_agent/command (Arduino) via send_command()
+//   - /hero_agent/key_translated (Jetson) via send_translated()
+//   - Both, or neither (blocked keys)
 // ==============================
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
     int ch = msg->data;
 
-    if (ch == 'R') {
-        record_flag.store(record_flag.load() == 0 ? 1 : 0);
-    }
+    switch (ch) {
 
-    // Forward all keys to Arduino
-    send_command(ch);
+    // ── Number Row: Hardware Toggles ──
+
+    case '1':  // Toggle Relay
+        if (!debounce_ok('1')) break;
+        send_command(relay_enabled ? 't' : 'e');
+        break;
+
+    case '2':  // Toggle Laser
+        if (!debounce_ok('2')) break;
+        send_command(laser_enabled ? 'f' : 'r');
+        break;
+
+    case '3':  // Toggle Yaw
+        if (!debounce_ok('3')) break;
+        send_command(control_yaw_enabled ? 'h' : 'y');
+        break;
+
+    case '4':  // Toggle Depth
+        if (!debounce_ok('4')) break;
+        send_command(control_depth_enabled ? ';' : 'p');
+        break;
+
+    case '5':  // PWM Init → Arduino only
+        send_command('g');
+        break;
+
+    // ── Number Row: Winch (Jetson only, translated) ──
+
+    case '6':  // Winch Calibrate → Jetson '1'
+        send_translated('1');
+        break;
+
+    case '7':  // Winch Meter + → Jetson '2'
+        send_translated('2');
+        break;
+
+    case '8':  // Winch Meter - → Jetson '3'
+        send_translated('3');
+        break;
+
+    case '9':  // Winch Step + → Jetson '4'
+        send_translated('4');
+        break;
+
+    case '0':  // Winch Step - → Jetson '5'
+        send_translated('5');
+        break;
+
+    // ── Letter Keys: Jetson-Only ──
+
+    case 'e':  // Send Target
+        send_translated('e');
+        break;
+
+    case 't':  // Auto Recovery Start
+        send_translated('t');
+        break;
+
+    case 'y':  // TDC Mb +0.1
+        send_translated('y');
+        break;
+
+    case 'h':  // TDC Mb -0.1
+        send_translated('h');
+        break;
+
+    case 'r':  // Heave Up (target.z)
+        send_translated('r');
+        break;
+
+    case 'f':  // Heave Down (target.z)
+        send_translated('f');
+        break;
+
+    case 'g':  // Auto Recovery Stop
+        send_translated('g');
+        break;
+
+    case 'q':  // Target Reset
+        send_translated('q');
+        break;
+
+    case 'p':  // Toggle Mosaic (Jetson only)
+        if (!debounce_ok('p')) break;
+        mosaic_on = !mosaic_on;
+        send_translated(mosaic_on ? 'p' : 'o');
+        break;
+
+    case 'n':  // Toggle Darknet (Jetson only)
+        if (!debounce_ok('n')) break;
+        darknet_on = !darknet_on;
+        send_translated(darknet_on ? 'n' : 'm');
+        break;
+
+    case ',':  // Toggle TDC (Jetson only)
+        if (!debounce_ok(',')) break;
+        tdc_on = !tdc_on;
+        send_translated(tdc_on ? ',' : '.');
+        break;
+
+    // ── Letter Keys: Arduino-Only ──
+
+    case 'N':  // Yaw Reset → Arduino 'n'
+        send_command('n');
+        break;
+
+    case 'o':  // Depth -0.1 → Arduino 'o'
+        send_command('o');
+        break;
+
+    // ── Blocked Keys (freed, no function) ──
+
+    case ';':
+    case 'm':
+    case '.':
+        break;
+
+    // ── Rosbag Toggle (agent_main internal) ──
+
+    case 'R':
+        record_flag.store(record_flag.load() == 0 ? 1 : 0);
+        break;
+
+    // ── Jetson-Only Pass-Through ──
+
+    case '[':
+    case '/':
+    case ']':
+        send_translated(ch);
+        break;
+
+    // ── Pass-Through: Both Arduino + Jetson ──
+    // w/s/a/d, z/x, u/j, i/k, l, c/v/b
+    default:
+        send_command(ch);
+        send_translated(ch);
+        break;
+    }
 }
 
 // ==============================
@@ -133,6 +309,10 @@ int main(int argc, char** argv)
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
 
+    // Initialize debounce timestamps
+    ros::Time now = ros::Time::now();
+    for (int i = 0; i < 256; i++) last_toggle_time[i] = now;
+
     // Subscribers
     ros::Subscriber sub_state = nh.subscribe("/hero_agent/state", 100, msg_callback_state);
     ros::Subscriber sub_albc_status = nh.subscribe("/albc_status", 10, albcStatusCallback);
@@ -140,10 +320,11 @@ int main(int argc, char** argv)
 
     // Publishers
     pub_command = nh.advertise<std_msgs::Int8>("/hero_agent/command", 100);
+    pub_key_translated = nh.advertise<std_msgs::Int8>("/hero_agent/key_translated", 100);
 
     ros::Rate loop_rate(100);
 
-    printf("\n  Agent Main Initialized (monitor + key forwarding)\n\n");
+    printf("\n  Agent Main Initialized (V3 key translation + monitor)\n\n");
 
     while (ros::ok())
     {
@@ -189,6 +370,12 @@ void send_command(char cmd)
 {
     command_msg.data = cmd;
     pub_command.publish(command_msg);
+}
+
+void send_translated(char cmd)
+{
+    translated_msg.data = cmd;
+    pub_key_translated.publish(translated_msg);
 }
 
 void handle_signal(int sig)
@@ -274,21 +461,22 @@ void print_monitor_status()
            relay_enabled ? "ON" : "OFF", laser_enabled ? "ON" : "OFF",
            move_speed, record_flag.load() ? "REC" : "---");
     printf("═══════════════════════════════════════════════════\n");
-    printf(" STARTUP: e=Power y=YawON p=DepthON z=Spd wasd\n");
+    printf(" STARTUP: 1=Relay 3=Yaw 4=Depth z=Spd wasd\n");
     printf("═══════════════════════════════════════════════════\n");
-    printf(" Power   e/t=Relay  r/f=Laser  g=PWMInit\n");
+    printf(" Toggle  1=Relay  2=Laser  3=Yaw  4=Depth\n");
+    printf(" Init    5=PWM  N=YawReset\n");
     printf(" Move    w/s/a/d  r/f=Heave\n");
     printf(" Speed   z/x=+/-10  u/j=Throttle+/-10\n");
-    printf(" Yaw     y/h=ON/OFF  n=Reset  i/k=+/-0.1\n");
-    printf(" Depth   p/;=ON/OFF  o/l=+/-0.1\n");
+    printf(" Yaw     i/k=+/-0.1\n");
+    printf(" Depth   o/l=+/-0.1\n");
     printf(" Grip    c=Open  v=Stop  b=Close\n");
     printf("──────────────── Jetson Only ──────────────────────\n");
     printf(" Target  e=Send  q=Reset\n");
-    printf(" TDC     ,/.=ON/OFF  y/h=Mb  u=KKp  i=KKv\n");
-    printf(" Winch   1=Cal  2/3=Meter  4/5=Step\n");
+    printf(" TDC     ,=Toggle  y/h=Mb  u=KKp  i=KKv\n");
+    printf(" Winch   6=Cal  7/8=Meter  9/0=Step\n");
     printf(" Recov   z/x/c/v/b  /=ExpHold  ]=ExpClose\n");
     printf(" Auto    t=Start  g=Stop\n");
-    printf(" Mosaic  p=On  o=Off   Dknet  n=On  m=Off\n");
+    printf(" Mosaic  p=Toggle   Dknet  n=Toggle\n");
     printf(" Rec     [=Experiment  R=Rosbag\n");
     printf("═══════════════════════════════════════════════════\n");
     if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());

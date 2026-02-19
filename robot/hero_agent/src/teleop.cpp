@@ -11,8 +11,11 @@
 static struct termios initial_settings, new_settings;
 static int peek_character = -1;
 
-// Flag to ignore self-published messages in key_input_queue
-static bool ignore_next_queue = false;
+// Fallback timeout: if agent_main is not running, process key directly
+// after waiting this many loop iterations (100ms at 100Hz = 10 ticks)
+static const int FALLBACK_TICKS = 10;
+static int pending_key = -1;
+static int fallback_counter = 0;
 
 void init_keyboard()
 {
@@ -80,9 +83,9 @@ static int _getch()
 //   Darknet:   n=On  m=Off
 //   Record:    [=Experiment  R=Rosbag(agent_main)
 //
-// NOTE: agent_main forwards ALL keys to Arduino via /hero_agent/command.
-//       Arduino has its own key mapping (see User Guide).
-//       Some keys have dual purpose (Jetson + Arduino).
+// NOTE: This processKey receives TRANSLATED keys from agent_main
+//       via /hero_agent/key_translated. The keys arriving here use
+//       the original Jetson key codes (not V3 codes).
 // ==============================
 
 static void processKey(int ch, ros::Rate& loop_rate)
@@ -130,7 +133,7 @@ static void processKey(int ch, ros::Rate& loop_rate)
         msg_target.TARGET_Y = target.y;
         msg_target.TARGET_Z = target.z;
         pub_target.publish(msg_target);
-        msg_target.command = 0;  // [BUG FIX] Reset command after publish
+        msg_target.command = 0;
         break;
 
     // --- Winch ---
@@ -218,7 +221,7 @@ static void processKey(int ch, ros::Rate& loop_rate)
     case 'o': ctrl.mosaic = 0; break;
     case 'p':
         ctrl.mosaic = 1;
-        mosaic.sway_count = 0;   // [BUG FIX] Reset counts on start
+        mosaic.sway_count = 0;
         mosaic.surge_count = 0;
         break;
 
@@ -233,6 +236,12 @@ static void processKey(int ch, ros::Rate& loop_rate)
 
 // ==============================
 // Main handler (called from agent_command main loop)
+//
+// V3 architecture:
+//   - Stdin keys → publish to /hero_agent/key_input (for agent_main to translate)
+//   - Queue reads from /hero_agent/key_translated (already translated by agent_main)
+//   - Fallback: if no translated key arrives within 100ms, process stdin key directly
+//     (standalone mode without agent_main)
 // ==============================
 
 void handleKeyboardInput(ros::Rate& loop_rate)
@@ -241,23 +250,31 @@ void handleKeyboardInput(ros::Rate& loop_rate)
 
     // Check stdin first (for rosrun usage)
     if (_kbhit()) {
-        ch = _getch();
-        // Publish to /hero_agent/key_input so agent_main receives it
+        int raw_key = _getch();
+        // Publish to /hero_agent/key_input for agent_main translation
         std_msgs::Int8 key_msg;
-        key_msg.data = ch;
+        key_msg.data = raw_key;
         pub_key_input.publish(key_msg);
-        // [BUG FIX] Mark to skip the self-published message from queue
-        ignore_next_queue = true;
+        // Start fallback timer (in case agent_main is not running)
+        pending_key = raw_key;
+        fallback_counter = 0;
     }
-    // Check topic queue (from key_teleop.py or external publishers)
-    else if (!key_input_queue.empty()) {
-        if (ignore_next_queue) {
-            // Discard the self-published message
-            key_input_queue.pop();
-            ignore_next_queue = false;
-        } else {
-            ch = key_input_queue.front();
-            key_input_queue.pop();
+
+    // Check translated topic queue (from agent_main)
+    if (!key_input_queue.empty()) {
+        ch = key_input_queue.front();
+        key_input_queue.pop();
+        // Got translated key, cancel fallback
+        pending_key = -1;
+        fallback_counter = 0;
+    }
+    // Fallback: process raw key directly if agent_main didn't respond
+    else if (pending_key >= 0) {
+        fallback_counter++;
+        if (fallback_counter >= FALLBACK_TICKS) {
+            ch = pending_key;
+            pending_key = -1;
+            fallback_counter = 0;
         }
     }
 

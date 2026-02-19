@@ -18,23 +18,24 @@ import signal
 
 HELP_TEXT = """
 ═══════════════════════════════════════════════════
-              HERO Key Teleop
+           HERO Key Teleop (V3)
 ═══════════════════════════════════════════════════
- STARTUP: e=Power y=YawON p=DepthON z=Spd wasd
+ STARTUP: 1=Relay 3=Yaw 4=Depth z=Spd wasd
 ═══════════════════════════════════════════════════
- Power   e/t=Relay  r/f=Laser  g=PWMInit
+ Toggle  1=Relay  2=Laser  3=Yaw  4=Depth
+ Init    5=PWM  N=YawReset
  Move    w/s/a/d  r/f=Heave
  Speed   z/x=+/-10  u/j=Throttle+/-10
- Yaw     y/h=ON/OFF  n=Reset  i/k=+/-0.1
- Depth   p/;=ON/OFF  o/l=+/-0.1
+ Yaw     i/k=+/-0.1
+ Depth   o/l=+/-0.1
  Grip    c=Open  v=Stop  b=Close
 ──────────────── Jetson Only ──────────────────────
  Target  e=Send  q=Reset
- TDC     ,/.=ON/OFF  y/h=Mb  u=KKp  i=KKv
- Winch   1=Cal  2/3=Meter  4/5=Step
+ TDC     ,=Toggle  y/h=Mb  u=KKp  i=KKv
+ Winch   6=Cal  7/8=Meter  9/0=Step
  Recov   z/x/c/v/b  /=ExpHold  ]=ExpClose
  Auto    t=Start  g=Stop
- Mosaic  p=On  o=Off   Dknet  n=On  m=Off
+ Mosaic  p=Toggle   Dknet  n=Toggle
  Rec     [=Experiment  R=Rosbag
 ═══════════════════════════════════════════════════
  Ctrl+C to exit

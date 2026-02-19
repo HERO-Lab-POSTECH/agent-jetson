@@ -67,7 +67,7 @@ void msgCallback_result(const hero_msgs::hero_agent_position_result::ConstPtr &m
     navi.z = msg->Z;
 }
 
-void key_input_callback(const std_msgs::Int8::ConstPtr &msg) {
+void key_translated_callback(const std_msgs::Int8::ConstPtr &msg) {
     key_input_queue.push(msg->data);
 }
 
@@ -343,8 +343,8 @@ int main(int argc, char **argv)
     nh.param<std::string>("log_file_path", log_file_path, "/home/nvidia/catkin_ws/agent_results/tdc_out.txt");
     fout.open(log_file_path);
 
-    // Subscribe to key_input topic
-    ros::Subscriber sub_key_input = nh.subscribe("/hero_agent/key_input", 10, key_input_callback);
+    // Subscribe to translated key topic (from agent_main V3 translation layer)
+    ros::Subscriber sub_key_translated = nh.subscribe("/hero_agent/key_translated", 10, key_translated_callback);
 
     // Initialize stdin keyboard (raw mode, no echo)
     init_keyboard();
