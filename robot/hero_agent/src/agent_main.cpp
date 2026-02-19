@@ -158,9 +158,8 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_command(relay_enabled ? 't' : 'e');
         break;
 
-    case '2':  // Toggle Laser
-        if (!debounce_ok('2')) break;
-        send_command(laser_enabled ? 'f' : 'r');
+    case '2':  // PWM Init → Arduino only
+        send_command('g');
         break;
 
     case '3':  // Toggle Yaw
@@ -173,8 +172,9 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_command(control_depth_enabled ? ';' : 'p');
         break;
 
-    case '5':  // PWM Init → Arduino only
-        send_command('g');
+    case '5':  // Toggle Laser
+        if (!debounce_ok('5')) break;
+        send_command(laser_enabled ? 'f' : 'r');
         break;
 
     // ── Number Row: Winch (Jetson only, translated) ──
@@ -463,8 +463,8 @@ void print_monitor_status()
     printf("═══════════════════════════════════════════════════\n");
     printf(" STARTUP: 1=Relay 3=Yaw 4=Depth z=Spd wasd\n");
     printf("═══════════════════════════════════════════════════\n");
-    printf(" Toggle  1=Relay  2=Laser  3=Yaw  4=Depth\n");
-    printf(" Init    5=PWM  N=YawReset\n");
+    printf(" Toggle  1=Relay  3=Yaw  4=Depth  5=Laser\n");
+    printf(" Init    2=PWM  N=YawReset\n");
     printf(" Move    w/s/a/d  r/f=Heave\n");
     printf(" Speed   z/x=+/-10  u/j=Throttle+/-10\n");
     printf(" Yaw     i/k=+/-0.1\n");

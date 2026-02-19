@@ -22,8 +22,8 @@ HELP_TEXT = """
 ═══════════════════════════════════════════════════
  STARTUP: 1=Relay 3=Yaw 4=Depth z=Spd wasd
 ═══════════════════════════════════════════════════
- Toggle  1=Relay  2=Laser  3=Yaw  4=Depth
- Init    5=PWM  N=YawReset
+ Toggle  1=Relay  3=Yaw  4=Depth  5=Laser
+ Init    2=PWM  N=YawReset
  Move    w/s/a/d  r/f=Heave
  Speed   z/x=+/-10  u/j=Throttle+/-10
  Yaw     i/k=+/-0.1
