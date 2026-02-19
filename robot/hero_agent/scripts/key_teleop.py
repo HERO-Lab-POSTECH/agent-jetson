@@ -17,31 +17,39 @@ import os
 import signal
 
 HELP_TEXT = """
-============= HERO Key Teleop =============
- [Jetson]
- Move:     w/s=Surge  a/d=Sway  r/f=Heave
- Target:   e=Send  q=Reset
- TDC:      ,=On  .=Off
- TDC Tune: y/h=Mb  u=KKp  i=KKv
- Winch:    1=Calib  2/3=Meter  4/5=Step
- Recovery: z=Approach x=Close c=Final
-           v=Deploy  b=Off
-           /=ExpHold  ]=ExpClose
- Auto:     t=Start  g=Stop
- Mosaic:   p=Start  o=Stop
- Darknet:  n=On  m=Off
- Record:   [=Experiment  R=Rosbag
- ──────────────────────────────────────
- [Arduino] (forwarded via agent_main)
- Relay:    e=ON  t=OFF
- Light:    r=ON  f=OFF
- Speed:    z=+10  x=-10
- Gripper:  c=Open  v=Stop  b=Close
- Yaw:      y=ON h=OFF n=Reset i/k=±0.1
- Depth:    p=ON ;=OFF  o/l=±0.1
- Throttle: u=+10  j=-10  PWM Init: g
- Ctrl+C to exit
-===========================================
+============== HERO Key Teleop ==============
+ STARTUP: e=Power  y=YawON  p=DepthON
+          z=Speed  wasd=Move
+─────────────────┬──────────────────────────
+ Power/Light     | e/t=Relay  r/f=Laser
+                 | g=PWM Init
+─────────────────┼──────────────────────────
+ Movement        | w/s=Surge  a/d=Sway
+                 | r/f=Heave  z/x=Speed
+                 | u/j=Throttle
+─────────────────┼──────────────────────────
+ Yaw             | y/h=ON/OFF  n=Reset
+                 | i/k=+/-0.1
+ Depth           | p/;=ON/OFF  o/l=+/-0.1
+─────────────────┼──────────────────────────
+ Target (J)      | e=Send  q=Reset
+ TDC (J)         | ,/.=ON/OFF  y/h=Mb
+                 | u=KKp  i=KKv
+ Winch (J)       | 1=Cal  2/3=Meter
+                 | 4/5=Step
+─────────────────┼──────────────────────────
+ Recovery (J)    | z=Appr  x=Close
+                 | c=Final  v=Deploy  b=Off
+                 | /=ExpHold  ]=ExpClose
+ Auto (J)        | t=Start  g=Stop
+ Mosaic (J)      | p=Start  o=Stop
+ Darknet (J)     | n=On  m=Off
+─────────────────┼──────────────────────────
+ Gripper         | c=Open  v=Stop  b=Close
+ Record          | [=Experiment  R=Rosbag
+─────────────────┴──────────────────────────
+ (J) = Jetson only     Ctrl+C to exit
+=============================================
 """
 
 running = True
