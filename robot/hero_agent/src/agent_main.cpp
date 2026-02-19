@@ -263,39 +263,35 @@ void stop_rosbag_record()
 void print_monitor_status()
 {
     printf("\033[2J\033[H");
-    printf("╔═══════════════════════════════════════════════════════════╗\n");
-    printf("║                   HERO Agent Monitor                     ║\n");
-    printf("╠═══════════════════════════════════════════════════════════╣\n");
-    printf("║  Yaw   %7.1f / %7.1f  [%s]                      ║\n", yaw, target_yaw, control_yaw_enabled ? " ON" : "OFF");
-    printf("║  Depth %7.3f / %7.3f  [%s]                      ║\n", depth, target_depth, control_depth_enabled ? " ON" : "OFF");
-    printf("║  Relay  %-3s    Laser %-3s    Speed %-3d    Rec %-3s     ║\n",
+    printf("═══════════════════════════════════════════════════\n");
+    printf("              HERO Agent Monitor\n");
+    printf("═══════════════════════════════════════════════════\n");
+    printf(" Yaw   %7.1f / %7.1f  [%s]\n",
+           yaw, target_yaw, control_yaw_enabled ? " ON" : "OFF");
+    printf(" Depth %7.3f / %7.3f  [%s]\n",
+           depth, target_depth, control_depth_enabled ? " ON" : "OFF");
+    printf(" Relay %-3s   Laser %-3s   Speed %-3d   Rec %-3s\n",
            relay_enabled ? "ON" : "OFF", laser_enabled ? "ON" : "OFF",
            move_speed, record_flag.load() ? "REC" : "---");
-    printf("╠═══════════════════════════════════════════════════════════╣\n");
-    printf("║  STARTUP: e=Power  y=YawON  p=DepthON  z=Speed  wasd    ║\n");
-    printf("╠═══════════════╤═══════════════════════════════════════════╣\n");
-    printf("║  Power/Light  │  e/t=Relay  r/f=Laser  g=PWMInit        ║\n");
-    printf("╟───────────────┼───────────────────────────────────────────╢\n");
-    printf("║  Movement     │  w/s=Surge  a/d=Sway  r/f=Heave         ║\n");
-    printf("║               │  z/x=Speed±10  u/j=Throttle±10          ║\n");
-    printf("╟───────────────┼───────────────────────────────────────────╢\n");
-    printf("║  Yaw          │  y/h=ON/OFF  n=Reset  i/k=±0.1          ║\n");
-    printf("║  Depth        │  p/;=ON/OFF  o/l=±0.1                   ║\n");
-    printf("╟───────────────┼───────────────────────────────────────────╢\n");
-    printf("║  Target (J)   │  e=Send  q=Reset                        ║\n");
-    printf("║  TDC (J)      │  ,/.=ON/OFF  y/h=Mb  u=KKp  i=KKv      ║\n");
-    printf("║  Winch (J)    │  1=Cal  2/3=Meter  4/5=Step             ║\n");
-    printf("╟───────────────┼───────────────────────────────────────────╢\n");
-    printf("║  Recovery (J) │  z=Appr x=Close c=Final v=Deploy b=Off  ║\n");
-    printf("║               │  /=ExpHold  ]=ExpClose                   ║\n");
-    printf("║  Auto (J)     │  t=Start  g=Stop                        ║\n");
-    printf("║  Mosaic (J)   │  p=Start  o=Stop                        ║\n");
-    printf("║  Darknet (J)  │  n=On  m=Off                            ║\n");
-    printf("╟───────────────┼───────────────────────────────────────────╢\n");
-    printf("║  Gripper      │  c=Open  v=Stop  b=Close                ║\n");
-    printf("║  Record       │  [=Experiment  R=Rosbag                  ║\n");
-    printf("╚═══════════════╧═══════════════════════════════════════════╝\n");
-    if (!rosbag_status_msg.empty()) printf("  Rosbag: %s\n", rosbag_status_msg.c_str());
-    if (!csv_status_msg.empty())    printf("  CSV:    %s\n", csv_status_msg.c_str());
+    printf("═══════════════════════════════════════════════════\n");
+    printf(" STARTUP: e=Power y=YawON p=DepthON z=Spd wasd\n");
+    printf("═══════════════════════════════════════════════════\n");
+    printf(" Power   e/t=Relay  r/f=Laser  g=PWMInit\n");
+    printf(" Move    w/s/a/d  r/f=Heave\n");
+    printf(" Speed   z/x=+/-10  u/j=Throttle+/-10\n");
+    printf(" Yaw     y/h=ON/OFF  n=Reset  i/k=+/-0.1\n");
+    printf(" Depth   p/;=ON/OFF  o/l=+/-0.1\n");
+    printf(" Grip    c=Open  v=Stop  b=Close\n");
+    printf("──────────────── Jetson Only ──────────────────────\n");
+    printf(" Target  e=Send  q=Reset\n");
+    printf(" TDC     ,/.=ON/OFF  y/h=Mb  u=KKp  i=KKv\n");
+    printf(" Winch   1=Cal  2/3=Meter  4/5=Step\n");
+    printf(" Recov   z/x/c/v/b  /=ExpHold  ]=ExpClose\n");
+    printf(" Auto    t=Start  g=Stop\n");
+    printf(" Mosaic  p=On  o=Off   Dknet  n=On  m=Off\n");
+    printf(" Rec     [=Experiment  R=Rosbag\n");
+    printf("═══════════════════════════════════════════════════\n");
+    if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());
+    if (!csv_status_msg.empty())    printf(" CSV:    %s\n", csv_status_msg.c_str());
     fflush(stdout);
 }
