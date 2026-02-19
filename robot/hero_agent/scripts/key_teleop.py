@@ -20,6 +20,7 @@ HELP_TEXT = """
 ========== HERO Key Teleop v2 =========
  Move:     w/s=Surge  a/d=Sway  r/f=Heave
  Target:   e=Send(+RelayON)  q=Reset
+ Relay:    t=RelayOFF
  Toggle:   1=TDC  2=Darknet  3=Mosaic  4=Auto
  Winch:    z=Calib  x/c=Meter  v/b=Step
  Recovery: 5=Off 6=Approach 7=Close

@@ -272,6 +272,12 @@ void print_monitor_status()
     printf("║ Record: %-3s                                \n", record_flag.load() ? "REC" : "---");
     if (!rosbag_status_msg.empty()) printf("║ Rosbag: %s\n", rosbag_status_msg.c_str());
     if (!csv_status_msg.empty()) printf("║ CSV:    %s\n", csv_status_msg.c_str());
+    printf("╠══════════════════════════════════════════════════════╣\n");
+    printf("║ Move: wasd/rf  Target: e=Send q=Reset  t=RelayOFF  ║\n");
+    printf("║ Toggle: 1=TDC 2=Darknet 3=Mosaic 4=Auto            ║\n");
+    printf("║ Winch: z=Cal x/c=Meter v/b=Step                    ║\n");
+    printf("║ Recovery: 5=Off 6=Appr 7=Close 8=Final 9=Deploy    ║\n");
+    printf("║ TDC: i/k=Mb j=KKp l=KKv  Rec: [=Exp R=Rosbag      ║\n");
     printf("╚══════════════════════════════════════════════════════╝\n");
     fflush(stdout);
 }

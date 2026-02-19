@@ -69,13 +69,16 @@ static int _getch()
 //
 // Key mapping v2 (2026-02-19):
 //   Movement:  w/s=Surge  a/d=Sway  r/f=Heave
-//   Target:    e=Send  q=Reset
+//   Target:    e=Send(+RelayON)  q=Reset  t=RelayOFF(Arduino)
 //   Toggles:   1=TDC  2=Darknet  3=Mosaic  4=AutoRecovery
 //   Winch:     z=Calib  x/c=Meter+/-  v/b=Step+/-
 //   Recovery:  5=Off  6=Approach  7=Close  8=Final  9=Deploy
 //              0=ExpHold  -=ExpClose
 //   TDC Tune:  i/k=Mb+/-  j=KKp+  l=KKv+
 //   Record:    [=Experiment  R=Rosbag(agent_main)
+//
+// NOTE: e=Send also triggers Arduino relay ON (forwarded by agent_main).
+//       t=RelayOFF is Arduino-only (no processKey action needed).
 // ==============================
 
 static void processKey(int ch, ros::Rate& loop_rate)
