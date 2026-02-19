@@ -17,19 +17,31 @@ import os
 import signal
 
 HELP_TEXT = """
-========== HERO Key Teleop v2 =========
+============= HERO Key Teleop =============
+ [Jetson]
  Move:     w/s=Surge  a/d=Sway  r/f=Heave
- Target:   e=Send(+RelayON)  q=Reset
- Relay:    t=RelayOFF
- Toggle:   1=TDC  2=Darknet  3=Mosaic  4=Auto
- Winch:    z=Calib  x/c=Meter  v/b=Step
- Recovery: 5=Off 6=Approach 7=Close
-           8=Final 9=Deploy
-           0=ExpHold  -=ExpClose
- TDC Tune: i/k=Mb  j=KKp  l=KKv
+ Target:   e=Send  q=Reset
+ TDC:      ,=On  .=Off
+ TDC Tune: y/h=Mb  u=KKp  i=KKv
+ Winch:    1=Calib  2/3=Meter  4/5=Step
+ Recovery: z=Approach x=Close c=Final
+           v=Deploy  b=Off
+           /=ExpHold  ]=ExpClose
+ Auto:     t=Start  g=Stop
+ Mosaic:   p=Start  o=Stop
+ Darknet:  n=On  m=Off
  Record:   [=Experiment  R=Rosbag
+ ──────────────────────────────────────
+ [Arduino] (forwarded via agent_main)
+ Relay:    e=ON  t=OFF
+ Light:    r=ON  f=OFF
+ Speed:    z=+10  x=-10
+ Gripper:  c=Open  v=Stop  b=Close
+ Yaw:      y=ON h=OFF n=Reset i/k=±0.1
+ Depth:    p=ON ;=OFF  o/l=±0.1
+ Throttle: u=+10  j=-10  PWM Init: g
  Ctrl+C to exit
-========================================
+===========================================
 """
 
 running = True

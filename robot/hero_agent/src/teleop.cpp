@@ -67,18 +67,22 @@ static int _getch()
 // ==============================
 // Key processing
 //
-// Key mapping v2 (2026-02-19):
+// Jetson-side key mapping (processKey):
 //   Movement:  w/s=Surge  a/d=Sway  r/f=Heave
-//   Target:    e=Send(+RelayON)  q=Reset  t=RelayOFF(Arduino)
-//   Toggles:   1=TDC  2=Darknet  3=Mosaic  4=AutoRecovery
-//   Winch:     z=Calib  x/c=Meter+/-  v/b=Step+/-
-//   Recovery:  5=Off  6=Approach  7=Close  8=Final  9=Deploy
-//              0=ExpHold  -=ExpClose
-//   TDC Tune:  i/k=Mb+/-  j=KKp+  l=KKv+
+//   Target:    e=Send  q=Reset
+//   TDC:       ,=On  .=Off
+//   TDC Tune:  y/h=Mb+/-  u=KKp+  i=KKv+
+//   Winch:     1=Calib  2/3=Meter+/-  4/5=Step+/-
+//   Recovery:  z=Approach  x=Close  c=Final  v=Deploy
+//              b=Off  /=ExpHold  ]=ExpClose
+//   Auto:      t=Start  g=Stop
+//   Mosaic:    p=Start  o=Stop
+//   Darknet:   n=On  m=Off
 //   Record:    [=Experiment  R=Rosbag(agent_main)
 //
-// NOTE: e=Send also triggers Arduino relay ON (forwarded by agent_main).
-//       t=RelayOFF is Arduino-only (no processKey action needed).
+// NOTE: agent_main forwards ALL keys to Arduino via /hero_agent/command.
+//       Arduino has its own key mapping (see User Guide).
+//       Some keys have dual purpose (Jetson + Arduino).
 // ==============================
 
 static void processKey(int ch, ros::Rate& loop_rate)
@@ -87,124 +91,78 @@ static void processKey(int ch, ros::Rate& loop_rate)
 
     switch (ch) {
 
-    // --- Movement (WASD + RF) ---
-    case 'w': target.x += teleop_xy_step;  break;  // Surge +
-    case 's': target.x -= teleop_xy_step;  break;  // Surge -
-    case 'a': target.y -= teleop_xy_step;  break;  // Sway -
-    case 'd': target.y += teleop_xy_step;  break;  // Sway +
-    case 'r': target.z -= teleop_z_step;   break;  // Heave + (up)
-    case 'f': target.z += teleop_z_step;   break;  // Heave - (down)
+    // --- TDC toggle ---
+    case ',':
+        resetQrErrors();
+        ctrl.qr_tdc = 1;
+        break;
+    case '.':
+        ctrl.qr_tdc = 0;
+        break;
 
-    // --- Target control ---
-    case 'e':  // Send current target
+    // --- TDC parameter tuning ---
+    case 'y': qr_gains.Mb  += 0.1;     break;
+    case 'h': qr_gains.Mb  -= 0.1;     break;
+    case 'u': qr_gains.KKp += 0.00001; break;
+    case 'i': qr_gains.KKv += 0.001;   break;
+
+    // --- Auto recovery sequence ---
+    case 't':
+        auto_recovery.active = 1;
+        break;
+    case 'g':
+        auto_recovery.active = 0;
+        auto_recovery.count = 0;
+        auto_recovery.step = 0;
+        auto_recovery.step_pre = 0;
+        break;
+
+    // --- Target reset ---
+    case 'q':
+        target.x = 0; target.y = 0; target.z = 0; target.yaw = 0;
+        winch.qr_based_calibration = 0;
+        break;
+
+    // --- Send current target to controller ---
+    case 'e':
         msg_target.command = 1;
         msg_target.TARGET_X = target.x;
         msg_target.TARGET_Y = target.y;
         msg_target.TARGET_Z = target.z;
         pub_target.publish(msg_target);
-        msg_target.command = 0;
-        break;
-    case 'q':  // Reset target
-        target.x = 0; target.y = 0; target.z = 0; target.yaw = 0;
-        winch.qr_based_calibration = 0;
+        msg_target.command = 0;  // [BUG FIX] Reset command after publish
         break;
 
-    // --- Toggles (number row) ---
-    case '1':  // TDC on/off
-        if (ctrl.qr_tdc == 0) { resetQrErrors(); ctrl.qr_tdc = 1; }
-        else { ctrl.qr_tdc = 0; }
-        break;
-    case '2':  // Darknet on/off
-        ctrl.darknet = ctrl.darknet ? 0 : 1;
-        break;
-    case '3':  // Mosaic on/off
-        if (ctrl.mosaic == 0) {
-            ctrl.mosaic = 1;
-            mosaic.sway_count = 0;
-            mosaic.surge_count = 0;
-        } else {
-            ctrl.mosaic = 0;
-        }
-        break;
-    case '4':  // Auto Recovery on/off
-        if (auto_recovery.active == 0) {
-            auto_recovery.active = 1;
-        } else {
-            auto_recovery.active = 0;
-            auto_recovery.count = 0;
-            auto_recovery.step = 0;
-            auto_recovery.step_pre = 0;
-        }
-        break;
-
-    // --- Winch (ZXCVB) ---
-    case 'z':  // Calibrate (set current = zero)
+    // --- Winch ---
+    case '1':
         winch.calib_position = winch.current_position;
         winch.target_position = winch.current_position;
         winch.target_meter = 0;
         break;
-    case 'x':  // Meter + (max 20)
+    case '2':
         if (winch.target_meter < 20) winch.target_meter++;
         break;
-    case 'c':  // Meter -
+    case '3':
         if (winch.target_meter > 0) winch.target_meter--;
         break;
-    case 'v':  // Step + (release)
+    case '4':
         winch.target_position += teleop_winch_step;
         msg_winch_target.data = winch.target_position;
         pub_winch_target.publish(msg_winch_target);
         break;
-    case 'b':  // Step - (retract)
+    case '5':
         winch.target_position -= teleop_winch_step;
         msg_winch_target.data = winch.target_position;
         pub_winch_target.publish(msg_winch_target);
         break;
 
-    // --- Recovery modes (5-9, 0, -) ---
-    case '5':  // Recovery off
-        ctrl.recovery = 0;
-        qr.flag_count = 0;
-        winch.qr_based_calibration = 0;
-        qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case '6':  // Approach
-        ctrl.recovery = 1;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case '7':  // Close
-        ctrl.recovery = 2;
-        winch.qr_based_calibration = 0;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case '8':  // Final
-        ctrl.recovery = 3;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case '9':  // Deploy
-        ctrl.recovery = 4;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case '0':  // ExpHold
-        ctrl.recovery = -1;
-        qr.flag_count = 0;
-        resetQrErrors();
-        break;
-    case '-':  // ExpClose
-        ctrl.recovery = -2;
-        qr.flag_count = 0;
-        resetQrErrors();
-        break;
-
-    // --- TDC tuning (IJKL cluster) ---
-    case 'i': qr_gains.Mb  += 0.1;     break;  // Mb +
-    case 'k': qr_gains.Mb  -= 0.1;     break;  // Mb -
-    case 'j': qr_gains.KKp += 0.00001; break;  // KKp +
-    case 'l': qr_gains.KKv += 0.001;   break;  // KKv +
+    // --- XYZ teleop ---
+    case 'w': target.x += teleop_xy_step;  break;
+    case 's': target.x -= teleop_xy_step;  break;
+    case 'd': target.y += teleop_xy_step;  break;
+    case 'a': target.y -= teleop_xy_step;  break;
+    case 'r': target.z -= teleop_z_step;   break;
+    case 'f': target.z += teleop_z_step;   break;
 
     // --- Experiment recording ---
     case '[':
@@ -215,6 +173,58 @@ static void processKey(int ch, ros::Rate& loop_rate)
         qr.flag_count = 0;
         resetQrErrors();
         break;
+
+    // --- QR recovery mode selection ---
+    case '/':
+        ctrl.recovery = -1;
+        qr.flag_count = 0;
+        resetQrErrors();
+        break;
+    case ']':
+        ctrl.recovery = -2;
+        qr.flag_count = 0;
+        resetQrErrors();
+        break;
+    case 'z':
+        ctrl.recovery = 1;
+        qr.flag_count = 0; qr.count = 0;
+        qr.x_error_sum = 0; qr.z_error_sum = 0;
+        break;
+    case 'x':
+        ctrl.recovery = 2;
+        winch.qr_based_calibration = 0;
+        qr.flag_count = 0; qr.count = 0;
+        qr.x_error_sum = 0; qr.z_error_sum = 0;
+        break;
+    case 'c':
+        ctrl.recovery = 3;
+        qr.flag_count = 0; qr.count = 0;
+        qr.x_error_sum = 0; qr.z_error_sum = 0;
+        break;
+    case 'v':
+        ctrl.recovery = 4;
+        qr.flag_count = 0; qr.count = 0;
+        qr.x_error_sum = 0; qr.z_error_sum = 0;
+        break;
+    case 'b':
+        ctrl.recovery = 0;
+        qr.flag_count = 0;
+        winch.qr_based_calibration = 0;
+        qr.count = 0;
+        qr.x_error_sum = 0; qr.z_error_sum = 0;
+        break;
+
+    // --- Mosaic control ---
+    case 'o': ctrl.mosaic = 0; break;
+    case 'p':
+        ctrl.mosaic = 1;
+        mosaic.sway_count = 0;   // [BUG FIX] Reset counts on start
+        mosaic.surge_count = 0;
+        break;
+
+    // --- DARKNET control ---
+    case 'n': ctrl.darknet = 1; break;
+    case 'm': ctrl.darknet = 0; break;
 
     default:
         break;

@@ -47,7 +47,7 @@ winch:
   gear_ratio_den: 73.45613
 
 # Teleop keyboard step sizes (key mapping in teleop.cpp:processKey)
-# Movement: w/s/a/d/r/f  |  Winch step: v/b
+# Movement: w/s/a/d/r/f  |  Winch step: 4/5
 teleop:
   xy_step: 0.05
   z_step: 0.01

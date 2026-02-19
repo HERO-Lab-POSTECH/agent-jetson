@@ -273,11 +273,21 @@ void print_monitor_status()
     if (!rosbag_status_msg.empty()) printf("║ Rosbag: %s\n", rosbag_status_msg.c_str());
     if (!csv_status_msg.empty()) printf("║ CSV:    %s\n", csv_status_msg.c_str());
     printf("╠══════════════════════════════════════════════════════╣\n");
-    printf("║ Move: wasd/rf  Target: e=Send q=Reset  t=RelayOFF  ║\n");
-    printf("║ Toggle: 1=TDC 2=Darknet 3=Mosaic 4=Auto            ║\n");
-    printf("║ Winch: z=Cal x/c=Meter v/b=Step                    ║\n");
-    printf("║ Recovery: 5=Off 6=Appr 7=Close 8=Final 9=Deploy    ║\n");
-    printf("║ TDC: i/k=Mb j=KKp l=KKv  Rec: [=Exp R=Rosbag      ║\n");
+    printf("║ [Jetson]                                            ║\n");
+    printf("║ Move: wasd/rf   Target: e=Send q=Reset              ║\n");
+    printf("║ TDC: ,=On .=Off  Tune: y/h=Mb u=KKp i=KKv          ║\n");
+    printf("║ Winch: 1=Cal 2/3=Meter 4/5=Step                    ║\n");
+    printf("║ Recovery: z=Appr x=Close c=Final v=Deploy b=Off    ║\n");
+    printf("║           /=ExpHold  ]=ExpClose                     ║\n");
+    printf("║ Auto: t=Start g=Stop  Mosaic: p=On o=Off            ║\n");
+    printf("║ Darknet: n=On m=Off   Rec: [=Exp R=Rosbag           ║\n");
+    printf("╠──────────────────────────────────────────────────────╣\n");
+    printf("║ [Arduino]                                           ║\n");
+    printf("║ Relay: e=ON t=OFF  Light/Laser: r=ON f=OFF          ║\n");
+    printf("║ Speed: z=+10 x=-10  Gripper: c=Open v=Stop b=Close ║\n");
+    printf("║ Yaw: y=ON h=OFF n=Reset  i/k=Yaw±0.1               ║\n");
+    printf("║ Depth: p=ON ;=OFF  o/l=Depth±0.1                   ║\n");
+    printf("║ Throttle: u=+10 j=-10  PWM Init: g                  ║\n");
     printf("╚══════════════════════════════════════════════════════╝\n");
     fflush(stdout);
 }
