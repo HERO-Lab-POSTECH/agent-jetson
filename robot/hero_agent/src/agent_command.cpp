@@ -230,6 +230,9 @@ static void handleAutoRecovery(ros::Rate& loop_rate)
     }
 
     // State transition actions
+    // NOTE: sendCmd sends raw chars to Arduino via /hero_agent/command.
+    // These are Arduino-level hardware commands, NOT keyboard key codes.
+    // Do NOT change these when updating teleop key mapping.
     if (auto_recovery.step != auto_recovery.step_pre) {
         auto sendCmd = [&](char cmd) {
             command_msg.data = cmd;
