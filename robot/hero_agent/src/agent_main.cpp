@@ -18,6 +18,7 @@
 #include <std_msgs/Int8.h>
 #include <std_msgs/Float64MultiArray.h>
 #include "hero_msgs/hero_agent_state.h"
+#include "hero_msgs/hero_agent_sensor.h"
 
 #include <iostream>
 #include <fstream>
@@ -48,6 +49,12 @@ int move_speed = 0;
 int control_flags = 0;
 int control_yaw_enabled = 0, control_depth_enabled = 0;
 int relay_enabled = 0, laser_enabled = 0;
+
+// ==============================
+// IMU sensor variables (from /hero_agent/sensors)
+// ==============================
+float sensor_roll = 0.0f, sensor_pitch = 0.0f, sensor_yaw = 0.0f;
+float sensor_depth = 0.0f;
 
 // ==============================
 // Jetson-only toggle states (not available from Arduino)
@@ -123,6 +130,17 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
 }
 
 // ==============================
+// IMU sensor callback
+// ==============================
+void sensorCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
+{
+    sensor_roll  = msg->ROLL;
+    sensor_pitch = msg->PITCH;
+    sensor_yaw   = msg->YAW;
+    sensor_depth = msg->DEPTH;
+}
+
+// ==============================
 // ALBC status CSV logging
 // ==============================
 void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
@@ -138,7 +156,8 @@ void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
                 << msg->data[2] << "," << msg->data[3] << ","
                 << msg->data[4] << "," << msg->data[5] << ","
                 << msg->data[6] << "," << msg->data[7] << ","
-                << target_depth << "," << depth << "\n";
+                << target_depth << "," << depth << ","
+                << sensor_roll << "," << sensor_pitch << "," << sensor_yaw << "\n";
             fout_csv.flush();
         }
     }
@@ -269,6 +288,7 @@ int main(int argc, char** argv)
 
     // Subscribers
     ros::Subscriber sub_state = nh.subscribe("/hero_agent/state", 100, msg_callback_state);
+    ros::Subscriber sub_sensor = nh.subscribe("/hero_agent/sensors", 100, sensorCallback);
     ros::Subscriber sub_albc_status = nh.subscribe("/albc_status", 10, albcStatusCallback);
     ros::Subscriber sub_key_input = nh.subscribe("/hero_agent/key_input", 10, key_input_callback);
 
@@ -295,7 +315,7 @@ int main(int argc, char** argv)
                     if (fout_csv.is_open()) fout_csv.close();
                     fout_csv.open(albc_csv_path);
                     if (fout_csv.is_open()) {
-                        fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,target_depth,depth\n";
+                        fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,target_depth,depth,sensor_roll,sensor_pitch,sensor_yaw\n";
                         fout_csv.flush();
                         csv_status_msg = "Logging started";
                     }
@@ -425,6 +445,7 @@ void print_monitor_status()
            yaw, target_yaw, control_yaw_enabled ? " ON" : "OFF");
     printf(" Depth %7.3f / %7.3f  [%s]\n",
            depth, target_depth, control_depth_enabled ? " ON" : "OFF");
+    printf(" Roll  %7.2f   Pitch %7.2f\n", sensor_roll, sensor_pitch);
     printf(" Relay %-3s   Laser %-3s   Speed %-3d   Rec %-3s\n",
            relay_enabled ? "ON" : "OFF", laser_enabled ? "ON" : "OFF",
            move_speed, record_flag.load() ? "REC" : "---");
