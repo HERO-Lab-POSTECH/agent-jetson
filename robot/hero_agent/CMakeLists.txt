@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 2.8.3)
 project(hero_agent)
 
 find_package(catkin REQUIRED COMPONENTS std_msgs roscpp sensor_msgs hero_msgs)
-find_package(ros_opencv_ipcam_qr REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -13,7 +12,6 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
-  ${ros_opencv_ipcam_qr_INCLUDE_DIRS}
 )
 
 set(CMAKE_CXX_STANDARD 11)
@@ -29,12 +27,11 @@ target_link_libraries(agent_dvl ${catkin_LIBRARIES})
 
 add_executable(agent_command
   src/agent_command.cpp
-  src/qr_recovery_control.cpp
   src/darknet_control.cpp
   src/mosaic_survey.cpp
   src/teleop.cpp
 )
-add_dependencies(agent_command ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS} ${ros_opencv_ipcam_qr_EXPORTED_TARGETS})
+add_dependencies(agent_command ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(agent_command ${catkin_LIBRARIES})
 
 # Install Python scripts

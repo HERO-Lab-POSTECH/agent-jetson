@@ -2,7 +2,7 @@
 <package format="2">
   <name>hero_agent</name>
   <version>1.0.0</version>
-  <description>HERO underwater robot agent: QR recovery, visual servoing, and teleop</description>
+  <description>HERO underwater robot agent: visual servoing and teleop</description>
 
   <maintainer email="nvidia@todo.todo">nvidia</maintainer>
   <license>BSD</license>
@@ -14,8 +14,6 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>hero_msgs</depend>
-  <depend>ros_opencv_ipcam_qr</depend>
-
   <exec_depend>xterm</exec_depend>
 
   <export></export>

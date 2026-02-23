@@ -45,12 +45,11 @@ float depth = 0.0f, target_depth = 0.0f;
 int move_speed = 0;
 int control_flags = 0;
 int control_yaw_enabled = 0, control_depth_enabled = 0;
-int relay_enabled = 0, laser_enabled = 0, recovery_enabled = 0;
+int relay_enabled = 0, laser_enabled = 0;
 
 // ==============================
 // Jetson-only toggle states (not available from Arduino)
 // ==============================
-static bool tdc_on = false;
 static bool mosaic_on = false;
 static bool darknet_on = false;
 
@@ -116,7 +115,6 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
     control_depth_enabled = (control_flags & 2)  ? 1 : 0;
     relay_enabled         = (control_flags & 4)  ? 1 : 0;
     laser_enabled         = (control_flags & 8)  ? 1 : 0;
-    recovery_enabled      = (control_flags & 16) ? 1 : 0;
 }
 
 // ==============================
@@ -205,28 +203,12 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_translated('e');
         break;
 
-    case 't':  // Auto Recovery Start
-        send_translated('t');
-        break;
-
-    case 'y':  // TDC Mb +0.1
-        send_translated('y');
-        break;
-
-    case 'h':  // TDC Mb -0.1
-        send_translated('h');
-        break;
-
     case 'r':  // Heave Up (target.z)
         send_translated('r');
         break;
 
     case 'f':  // Heave Down (target.z)
         send_translated('f');
-        break;
-
-    case 'g':  // Auto Recovery Stop
-        send_translated('g');
         break;
 
     case 'q':  // Target Reset
@@ -245,12 +227,6 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_translated(darknet_on ? 'n' : 'm');
         break;
 
-    case ',':  // Toggle TDC (Jetson only)
-        if (!debounce_ok(',')) break;
-        tdc_on = !tdc_on;
-        send_translated(tdc_on ? ',' : '.');
-        break;
-
     // ── Letter Keys: Arduino-Only ──
 
     case 'N':  // Yaw Reset → Arduino 'n'
@@ -266,20 +242,17 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
     case ';':
     case 'm':
     case '.':
+    case ',':
+    case 't':
+    case 'g':
+    case 'y':
+    case 'h':
         break;
 
     // ── Rosbag Toggle (agent_main internal) ──
 
     case 'R':
         record_flag.store(record_flag.load() == 0 ? 1 : 0);
-        break;
-
-    // ── Jetson-Only Pass-Through ──
-
-    case '[':
-    case '/':
-    case ']':
-        send_translated(ch);
         break;
 
     // ── Pass-Through: Both Arduino + Jetson ──
@@ -472,12 +445,9 @@ void print_monitor_status()
     printf(" Grip    c=Open  v=Stop  b=Close\n");
     printf("──────────────── Jetson Only ──────────────────────\n");
     printf(" Target  e=Send  q=Reset\n");
-    printf(" TDC     ,=Toggle  y/h=Mb  u=KKp  i=KKv\n");
     printf(" Winch   6=Cal  7/8=Meter  9/0=Step\n");
-    printf(" Recov   z/x/c/v/b  /=ExpHold  ]=ExpClose\n");
-    printf(" Auto    t=Start  g=Stop\n");
     printf(" Mosaic  p=Toggle   Dknet  n=Toggle\n");
-    printf(" Rec     [=Experiment  R=Rosbag\n");
+    printf(" Rec     R=Rosbag\n");
     printf("═══════════════════════════════════════════════════\n");
     if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());
     if (!csv_status_msg.empty())    printf(" CSV:    %s\n", csv_status_msg.c_str());

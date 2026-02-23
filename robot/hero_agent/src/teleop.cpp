@@ -73,15 +73,9 @@ static int _getch()
 // Jetson-side key mapping (processKey):
 //   Movement:  w/s=Surge  a/d=Sway  r/f=Heave
 //   Target:    e=Send  q=Reset
-//   TDC:       ,=On  .=Off
-//   TDC Tune:  y/h=Mb+/-  u=KKp+  i=KKv+
 //   Winch:     1=Calib  2/3=Meter+/-  4/5=Step+/-
-//   Recovery:  z=Approach  x=Close  c=Final  v=Deploy
-//              b=Off  /=ExpHold  ]=ExpClose
-//   Auto:      t=Start  g=Stop
 //   Mosaic:    p=Start  o=Stop
 //   Darknet:   n=On  m=Off
-//   Record:    [=Experiment  R=Rosbag(agent_main)
 //
 // NOTE: This processKey receives TRANSLATED keys from agent_main
 //       via /hero_agent/key_translated. The keys arriving here use
@@ -94,36 +88,9 @@ static void processKey(int ch, ros::Rate& loop_rate)
 
     switch (ch) {
 
-    // --- TDC toggle ---
-    case ',':
-        resetQrErrors();
-        ctrl.qr_tdc = 1;
-        break;
-    case '.':
-        ctrl.qr_tdc = 0;
-        break;
-
-    // --- TDC parameter tuning ---
-    case 'y': qr_gains.Mb  += 0.1;     break;
-    case 'h': qr_gains.Mb  -= 0.1;     break;
-    case 'u': qr_gains.KKp += 0.00001; break;
-    case 'i': qr_gains.KKv += 0.001;   break;
-
-    // --- Auto recovery sequence ---
-    case 't':
-        auto_recovery.active = 1;
-        break;
-    case 'g':
-        auto_recovery.active = 0;
-        auto_recovery.count = 0;
-        auto_recovery.step = 0;
-        auto_recovery.step_pre = 0;
-        break;
-
     // --- Target reset ---
     case 'q':
         target.x = 0; target.y = 0; target.z = 0; target.yaw = 0;
-        winch.qr_based_calibration = 0;
         break;
 
     // --- Send current target to controller ---
@@ -166,56 +133,6 @@ static void processKey(int ch, ros::Rate& loop_rate)
     case 'a': target.y -= teleop_xy_step;  break;
     case 'r': target.z -= teleop_z_step;   break;
     case 'f': target.z += teleop_z_step;   break;
-
-    // --- Experiment recording ---
-    case '[':
-        start_record = 1;
-        time_count = 0;
-        ctrl.qr_tdc = 0;
-        ctrl.recovery = -1;
-        qr.flag_count = 0;
-        resetQrErrors();
-        break;
-
-    // --- QR recovery mode selection ---
-    case '/':
-        ctrl.recovery = -1;
-        qr.flag_count = 0;
-        resetQrErrors();
-        break;
-    case ']':
-        ctrl.recovery = -2;
-        qr.flag_count = 0;
-        resetQrErrors();
-        break;
-    case 'z':
-        ctrl.recovery = 1;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case 'x':
-        ctrl.recovery = 2;
-        winch.qr_based_calibration = 0;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case 'c':
-        ctrl.recovery = 3;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case 'v':
-        ctrl.recovery = 4;
-        qr.flag_count = 0; qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
-    case 'b':
-        ctrl.recovery = 0;
-        qr.flag_count = 0;
-        winch.qr_based_calibration = 0;
-        qr.count = 0;
-        qr.x_error_sum = 0; qr.z_error_sum = 0;
-        break;
 
     // --- Mosaic control ---
     case 'o': ctrl.mosaic = 0; break;

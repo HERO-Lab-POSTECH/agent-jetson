@@ -1,28 +1,4 @@
 # agent_command node parameters
-# All values match original hardcoded defaults for backward compatibility
-
-# QR position control gains
-qr_control:
-  Kp: 0.005
-  Kd: 0.005
-  qr_Kp: 65.0
-  qr_Kd: 65.0
-  qr_Ki: 0.05
-  # TDC parameters
-  qr_Mb: 0.16
-  qr_KKp: 5.0
-  qr_KKv: 26.0
-  # Saturation limits per mode
-  saturation_default: 200.0
-  saturation_recovery: 100.0
-
-# QR recovery mode targets [x, y, z]
-recovery_targets:
-  mode_neg1: [0.00, 0.10, 1.3]
-  mode_neg2: [-0.00, 0.10, 0.6]
-  mode_1:    [0.00, 0.00, 1.0]
-  mode_2:    [0.00, 0.04, 0.6]
-  mode_3:    [0.00, 0.04, 0.3]
 
 # DARKNET visual servoing
 darknet:
@@ -52,16 +28,6 @@ teleop:
   xy_step: 0.05
   z_step: 0.01
   winch_step: 10000
-
-# QR outlier rejection
-qr_filter:
-  distance_threshold: 0.5
-  warmup_count: 4
-
-# Convergence criteria
-convergence:
-  position_tolerance: 0.02
-  count_threshold: 30
 
 # Loop rate
 loop_rate_hz: 100
