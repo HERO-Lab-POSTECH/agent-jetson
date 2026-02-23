@@ -15,8 +15,8 @@ source /home/nvidia/catkin_ws/devel/setup.bash
 # Load parameters to the parameter server (private namespace: /albc_controller/)
 rosparam load "$(rospack find albc_control)/config/albc_controller.yaml" /albc_controller
 
-# Start joint_angle_command in background
-rosrun albc_control joint_angle_command &
+# Start joint_angle_command in background (suppress output to keep terminal clean)
+rosrun albc_control joint_angle_command > /dev/null 2>&1 &
 JAC_PID=$!
 
 # Cleanup on exit: kill background node
