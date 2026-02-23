@@ -403,7 +403,13 @@ void start_rosbag_record()
     rosbag_pid = fork();
     if (rosbag_pid < 0) { rosbag_status_msg = "Fork failed"; return; }
     if (rosbag_pid == 0) {
-        execlp("rosbag", "rosbag", "record", "-O", rosbag_file_path.c_str(), "-a", NULL);
+        execlp("rosbag", "rosbag", "record", "-O", rosbag_file_path.c_str(),
+               "/albc_status",
+               "/hero_agent/state",
+               "/hero_agent/sensors",
+               "/hero_agent/dvl",
+               "/joint_currents",
+               NULL);
         _exit(1);
     }
     usleep(500000);
