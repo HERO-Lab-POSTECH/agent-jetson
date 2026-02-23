@@ -70,7 +70,11 @@ static const char* controlModeName(ControlMode m) {
 
 static constexpr double INTEGRAL_MAX         = 100.0;
 static constexpr double COS_EPSILON          = 1e-6;
+static constexpr double COMMON_FACTOR_MAX    = 10.0;
 static constexpr double DET_EPSILON          = 1e-6;
+static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.233
+static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
+static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
@@ -114,9 +118,7 @@ struct ControlState {
     double prev_error_roll, prev_error_pitch;
     double target_roll, target_pitch;
     double target_x, target_y;
-    double w_roll, w_pitch;
-    double prev_w_roll, prev_w_pitch;
-    double a_roll, a_pitch;
+    double filtered_deriv_roll, filtered_deriv_pitch;
 };
 
 struct IKConfig {
@@ -378,24 +380,25 @@ static void handleRuntimeKey(int ch) {
 void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
     switch (control_mode) {
     case ControlMode::TDC: {
-        state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
-        state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
-
-        // Original common_factor: Fb / max(|Fb·cos·cos|, ε)
+        // Incremental PD with buoyancy compensation
         double denominator = std::abs(Fb * cos(state.current_roll) * cos(state.current_pitch));
-        double common_factor = Fb / std::max(denominator, COS_EPSILON);
+        double common_factor = std::min(
+            Fb / std::max(denominator, COS_EPSILON),
+            COMMON_FACTOR_MAX);
 
-        // Incremental: target -= cf * (control law)
         state.target_y -= common_factor *
-            (-1.0 * (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
+            (-1.0 * (gains.M_td * (gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
         state.target_x -= common_factor *
-            (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
+            (gains.M_td * (gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
         break;
     }
     case ControlMode::PID:
-        // Absolute PID without base offset
-        state.target_y = gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll;
-        state.target_x = -1.0 * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        state.target_y = PID_BASE_Y + gains.kp_roll  * state.error_roll
+                         + gains.ki_roll  * state.integral_roll
+                         + gains.kd_roll  * derivative_roll;
+        state.target_x = PID_BASE_X + (-1.0) * (gains.kp_pitch * state.error_pitch
+                         + gains.ki_pitch * state.integral_pitch
+                         + gains.kd_pitch * derivative_pitch);
         break;
 
     case ControlMode::FIXED: {
@@ -617,15 +620,20 @@ int main(int argc, char **argv) {
             state.error_roll  = state.target_roll  - state.current_roll;
             state.error_pitch = state.target_pitch - state.current_pitch;
 
-            // Integral (original: no dt multiplication)
+            // Integral accumulation (without dt multiplication — gains are tuned for 50Hz loop)
+            // If loop_rate_hz changes, ki gains must be rescaled proportionally
             state.integral_roll  += state.error_roll;
             state.integral_pitch += state.error_pitch;
             state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
             state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
 
-            // Derivative (original: error-based, no filter)
-            double derivative_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
-            double derivative_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+            // Derivative with 1st-order low-pass filter to attenuate sensor noise
+            double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
+            double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+            double derivative_roll  = DERIV_LPF_ALPHA * raw_deriv_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_roll;
+            double derivative_pitch = DERIV_LPF_ALPHA * raw_deriv_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_pitch;
+            state.filtered_deriv_roll  = derivative_roll;
+            state.filtered_deriv_pitch = derivative_pitch;
 
             // Control law
             computeControlOutput(dt, derivative_roll, derivative_pitch);
@@ -633,8 +641,6 @@ int main(int argc, char **argv) {
             // Store previous
             state.prev_error_roll  = state.error_roll;
             state.prev_error_pitch = state.error_pitch;
-            state.prev_w_roll      = state.w_roll;
-            state.prev_w_pitch     = state.w_pitch;
 
             // Radial workspace saturation
             target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);

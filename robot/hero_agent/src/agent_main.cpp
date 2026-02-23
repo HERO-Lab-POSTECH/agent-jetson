@@ -24,6 +24,7 @@
 #include <fstream>
 #include <string>
 #include <cstdlib>
+#include <cmath>
 #include <regex>
 #include <atomic>
 #include <mutex>
@@ -55,6 +56,7 @@ int relay_enabled = 0, laser_enabled = 0;
 // ==============================
 float sensor_roll = 0.0f, sensor_pitch = 0.0f, sensor_yaw = 0.0f;
 float sensor_depth = 0.0f;
+static double imu_yaw_offset_rad = 45.0 * M_PI / 180.0;
 
 // ==============================
 // Jetson-only toggle states (not available from Arduino)
@@ -134,8 +136,13 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
 // ==============================
 void sensorCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
 {
-    sensor_roll  = msg->ROLL;
-    sensor_pitch = msg->PITCH;
+    // Apply same coordinate correction as albc_controller:
+    // pitch sign inversion + yaw offset rotation to align with body frame
+    double raw_roll  = msg->ROLL;
+    double raw_pitch = -(msg->PITCH);
+    double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
+    sensor_roll  = static_cast<float>( c * raw_roll + s * raw_pitch);
+    sensor_pitch = static_cast<float>(-s * raw_roll + c * raw_pitch);
     sensor_yaw   = msg->YAW;
     sensor_depth = msg->DEPTH;
 }
@@ -278,6 +285,11 @@ int main(int argc, char** argv)
     ros::NodeHandle nh;
     ros::AsyncSpinner spinner(2);
     spinner.start();
+
+    // Load IMU yaw offset (same parameter as albc_controller)
+    double imu_yaw_offset_deg;
+    nh.param<double>("/albc_controller/imu_yaw_offset", imu_yaw_offset_deg, 45.0);
+    imu_yaw_offset_rad = imu_yaw_offset_deg * M_PI / 180.0;
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
