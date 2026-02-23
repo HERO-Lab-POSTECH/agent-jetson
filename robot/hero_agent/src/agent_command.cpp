@@ -10,6 +10,7 @@ WinchState winch;
 DarknetState darknet;
 MosaicState mosaic;
 ControlFlags ctrl;
+ThrustOutput thrust;
 
 // ROS publishers
 ros::Publisher pub_command;

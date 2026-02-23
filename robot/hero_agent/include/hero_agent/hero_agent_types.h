@@ -72,6 +72,10 @@ struct ControlFlags {
     int mosaic = 0;
 };
 
+struct ThrustOutput {
+    double Tx = 0, Ty = 0;
+};
+
 // ==============================
 // Shared state (extern declarations)
 // ==============================
@@ -82,6 +86,7 @@ extern WinchState winch;
 extern DarknetState darknet;
 extern MosaicState mosaic;
 extern ControlFlags ctrl;
+extern ThrustOutput thrust;
 
 // ROS publishers
 extern ros::Publisher pub_command;
