@@ -68,7 +68,8 @@ static const char* controlModeName(ControlMode m) {
 // Constants
 // ==============================
 
-static constexpr double INTEGRAL_MAX        = 2.0;
+static constexpr double INTEGRAL_MAX        = 0.3;   // was 2.0; ki_eff×0.3 = 0.0225m max
+static constexpr double DERIV_FILTER_ALPHA  = 0.3;   // EMA filter for derivative (moderate smoothing at 50Hz)
 static constexpr double LAMBDA_DLS           = 0.13;  // DLS damping for buoyancy division (≈Fb×0.01)
 static constexpr double DET_EPSILON         = 1e-6;
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
@@ -600,22 +601,19 @@ int main(int argc, char **argv) {
         } else {
             // Normal feedback modes: TDC / PID / FIXED
 
-            // Error computation
+            // 1. Error computation
             state.error_roll  = state.target_roll  - state.current_roll;
             state.error_pitch = state.target_pitch - state.current_pitch;
 
-            // Integral with anti-windup
-            state.integral_roll  += state.error_roll * dt;
-            state.integral_pitch += state.error_pitch * dt;
-            state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
-            state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
+            // 2. Derivative with EMA low-pass filter
+            static double filtered_deriv_roll = 0.0, filtered_deriv_pitch = 0.0;
+            double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
+            double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+            filtered_deriv_roll  = DERIV_FILTER_ALPHA * raw_deriv_roll  + (1.0 - DERIV_FILTER_ALPHA) * filtered_deriv_roll;
+            filtered_deriv_pitch = DERIV_FILTER_ALPHA * raw_deriv_pitch + (1.0 - DERIV_FILTER_ALPHA) * filtered_deriv_pitch;
 
-            // Derivative
-            double derivative_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
-            double derivative_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
-
-            // Control law
-            computeControlOutput(dt, derivative_roll, derivative_pitch);
+            // 3. Control law (uses previous integral — updated AFTER saturation check)
+            computeControlOutput(dt, filtered_deriv_roll, filtered_deriv_pitch);
 
             // Store previous states
             state.prev_error_roll  = state.error_roll;
@@ -623,12 +621,30 @@ int main(int argc, char **argv) {
             state.prev_w_roll      = state.w_roll;
             state.prev_w_pitch     = state.w_pitch;
 
-            // Radial workspace saturation
+            // 4. Radial workspace saturation
             target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
-            if (target_length >= SAFE_ARM_LENGTH) {
+            bool saturated = (target_length >= SAFE_ARM_LENGTH);
+            if (saturated) {
                 state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
                 state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
             }
+
+            // 5. Conditional integral update (workspace-aware anti-windup)
+            //    When NOT saturated: normal integral accumulation
+            //    When saturated: only allow integral to DECREASE (unwind), not increase
+            if (!saturated) {
+                state.integral_roll  += state.error_roll  * dt;
+                state.integral_pitch += state.error_pitch * dt;
+            } else {
+                double new_ir = state.integral_roll  + state.error_roll  * dt;
+                double new_ip = state.integral_pitch + state.error_pitch * dt;
+                if (std::abs(new_ir) < std::abs(state.integral_roll))
+                    state.integral_roll = new_ir;
+                if (std::abs(new_ip) < std::abs(state.integral_pitch))
+                    state.integral_pitch = new_ip;
+            }
+            state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
+            state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
 
             // Inverse kinematics
             double delta_x = state.target_x - current_x;
