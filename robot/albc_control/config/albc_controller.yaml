@@ -21,6 +21,9 @@ pid_pitch:
 # Gain multiplier
 gain_mult: 1.5
 
+# IMU mounting yaw offset (degrees, FRD convention)
+imu_yaw_offset: 45.0
+
 # Inverse kinematics
 ik:
   num_iterations: 3000

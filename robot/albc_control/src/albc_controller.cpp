@@ -133,6 +133,7 @@ static ControlMode control_mode = ControlMode::TDC;
 static ControlGains gains = {};
 static ControlState state = {};
 static IKConfig ik_cfg = {};
+static double imu_yaw_offset_rad = DEG2RAD(45.0);  // IMU mounting yaw offset [rad]
 static float joint_current1_mA = 0.0f;
 static float joint_current2_mA = 0.0f;
 
@@ -196,8 +197,13 @@ void updateJointAngles(double& theta1, double& theta2, double delta_x, double de
 // ==============================
 
 void imuCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg) {
-    state.current_roll  = msg->ROLL;
-    state.current_pitch = -(msg->PITCH);
+    double raw_roll  = msg->ROLL;
+    double raw_pitch = -(msg->PITCH);
+
+    // Rotate IMU readings by yaw offset to align with robot body frame
+    double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
+    state.current_roll  =  c * raw_roll + s * raw_pitch;
+    state.current_pitch = -s * raw_roll + c * raw_pitch;
 }
 
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
@@ -224,6 +230,8 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
     ik_cfg.learning_rate  = config.ik_learning_rate;
     ik_cfg.lambda_base    = config.ik_lambda_base;
     ik_cfg.num_iterations = config.ik_num_iterations;
+
+    imu_yaw_offset_rad = DEG2RAD(config.imu_yaw_offset);
 
     manual_theta1_deg = config.manual_theta1;
     manual_theta2_deg = config.manual_theta2;
@@ -472,6 +480,10 @@ int main(int argc, char **argv) {
     nh.param<double>("ik/learning_rate", ik_cfg.learning_rate, 0.02);
     nh.param<double>("ik/lambda_base", ik_cfg.lambda_base, 0.15);
 
+    double imu_yaw_offset_deg;
+    nh.param<double>("imu_yaw_offset", imu_yaw_offset_deg, 45.0);
+    imu_yaw_offset_rad = DEG2RAD(imu_yaw_offset_deg);
+
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 90.0);
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 90.0);
 
@@ -516,6 +528,7 @@ int main(int argc, char **argv) {
         cfg.ik_learning_rate  = ik_cfg.learning_rate;
         cfg.ik_lambda_base    = ik_cfg.lambda_base;
         cfg.ik_num_iterations = ik_cfg.num_iterations;
+        cfg.imu_yaw_offset    = imu_yaw_offset_deg;
         cfg.manual_theta1     = manual_theta1_deg;
         cfg.manual_theta2     = manual_theta2_deg;
         cfg.manual_x          = manual_x;
