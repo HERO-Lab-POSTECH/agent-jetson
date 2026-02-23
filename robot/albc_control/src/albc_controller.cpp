@@ -201,8 +201,8 @@ void updateJointAngles(double& theta1, double& theta2, double delta_x, double de
 // ==============================
 
 void imuCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg) {
-    state.current_roll  = -(msg->ROLL);
-    state.current_pitch = -(msg->PITCH);
+    state.current_roll  = msg->ROLL;
+    state.current_pitch = msg->PITCH;
 }
 
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
@@ -390,14 +390,14 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         double common_factor = l_f / (l_f * l_f + LAMBDA_DLS * LAMBDA_DLS);
 
         state.target_x -= common_factor *
-            (-1.0 * (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
+            (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
         state.target_y -= common_factor *
             (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
         break;
     }
     case ControlMode::PID:
         // Nominal position FK(90°,90°) + PID correction
-        state.target_x = -L2 + (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
+        state.target_x = -L2 + (-1.0) * (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
         state.target_y = L1 + (-1.0) * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
         break;
 
