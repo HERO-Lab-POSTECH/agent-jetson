@@ -13,14 +13,19 @@ static const char*        SERIAL_PORT = "/dev/ttyDynamixel";
 static constexpr float    PROTOCOL    = 2.0;
 
 // Dynamixel register addresses
-static constexpr uint16_t ADDR_TORQUE_ENABLE    = 64;
-static constexpr uint16_t ADDR_POSITION_D_GAIN  = 80;
-static constexpr uint16_t ADDR_POSITION_I_GAIN  = 82;
-static constexpr uint16_t ADDR_POSITION_P_GAIN  = 84;
-static constexpr uint16_t ADDR_PROFILE_VELOCITY  = 112;
-static constexpr uint16_t ADDR_GOAL_POSITION    = 116;
-static constexpr uint16_t ADDR_PRESENT_CURRENT   = 126;
-static constexpr uint16_t ADDR_PRESENT_POSITION  = 132;
+static constexpr uint16_t ADDR_TORQUE_ENABLE       = 64;
+static constexpr uint16_t ADDR_POSITION_D_GAIN     = 80;
+static constexpr uint16_t ADDR_POSITION_I_GAIN     = 82;
+static constexpr uint16_t ADDR_POSITION_P_GAIN     = 84;
+static constexpr uint16_t ADDR_PROFILE_ACCELERATION = 108;
+static constexpr uint16_t ADDR_PROFILE_VELOCITY     = 112;
+static constexpr uint16_t ADDR_GOAL_POSITION       = 116;
+static constexpr uint16_t ADDR_PRESENT_CURRENT      = 126;
+static constexpr uint16_t ADDR_PRESENT_POSITION     = 132;
+
+// Motion profile parameters
+static constexpr uint32_t OPERATING_VELOCITY    = 100;  // ~22.9 RPM (~137 deg/s), post-startup
+static constexpr uint32_t PROFILE_ACCELERATION  = 40;   // ~8,583 rev/min², smooth accel/decel
 
 static constexpr double RAD_TO_DXL(double x) { return x / M_PI * 2048.0; }
 static inline double DXL_TO_RAD(int32_t x) { return static_cast<double>(x) / 2048.0 * M_PI; }
@@ -54,6 +59,7 @@ void enableTorque(uint8_t id) {
     packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_D_GAIN, 40, &error);
     packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_I_GAIN, 1, &error);
     packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_P_GAIN, 800, &error);
+    packet_handler->write4ByteTxRx(port_handler, id, ADDR_PROFILE_ACCELERATION, PROFILE_ACCELERATION, &error);
 }
 
 void setPosition(uint8_t id, int32_t position) {
@@ -180,9 +186,10 @@ int main(int argc, char **argv) {
         // Restore full speed after startup ramp completes (timer starts on first command)
         if (first_command_received) {
             if (startup_counter == STARTUP_TICKS) {
-                setProfileVelocity(JOINT1_ID, 0);
-                setProfileVelocity(JOINT2_ID, 0);
-                ROS_INFO("Startup ramp complete — full speed enabled");
+                setProfileVelocity(JOINT1_ID, OPERATING_VELOCITY);
+                setProfileVelocity(JOINT2_ID, OPERATING_VELOCITY);
+                ROS_INFO("Startup ramp complete — operating velocity enabled (vel=%d, acc=%d)",
+                         OPERATING_VELOCITY, PROFILE_ACCELERATION);
                 startup_counter++;  // only run once
             } else if (startup_counter < STARTUP_TICKS) {
                 startup_counter++;
