@@ -13,12 +13,12 @@ td_control:
 
 # PID controller gains (base values)
 pid_roll:
-  kp: 0.05
+  kp: 0.1
   ki: 0.05    # was 0.001; scaled ×50 to compensate dt-corrected integral (0.001 × 50Hz = 0.05)
   kd: 0.0005
 
 pid_pitch:
-  kp: 0.05
+  kp: 0.1
   ki: 0.05    # was 0.001; scaled ×50 to compensate dt-corrected integral (0.001 × 50Hz = 0.05)
   kd: 0.0005
 
