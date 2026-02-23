@@ -46,17 +46,21 @@ static int readKey() {
 // Control Mode
 // ==============================
 
-enum class ControlMode : int { TDC = 1, PID = 2, FIXED = 3 };
+enum class ControlMode : int { TDC = 1, PID = 2, FIXED = 3, MANUAL = 4 };
 // TDC: Simplified Time-Delay Control (currently incremental PD with buoyancy compensation)
 // PID: Standard PID with separate roll/pitch gains
 // FIXED: Fixed end-effector position (0.01, 0.01) for testing
+// MANUAL: Direct joint angle or EE position control for calibration/testing
+
+enum class ManualSubMode { JOINT, POSITION };
 
 static const char* controlModeName(ControlMode m) {
     switch (m) {
-        case ControlMode::TDC:   return "TDC";
-        case ControlMode::PID:   return "PID";
-        case ControlMode::FIXED: return "FIXED";
-        default:                 return "???";
+        case ControlMode::TDC:    return "TDC";
+        case ControlMode::PID:    return "PID";
+        case ControlMode::FIXED:  return "FIXED";
+        case ControlMode::MANUAL: return "MANUAL";
+        default:                  return "???";
     }
 }
 
@@ -70,6 +74,8 @@ static constexpr double DET_EPSILON         = 1e-6;
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
+static constexpr double MANUAL_ANGLE_STEP     = 5.0;   // deg per keypress
+static constexpr double MANUAL_POS_STEP       = 0.01;  // m per keypress
 
 // ==============================
 // State Structures
@@ -133,6 +139,11 @@ static ControlState state = {};
 static IKConfig ik_cfg = {};
 static float joint_current1_mA = 0.0f;
 static float joint_current2_mA = 0.0f;
+
+// Manual mode state
+static ManualSubMode manual_submode = ManualSubMode::JOINT;
+static double manual_theta1_deg = 45.0, manual_theta2_deg = 45.0;
+static double manual_x = 0.0, manual_y = 0.0;
 
 // ==============================
 // Inverse Kinematics (Damped Least Squares)
@@ -218,6 +229,11 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
     ik_cfg.lambda_base    = config.ik_lambda_base;
     ik_cfg.num_iterations = config.ik_num_iterations;
 
+    manual_theta1_deg = config.manual_theta1;
+    manual_theta2_deg = config.manual_theta2;
+    manual_x          = config.manual_x;
+    manual_y          = config.manual_y;
+
     // Reset integrals on gain change (anti-windup)
     state.integral_roll  = 0.0;
     state.integral_pitch = 0.0;
@@ -246,11 +262,12 @@ static ControlMode selectModeInteractive() {
     printf("═══════════════════════════════════════════════════\n");
     printf("        ALBC Controller - Mode Selection\n");
     printf("═══════════════════════════════════════════════════\n");
-    printf("  [1] TDC   - Time-Delay Control\n");
-    printf("  [2] PID   - PID Control\n");
-    printf("  [3] FIXED - Fixed Position (test)\n");
+    printf("  [1] TDC    - Time-Delay Control\n");
+    printf("  [2] PID    - PID Control\n");
+    printf("  [3] FIXED  - Fixed Position (test)\n");
+    printf("  [4] MANUAL - Manual Position\n");
     printf("═══════════════════════════════════════════════════\n");
-    printf(" Select mode (1/2/3): ");
+    printf(" Select mode (1/2/3/4): ");
     fflush(stdout);
 
     // Blocking read for mode selection
@@ -264,7 +281,7 @@ static ControlMode selectModeInteractive() {
     while (true) {
         char ch;
         if (read(STDIN_FILENO, &ch, 1) == 1) {
-            if (ch >= '1' && ch <= '3') {
+            if (ch >= '1' && ch <= '4') {
                 selected = static_cast<ControlMode>(ch - '0');
                 printf("%c\n\n Starting [%s] mode...\n", ch, controlModeName(selected));
                 fflush(stdout);
@@ -285,7 +302,7 @@ static ControlMode selectModeInteractive() {
 
 static void cycleMode() {
     int m = static_cast<int>(control_mode);
-    m = (m % 3) + 1;  // 1→2→3→1
+    m = (m % 4) + 1;  // 1→2→3→4→1
     control_mode = static_cast<ControlMode>(m);
 }
 
@@ -302,6 +319,48 @@ static void handleRuntimeKey(int ch) {
         break;
     case '3':   // Direct select: FIXED
         control_mode = ControlMode::FIXED;
+        break;
+    case '4':   // Direct select: MANUAL
+        control_mode = ControlMode::MANUAL;
+        break;
+    // Manual mode keys (only active in MANUAL mode)
+    case 'w':
+        if (control_mode == ControlMode::MANUAL) {
+            if (manual_submode == ManualSubMode::JOINT)
+                manual_theta1_deg += MANUAL_ANGLE_STEP;
+            else
+                manual_y += MANUAL_POS_STEP;
+        }
+        break;
+    case 's':
+        if (control_mode == ControlMode::MANUAL) {
+            if (manual_submode == ManualSubMode::JOINT)
+                manual_theta1_deg -= MANUAL_ANGLE_STEP;
+            else
+                manual_y -= MANUAL_POS_STEP;
+        }
+        break;
+    case 'a':
+        if (control_mode == ControlMode::MANUAL) {
+            if (manual_submode == ManualSubMode::JOINT)
+                manual_theta2_deg -= MANUAL_ANGLE_STEP;
+            else
+                manual_x -= MANUAL_POS_STEP;
+        }
+        break;
+    case 'd':
+        if (control_mode == ControlMode::MANUAL) {
+            if (manual_submode == ManualSubMode::JOINT)
+                manual_theta2_deg += MANUAL_ANGLE_STEP;
+            else
+                manual_x += MANUAL_POS_STEP;
+        }
+        break;
+    case 'm':
+        if (control_mode == ControlMode::MANUAL) {
+            manual_submode = (manual_submode == ManualSubMode::JOINT)
+                             ? ManualSubMode::POSITION : ManualSubMode::JOINT;
+        }
         break;
     default:
         break;
@@ -344,6 +403,10 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         state.target_y = 0.01;
         state.target_x = 0.01;
         break;
+
+    case ControlMode::MANUAL:
+        // Handled in main loop before this function is called
+        break;
     }
 }
 
@@ -356,7 +419,12 @@ void printDashboard(double theta1, double theta2,
                     double target_length) {
     printf("\033[2J\033[H");
     printf("═══════════════════════════════════════════════════\n");
-    printf("            ALBC Controller [%s]\n", controlModeName(control_mode));
+    if (control_mode == ControlMode::MANUAL) {
+        const char* sub = (manual_submode == ManualSubMode::JOINT) ? "JOINT" : "POSITION";
+        printf("          ALBC Controller [MANUAL:%s]\n", sub);
+    } else {
+        printf("            ALBC Controller [%s]\n", controlModeName(control_mode));
+    }
     printf("═══════════════════════════════════════════════════\n");
     printf(" Roll  %+7.2f / %+7.2f deg  (err %+.2f)\n",
            RAD2DEG(state.current_roll), RAD2DEG(state.target_roll), RAD2DEG(state.error_roll));
@@ -373,7 +441,10 @@ void printDashboard(double theta1, double theta2,
     printf(" Motor  J1=%+.0f mA  J2=%+.0f mA\n",
            joint_current1_mA, joint_current2_mA);
     printf("───────────────────────────────────────────────────\n");
-    printf(" Keys  ==Cycle  1=TDC  2=PID  3=FIXED\n");
+    if (control_mode == ControlMode::MANUAL)
+        printf(" Keys  ==Cycle  1-4=Mode  w/s/a/d=Adjust  m=SubMode\n");
+    else
+        printf(" Keys  ==Cycle  1=TDC  2=PID  3=FIXED  4=MANUAL\n");
     printf("═══════════════════════════════════════════════════\n");
     fflush(stdout);
 }
@@ -412,9 +483,14 @@ int main(int argc, char **argv) {
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 45.0);
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 45.0);
 
+    nh.param<double>("manual/theta1", manual_theta1_deg, 45.0);
+    nh.param<double>("manual/theta2", manual_theta2_deg, 45.0);
+    nh.param<double>("manual/x", manual_x, 0.0);
+    nh.param<double>("manual/y", manual_y, 0.0);
+
     gains.applyMultiplier();
 
-    // Interactive mode selection (blocks until user picks 1/2/3)
+    // Interactive mode selection (blocks until user picks 1/2/3/4)
     control_mode = selectModeInteractive();
     atexit(closeKeyboard);  // restore terminal on any exit path
 
@@ -445,9 +521,13 @@ int main(int argc, char **argv) {
         cfg.kp_pitch         = gains.kp_pitch_base;
         cfg.ki_pitch         = gains.ki_pitch_base;
         cfg.kd_pitch         = gains.kd_pitch_base;
-        cfg.ik_learning_rate = ik_cfg.learning_rate;
-        cfg.ik_lambda_base   = ik_cfg.lambda_base;
+        cfg.ik_learning_rate  = ik_cfg.learning_rate;
+        cfg.ik_lambda_base    = ik_cfg.lambda_base;
         cfg.ik_num_iterations = ik_cfg.num_iterations;
+        cfg.manual_theta1     = manual_theta1_deg;
+        cfg.manual_theta2     = manual_theta2_deg;
+        cfg.manual_x          = manual_x;
+        cfg.manual_y          = manual_y;
         dr_server.updateConfig(cfg);
     }
     dr_server.setCallback(boost::bind(&reconfigureCallback, _1, _2));
@@ -474,61 +554,102 @@ int main(int argc, char **argv) {
         if (key >= 0) handleRuntimeKey(key);
 
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
+        double target_length = 0.0;
 
-        // Error computation
-        state.error_roll  = state.target_roll  - state.current_roll;
-        state.error_pitch = state.target_pitch - state.current_pitch;
+        if (control_mode == ControlMode::MANUAL) {
+            // Manual mode: bypass IMU feedback pipeline entirely
+            if (manual_submode == ManualSubMode::JOINT) {
+                // Direct joint angle assignment — no IK needed
+                theta1 = DEG2RAD(manual_theta1_deg);
+                theta2 = DEG2RAD(manual_theta2_deg);
+                forwardKinematics(theta1, theta2, current_x, current_y);
+                state.target_x = current_x;
+                state.target_y = current_y;
+            } else {
+                // Direct EE position — workspace saturation + IK only
+                state.target_x = manual_x;
+                state.target_y = manual_y;
 
-        // Integral with anti-windup
-        state.integral_roll  += state.error_roll * dt;
-        state.integral_pitch += state.error_pitch * dt;
-        state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
-        state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
+                target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
+                if (target_length >= SAFE_ARM_LENGTH) {
+                    state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
+                    state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
+                }
 
-        // Derivative
-        double derivative_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
-        double derivative_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+                double delta_x = state.target_x - current_x;
+                double delta_y = state.target_y - current_y;
+                double delta_norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
 
-        // Control law
-        computeControlOutput(dt, derivative_roll, derivative_pitch);
+                int dynamic_iterations = (delta_norm > IK_DELTA_THRESHOLD)
+                                         ? ik_cfg.num_iterations : IK_REDUCED_ITERATIONS;
 
-        // Store previous states
-        state.prev_error_roll  = state.error_roll;
-        state.prev_error_pitch = state.error_pitch;
-        state.prev_w_roll      = state.w_roll;
-        state.prev_w_pitch     = state.w_pitch;
+                for (int i = 0; i < dynamic_iterations; i++) {
+                    forwardKinematics(theta1, theta2, current_x, current_y);
+                    delta_x = state.target_x - current_x;
+                    delta_y = state.target_y - current_y;
+                    updateJointAngles(theta1, theta2, delta_x, delta_y);
+                }
 
-        // Radial workspace saturation
-        double target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
-        if (target_length >= SAFE_ARM_LENGTH) {
-            state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
-            state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
-        }
+                forwardKinematics(theta1, theta2, current_x, current_y);
+            }
+        } else {
+            // Normal feedback modes: TDC / PID / FIXED
 
-        // Inverse kinematics
-        double delta_x = state.target_x - current_x;
-        double delta_y = state.target_y - current_y;
-        double delta_norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
+            // Error computation
+            state.error_roll  = state.target_roll  - state.current_roll;
+            state.error_pitch = state.target_pitch - state.current_pitch;
 
-        int dynamic_iterations = (delta_norm > IK_DELTA_THRESHOLD)
-                                 ? ik_cfg.num_iterations : IK_REDUCED_ITERATIONS;
+            // Integral with anti-windup
+            state.integral_roll  += state.error_roll * dt;
+            state.integral_pitch += state.error_pitch * dt;
+            state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
+            state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
 
-        for (int i = 0; i < dynamic_iterations; i++) {
+            // Derivative
+            double derivative_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
+            double derivative_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+
+            // Control law
+            computeControlOutput(dt, derivative_roll, derivative_pitch);
+
+            // Store previous states
+            state.prev_error_roll  = state.error_roll;
+            state.prev_error_pitch = state.error_pitch;
+            state.prev_w_roll      = state.w_roll;
+            state.prev_w_pitch     = state.w_pitch;
+
+            // Radial workspace saturation
+            target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
+            if (target_length >= SAFE_ARM_LENGTH) {
+                state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
+                state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
+            }
+
+            // Inverse kinematics
+            double delta_x = state.target_x - current_x;
+            double delta_y = state.target_y - current_y;
+            double delta_norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
+
+            int dynamic_iterations = (delta_norm > IK_DELTA_THRESHOLD)
+                                     ? ik_cfg.num_iterations : IK_REDUCED_ITERATIONS;
+
+            for (int i = 0; i < dynamic_iterations; i++) {
+                forwardKinematics(theta1, theta2, current_x, current_y);
+                delta_x = state.target_x - current_x;
+                delta_y = state.target_y - current_y;
+                updateJointAngles(theta1, theta2, delta_x, delta_y);
+            }
+
+            // Final FK for accurate display
             forwardKinematics(theta1, theta2, current_x, current_y);
-            delta_x = state.target_x - current_x;
-            delta_y = state.target_y - current_y;
-            updateJointAngles(theta1, theta2, delta_x, delta_y);
-        }
 
-        // Final FK for accurate display
-        forwardKinematics(theta1, theta2, current_x, current_y);
-
-        // Anti-windup: reset TDC target to actual FK position.
-        // Prevents target drift when IK cannot reach the commanded position
-        // (e.g., near singularity). In normal operation target ≈ current.
-        if (control_mode == ControlMode::TDC) {
-            state.target_x = current_x;
-            state.target_y = current_y;
+            // Anti-windup: reset TDC target to actual FK position.
+            // Prevents target drift when IK cannot reach the commanded position
+            // (e.g., near singularity). In normal operation target ≈ current.
+            if (control_mode == ControlMode::TDC) {
+                state.target_x = current_x;
+                state.target_y = current_y;
+            }
         }
 
         // Publish joint angles
