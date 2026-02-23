@@ -420,8 +420,7 @@ void print_monitor_status()
     printf(" Yaw     i/k=+/-0.1\n");
     printf(" Depth   o/l=+/-0.1\n");
     printf(" Grip    c=Open  v=Stop  b=Close\n");
-    printf("──────────────── Jetson Only ──────────────────────\n");
-    printf(" Lawnmow p=Toggle   Dknet  n=Toggle\n");
+    printf(" Auto    p=Lawnmower  n=Darknet\n");
     printf(" Rec     R=Rosbag\n");
     printf("═══════════════════════════════════════════════════\n");
     if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());
