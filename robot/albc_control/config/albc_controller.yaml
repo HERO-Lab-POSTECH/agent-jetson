@@ -3,9 +3,9 @@
 
 # TD controller gains (base values, before gain_mult scaling)
 td_control:
-  M_td: 0.0085
-  Kp_td: 0.085
-  Kd_td: 1.1
+  M_td: 0.004
+  Kp_td: 0.04
+  Kd_td: 0.55
 
 # PID controller gains (base values)
 pid_roll:

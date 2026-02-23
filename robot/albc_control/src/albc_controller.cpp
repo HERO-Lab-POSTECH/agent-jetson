@@ -464,9 +464,9 @@ int main(int argc, char **argv) {
     nh.param<int>("loop_rate_hz", loop_rate_hz, 50);
     nh.param<double>("gain_mult", gains.gain_mult, 1.5);
 
-    nh.param<double>("td_control/M_td", gains.M_td_base, 0.0085);
-    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.085);
-    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 1.1);
+    nh.param<double>("td_control/M_td", gains.M_td_base, 0.004);
+    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.04);
+    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 0.55);
 
     nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.05);
     nh.param<double>("pid_roll/ki", gains.ki_roll_base, 0.001);
