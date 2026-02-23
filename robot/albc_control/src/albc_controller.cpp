@@ -1,12 +1,40 @@
 #include <ros/ros.h>
 #include <cmath>
+#include <cstdio>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Float64MultiArray.h>
+#include <std_msgs/Float32MultiArray.h>
 #include <std_msgs/Int32.h>
 #include "hero_msgs/hero_agent_sensor.h"
 #include "albc_control/albc_kinematics.h"
 
 using namespace albc;
+
+// ==============================
+// Control Mode
+// ==============================
+
+enum class ControlMode : int { TDC = 1, PID = 2, FIXED = 3 };
+
+static const char* controlModeName(ControlMode m) {
+    switch (m) {
+        case ControlMode::TDC:   return "TDC";
+        case ControlMode::PID:   return "PID";
+        case ControlMode::FIXED: return "FIXED";
+        default:                 return "???";
+    }
+}
+
+// ==============================
+// Constants
+// ==============================
+
+static constexpr double INTEGRAL_MAX        = 100.0;
+static constexpr double COS_EPSILON         = 1e-6;
+static constexpr double DET_EPSILON         = 1e-6;
+static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
+static constexpr double IK_DELTA_THRESHOLD  = 0.01;
+static constexpr int    IK_REDUCED_ITERATIONS = 500;
 
 // ==============================
 // State Structures
@@ -64,19 +92,18 @@ struct IKConfig {
 // Globals
 // ==============================
 
-static int cont_ver = 1;
+static ControlMode control_mode = ControlMode::TDC;
 static ControlGains gains = {};
 static ControlState state = {};
 static IKConfig ik_cfg = {};
+static float joint_current1_mA = 0.0f;
+static float joint_current2_mA = 0.0f;
 
 // ==============================
 // Inverse Kinematics (Damped Least Squares)
 // ==============================
 
 void updateJointAngles(double& theta1, double& theta2, double delta_x, double delta_y) {
-    constexpr double DET_EPSILON = 1e-6;
-    constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
-
     double lambda = ik_cfg.lambda_base * (
         1.0 - std::sqrt(std::abs(L1 * L2 * std::sin(theta2))) /
               std::sqrt(std::abs(L1 * L2))
@@ -150,7 +177,82 @@ void targetGainMultCallback(const std_msgs::Float64::ConstPtr& msg) {
 }
 
 void contVerCallback(const std_msgs::Int32::ConstPtr& msg) {
-    cont_ver = msg->data;
+    int v = msg->data;
+    if (v >= 1 && v <= 3)
+        control_mode = static_cast<ControlMode>(v);
+}
+
+void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
+    if (msg->data.size() >= 2) {
+        joint_current1_mA = msg->data[0];
+        joint_current2_mA = msg->data[1];
+    }
+}
+
+// ==============================
+// Control Law
+// ==============================
+
+void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
+    switch (control_mode) {
+    case ControlMode::TDC: {
+        state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
+        state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
+
+        double cos_product = cos(state.current_roll) * cos(state.current_pitch);
+        double denominator = std::abs(Fb * cos_product);
+
+        if (denominator < COS_EPSILON) {
+            ROS_WARN_THROTTLE(2.0, "Denominator too small (Fb*cos=%.6f), capped", denominator);
+        }
+
+        double common_factor = Fb / std::max(denominator, COS_EPSILON);
+
+        state.target_y -= common_factor *
+            (-1.0 * (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
+        state.target_x -= common_factor *
+            (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
+        break;
+    }
+    case ControlMode::PID:
+        state.target_y = gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll;
+        state.target_x = -1.0 * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        break;
+
+    case ControlMode::FIXED:
+        state.target_y = 0.01;
+        state.target_x = 0.01;
+        break;
+    }
+}
+
+// ==============================
+// Dashboard
+// ==============================
+
+void printDashboard(double theta1, double theta2,
+                    double current_x, double current_y,
+                    double target_length) {
+    printf("\033[2J\033[H");
+    printf("═══════════════════════════════════════════════════\n");
+    printf("            ALBC Controller [%s]\n", controlModeName(control_mode));
+    printf("═══════════════════════════════════════════════════\n");
+    printf(" Roll  %+7.2f / %+7.2f deg  (err %+.2f)\n",
+           RAD2DEG(state.current_roll), RAD2DEG(state.target_roll), RAD2DEG(state.error_roll));
+    printf(" Pitch %+7.2f / %+7.2f deg  (err %+.2f)\n",
+           RAD2DEG(state.current_pitch), RAD2DEG(state.target_pitch), RAD2DEG(state.error_pitch));
+    printf("───────────────────────────────────────────────────\n");
+    printf(" Target (%+.4f, %+.4f)   FK (%+.4f, %+.4f)\n",
+           state.target_x, state.target_y, current_x, current_y);
+    printf(" Joints J1=%.1f  J2=%.1f deg   Len=%.4f/%.4f\n",
+           RAD2DEG(theta1), RAD2DEG(theta2), target_length, SAFE_ARM_LENGTH);
+    printf("───────────────────────────────────────────────────\n");
+    printf(" Gains  mult=%.2f  M=%.4f  Kp=%.3f  Kd=%.1f\n",
+           gains.gain_mult, gains.M_td, gains.Kp_td, gains.Kd_td);
+    printf(" Motor  J1=%+.0f mA  J2=%+.0f mA\n",
+           joint_current1_mA, joint_current2_mA);
+    printf("═══════════════════════════════════════════════════\n");
+    fflush(stdout);
 }
 
 // ==============================
@@ -163,13 +265,13 @@ int main(int argc, char **argv) {
 
     // Load parameters
     int loop_rate_hz;
-    double log_period;
+    int mode_int;
     double initial_theta1_deg, initial_theta2_deg;
 
     nh.param<int>("loop_rate_hz", loop_rate_hz, 50);
-    nh.param<int>("controller_version", cont_ver, 1);
+    nh.param<int>("control_mode", mode_int, 1);
+    control_mode = static_cast<ControlMode>(mode_int);
     nh.param<double>("gain_mult", gains.gain_mult, 1.5);
-    nh.param<double>("log_period", log_period, 0.5);
 
     nh.param<double>("td_control/M_td", gains.M_td_base, 0.0085);
     nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.085);
@@ -184,8 +286,8 @@ int main(int argc, char **argv) {
     nh.param<double>("pid_pitch/kd", gains.kd_pitch_base, 0.0005);
 
     nh.param<int>("ik/num_iterations", ik_cfg.num_iterations, 3000);
-    nh.param<double>("ik/learning_rate", ik_cfg.learning_rate, 0.02);   // [BUG FIX B2]
-    nh.param<double>("ik/lambda_base", ik_cfg.lambda_base, 0.15);      // [BUG FIX B2]
+    nh.param<double>("ik/learning_rate", ik_cfg.learning_rate, 0.02);
+    nh.param<double>("ik/lambda_base", ik_cfg.lambda_base, 0.15);
 
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 45.0);
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 45.0);
@@ -208,6 +310,7 @@ int main(int argc, char **argv) {
     ros::Subscriber target_pitch_sub = nh.subscribe("/target_pitch", 10, targetPitchCallback);
     ros::Subscriber gain_mult_sub    = nh.subscribe("/target_gain_mult", 10, targetGainMultCallback);
     ros::Subscriber cont_ver_sub     = nh.subscribe("/cont_ver", 10, contVerCallback);
+    ros::Subscriber current_sub      = nh.subscribe("/joint_currents", 10, jointCurrentsCallback);
 
     // Publishers
     ros::Publisher angle_pub_1 = nh.advertise<std_msgs::Float64>(
@@ -218,15 +321,8 @@ int main(int argc, char **argv) {
         "/albc_status", 10);
 
     ros::Rate loop_rate(loop_rate_hz);
-
-    ROS_INFO("===================================");
-    ROS_INFO("  ALBC Controller Initialized");
-    ROS_INFO("  Mode: %s (v%d)", cont_ver == 1 ? "TDC" : (cont_ver == 2 ? "PID" : "Position"), cont_ver);
-    ROS_INFO("  TD: M=%.4f Kp=%.3f Kd=%.1f", gains.M_td, gains.Kp_td, gains.Kd_td);
-    ROS_INFO("  PID Roll: Kp=%.3f Ki=%.3f Kd=%.4f", gains.kp_roll, gains.ki_roll, gains.kd_roll);
-    ROS_INFO("  Gain mult: %.2f  Loop: %d Hz", gains.gain_mult, loop_rate_hz);
-    ROS_INFO("  IK: iter=%d lr=%.3f lambda=%.2f", ik_cfg.num_iterations, ik_cfg.learning_rate, ik_cfg.lambda_base);
-    ROS_INFO("===================================");
+    int dashboard_counter = 0;
+    const int dashboard_interval = loop_rate_hz / 4;  // ~4 Hz
 
     while (ros::ok()) {
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
@@ -236,7 +332,6 @@ int main(int argc, char **argv) {
         state.error_pitch = state.target_pitch - state.current_pitch;
 
         // Integral with anti-windup
-        constexpr double INTEGRAL_MAX = 100.0;
         state.integral_roll  += state.error_roll;
         state.integral_pitch += state.error_pitch;
         state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
@@ -247,38 +342,7 @@ int main(int argc, char **argv) {
         double derivative_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
 
         // Control law
-        if (cont_ver == 1) {
-            // TDC (Time Delay Control)
-            state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
-            state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
-
-            double cos_product = cos(state.current_roll) * cos(state.current_pitch);
-            double denominator = std::abs(Fb * cos_product);
-
-            constexpr double COS_EPSILON = 1e-6;
-            if (denominator < COS_EPSILON) {
-                ROS_WARN_THROTTLE(2.0, "Denominator too small (Fb*cos=%.6f), capped", denominator);
-            }
-
-            double common_factor = Fb / std::max(denominator, COS_EPSILON);
-
-            state.target_y -= common_factor *
-                (-1.0 * (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
-            state.target_x -= common_factor *
-                (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
-
-            // [BUG FIX B4] Removed redundant per-axis saturation. Radial saturation below handles it.
-
-        } else if (cont_ver == 2) {
-            // PID
-            state.target_y = gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll;
-            state.target_x = -1.0 * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
-
-        } else if (cont_ver == 3) {
-            // Position (fixed)
-            state.target_y = 0.01;
-            state.target_x = 0.01;
-        }
+        computeControlOutput(dt, derivative_roll, derivative_pitch);
 
         // Store previous states
         state.prev_error_roll  = state.error_roll;
@@ -298,7 +362,8 @@ int main(int argc, char **argv) {
         double delta_y = state.target_y - current_y;
         double delta_norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
 
-        int dynamic_iterations = (delta_norm > 0.01) ? ik_cfg.num_iterations : 500;
+        int dynamic_iterations = (delta_norm > IK_DELTA_THRESHOLD)
+                                 ? ik_cfg.num_iterations : IK_REDUCED_ITERATIONS;
 
         for (int i = 0; i < dynamic_iterations; i++) {
             forwardKinematics(theta1, theta2, current_x, current_y);
@@ -307,7 +372,7 @@ int main(int argc, char **argv) {
             updateJointAngles(theta1, theta2, delta_x, delta_y);
         }
 
-        // Final FK for accurate logging
+        // Final FK for accurate display
         forwardKinematics(theta1, theta2, current_x, current_y);
 
         // Publish joint angles
@@ -323,15 +388,15 @@ int main(int argc, char **argv) {
             RAD2DEG(state.target_roll), RAD2DEG(state.current_roll),
             RAD2DEG(state.target_pitch), RAD2DEG(state.current_pitch),
             state.target_x, state.target_y,
-            current_x, current_y   // [BUG FIX B1] actual FK result, not target
+            current_x, current_y
         };
         status_pub.publish(status_msg);
 
-        // [BUG FIX B1] Log actual FK position (was logging target as current)
-        ROS_INFO_THROTTLE(log_period,
-            "ALBC v%d | Tgt(%.4f,%.4f) FK(%.4f,%.4f) | J(%.1f,%.1f)deg | Len=%.4f/%.4f",
-            cont_ver, state.target_x, state.target_y, current_x, current_y,
-            RAD2DEG(theta1), RAD2DEG(theta2), target_length, SAFE_ARM_LENGTH);
+        // Dashboard (~4 Hz)
+        if (++dashboard_counter >= dashboard_interval) {
+            dashboard_counter = 0;
+            printDashboard(theta1, theta2, current_x, current_y, target_length);
+        }
 
         ros::spinOnce();
         loop_rate.sleep();

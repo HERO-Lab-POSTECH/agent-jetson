@@ -34,8 +34,6 @@ loop_rate_hz: 50
 initial_theta1_deg: 45.0
 initial_theta2_deg: 45.0
 
-# Controller version (1=TD, 2=PID, 3=position)
-controller_version: 1
+# Control mode (1=TDC, 2=PID, 3=Fixed)
+control_mode: 1
 
-# Logging
-log_period: 0.5
