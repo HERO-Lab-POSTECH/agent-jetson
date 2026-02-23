@@ -8,7 +8,37 @@
 #include "hero_msgs/hero_agent_sensor.h"
 #include "albc_control/albc_kinematics.h"
 
+#include <cstdlib>
+#include <termios.h>
+#include <unistd.h>
+
 using namespace albc;
+
+// ==============================
+// Terminal keyboard (raw mode for key input)
+// ==============================
+
+static struct termios initial_term_settings;
+
+static void initKeyboard() {
+    // Use already-saved initial_term_settings (saved in selectModeInteractive)
+    struct termios raw = initial_term_settings;
+    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_cc[VMIN] = 0;   // non-blocking
+    raw.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
+}
+
+static void closeKeyboard() {
+    tcsetattr(STDIN_FILENO, TCSANOW, &initial_term_settings);
+}
+
+static int readKey() {
+    char ch;
+    if (read(STDIN_FILENO, &ch, 1) == 1)
+        return ch;
+    return -1;
+}
 
 // ==============================
 // Control Mode
@@ -193,6 +223,80 @@ void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
 }
 
 // ==============================
+// Mode Selection (blocking, before control loop)
+// ==============================
+
+static ControlMode selectModeInteractive() {
+    // Save original terminal settings before any modification
+    tcgetattr(STDIN_FILENO, &initial_term_settings);
+
+    printf("\033[2J\033[H");
+    printf("═══════════════════════════════════════════════════\n");
+    printf("        ALBC Controller - Mode Selection\n");
+    printf("═══════════════════════════════════════════════════\n");
+    printf("  [1] TDC   - Time-Delay Control\n");
+    printf("  [2] PID   - PID Control\n");
+    printf("  [3] FIXED - Fixed Position (test)\n");
+    printf("═══════════════════════════════════════════════════\n");
+    printf(" Select mode (1/2/3): ");
+    fflush(stdout);
+
+    // Blocking read for mode selection
+    struct termios blocking = initial_term_settings;
+    blocking.c_lflag &= ~(ICANON | ECHO);
+    blocking.c_cc[VMIN] = 1;   // block until 1 char
+    blocking.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &blocking);
+
+    ControlMode selected = ControlMode::TDC;
+    while (true) {
+        char ch;
+        if (read(STDIN_FILENO, &ch, 1) == 1) {
+            if (ch >= '1' && ch <= '3') {
+                selected = static_cast<ControlMode>(ch - '0');
+                printf("%c\n\n Starting [%s] mode...\n", ch, controlModeName(selected));
+                fflush(stdout);
+                usleep(500000);  // brief pause to show selection
+                break;
+            }
+        }
+    }
+
+    // Switch to non-blocking for runtime
+    initKeyboard();
+    return selected;
+}
+
+// ==============================
+// Runtime key handling
+// ==============================
+
+static void cycleMode() {
+    int m = static_cast<int>(control_mode);
+    m = (m % 3) + 1;  // 1→2→3→1
+    control_mode = static_cast<ControlMode>(m);
+}
+
+static void handleRuntimeKey(int ch) {
+    switch (ch) {
+    case '=':   // Cycle mode: TDC→PID→FIXED→TDC
+        cycleMode();
+        break;
+    case '1':   // Direct select: TDC
+        control_mode = ControlMode::TDC;
+        break;
+    case '2':   // Direct select: PID
+        control_mode = ControlMode::PID;
+        break;
+    case '3':   // Direct select: FIXED
+        control_mode = ControlMode::FIXED;
+        break;
+    default:
+        break;
+    }
+}
+
+// ==============================
 // Control Law
 // ==============================
 
@@ -256,6 +360,8 @@ void printDashboard(double theta1, double theta2,
            gains.gain_mult, gains.M_td, gains.Kp_td, gains.Kd_td);
     printf(" Motor  J1=%+.0f mA  J2=%+.0f mA\n",
            joint_current1_mA, joint_current2_mA);
+    printf("───────────────────────────────────────────────────\n");
+    printf(" Keys  ==Cycle  1=TDC  2=PID  3=FIXED\n");
     printf("═══════════════════════════════════════════════════\n");
     fflush(stdout);
 }
@@ -265,17 +371,14 @@ void printDashboard(double theta1, double theta2,
 // ==============================
 
 int main(int argc, char **argv) {
-    ros::init(argc, argv, "agent_active_roll_pitch_controller", ros::init_options::AnonymousName);
+    ros::init(argc, argv, "albc_controller");
     ros::NodeHandle nh("~");
 
     // Load parameters
     int loop_rate_hz;
-    int mode_int;
     double initial_theta1_deg, initial_theta2_deg;
 
     nh.param<int>("loop_rate_hz", loop_rate_hz, 50);
-    nh.param<int>("control_mode", mode_int, 1);
-    control_mode = static_cast<ControlMode>(mode_int);
     nh.param<double>("gain_mult", gains.gain_mult, 1.5);
 
     nh.param<double>("td_control/M_td", gains.M_td_base, 0.0085);
@@ -298,6 +401,10 @@ int main(int argc, char **argv) {
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 45.0);
 
     gains.applyMultiplier();
+
+    // Interactive mode selection (blocks until user picks 1/2/3)
+    control_mode = selectModeInteractive();
+    atexit(closeKeyboard);  // restore terminal on any exit path
 
     // Initial joint angles and end-effector position
     double theta1 = DEG2RAD(initial_theta1_deg);
@@ -330,6 +437,10 @@ int main(int argc, char **argv) {
     const int dashboard_interval = loop_rate_hz / 4;  // ~4 Hz
 
     while (ros::ok()) {
+        // Runtime key input (non-blocking)
+        int key = readKey();
+        if (key >= 0) handleRuntimeKey(key);
+
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
 
         // Error computation
@@ -415,5 +526,6 @@ int main(int argc, char **argv) {
         loop_rate.sleep();
     }
 
+    closeKeyboard();
     return 0;
 }
