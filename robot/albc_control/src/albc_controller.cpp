@@ -49,7 +49,7 @@ static int readKey() {
 enum class ControlMode : int { TDC = 1, PID = 2, FIXED = 3, MANUAL = 4 };
 // TDC: Simplified Time-Delay Control (currently incremental PD with buoyancy compensation)
 // PID: Standard PID with separate roll/pitch gains
-// FIXED: Fixed end-effector position (0.01, 0.01) for testing
+// FIXED: Fixed end-effector position FK(90°,90°) for testing
 // MANUAL: Direct joint angle or EE position control for calibration/testing
 
 enum class ManualSubMode { JOINT, POSITION };
@@ -395,8 +395,9 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         break;
     }
     case ControlMode::PID:
-        state.target_y = gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll;
-        state.target_x = -1.0 * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        // Nominal position FK(90°,90°) + PID correction
+        state.target_y = L1 + (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
+        state.target_x = -L2 + (-1.0) * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
         break;
 
     case ControlMode::FIXED:
