@@ -68,10 +68,9 @@ static const char* controlModeName(ControlMode m) {
 // Constants
 // ==============================
 
-static constexpr double INTEGRAL_MAX        = 0.3;   // was 2.0; ki_eff×0.3 = 0.0225m max
-static constexpr double DERIV_FILTER_ALPHA  = 0.1;   // EMA filter for derivative (strong smoothing at 50Hz, ~2s settling)
-static constexpr double LAMBDA_DLS           = 0.13;  // DLS damping for buoyancy division (≈Fb×0.01)
-static constexpr double DET_EPSILON         = 1e-6;
+static constexpr double INTEGRAL_MAX         = 100.0;
+static constexpr double COS_EPSILON          = 1e-6;
+static constexpr double DET_EPSILON          = 1e-6;
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
@@ -110,17 +109,11 @@ struct ControlGains {
 
 struct ControlState {
     double current_roll, current_pitch;
-    double prev_roll, prev_pitch;           // previous IMU measurements (for derivative of measurement)
     double error_roll, error_pitch;
     double integral_roll, integral_pitch;
     double prev_error_roll, prev_error_pitch;
     double target_roll, target_pitch;
     double target_x, target_y;
-    double base_x, base_y;              // nominal EE position (set at startup / mode switch)
-
-    // w_roll/w_pitch are intentionally unused (always 0).
-    // Angular velocity feedforward (-M̄·ν̇) was disabled after simulation showed
-    // finite-difference amplification exceeds actuator authority at all M̄ values.
     double w_roll, w_pitch;
     double prev_w_roll, prev_w_pitch;
     double a_roll, a_pitch;
@@ -204,7 +197,7 @@ void updateJointAngles(double& theta1, double& theta2, double delta_x, double de
 
 void imuCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg) {
     state.current_roll  = msg->ROLL;
-    state.current_pitch = msg->PITCH;
+    state.current_pitch = -(msg->PITCH);
 }
 
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
@@ -377,39 +370,27 @@ static void handleRuntimeKey(int ch) {
 void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
     switch (control_mode) {
     case ControlMode::TDC: {
-        // Simplified TDC: incremental PD with buoyancy compensation.
-        // Full TDE terms (Λ_{t-L}·p_{EE}, -M̄·ν̇) are intentionally disabled:
-        // simulation experiments showed TDE causes divergence due to
-        // (1) Lambda time-variance creating positive feedback,
-        // (2) finite-difference ν̇ amplification exceeding actuator authority,
-        // (3) H_t ≈ H_{t-L} assumption structurally violated in this system.
-        // See: references/docs/tdc-tuning-history.md
         state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
         state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
 
-        // DLS inverse of buoyancy projection: Λ⁻¹ ≈ 1/Fb [m/N·m]
-        // l_f/(l_f²+λ²) smoothly approximates 1/l_f while avoiding singularity
-        double l_f = Fb * cos(state.current_roll) * cos(state.current_pitch);
-        double common_factor = l_f / (l_f * l_f + LAMBDA_DLS * LAMBDA_DLS);
+        // Original common_factor: Fb / max(|Fb·cos·cos|, ε)
+        double denominator = std::abs(Fb * cos(state.current_roll) * cos(state.current_pitch));
+        double common_factor = Fb / std::max(denominator, COS_EPSILON);
 
-        // Absolute positioning: target = base + delta (no accumulation)
-        // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
-        state.target_x = state.base_x - common_factor *
+        // Incremental: target -= cf * (control law)
+        state.target_y -= common_factor *
+            (-1.0 * (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
+        state.target_x -= common_factor *
             (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
-        state.target_y = state.base_y - common_factor *
-            (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
         break;
     }
     case ControlMode::PID:
-        // Absolute PID: target = base + PID output (no accumulation)
-        // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
-        state.target_x = state.base_x - (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
-        state.target_y = state.base_y - (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
+        // Absolute PID without base offset
+        state.target_y = gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll;
+        state.target_x = -1.0 * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
         break;
 
     case ControlMode::FIXED: {
-        // FK(90°, 90°): x = L1*cos(90°) + L2*cos(180°) = -L2, y = L1*sin(90°) + L2*sin(180°) = L1
-        // Exponential smoothing to avoid sudden jumps (α=0.05 → ~4s settle at 10Hz)
         constexpr double FIXED_ALPHA = 0.05;
         state.target_x += FIXED_ALPHA * (-L2 - state.target_x);
         state.target_y += FIXED_ALPHA * ( L1 - state.target_y);
@@ -417,7 +398,6 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
     }
 
     case ControlMode::MANUAL:
-        // Handled in main loop before this function is called
         break;
     }
 }
@@ -474,17 +454,17 @@ int main(int argc, char **argv) {
     double initial_theta1_deg, initial_theta2_deg;
 
     nh.param<int>("loop_rate_hz", loop_rate_hz, 50);
-    nh.param<double>("gain_mult", gains.gain_mult, 1.0);
+    nh.param<double>("gain_mult", gains.gain_mult, 1.5);
 
-    nh.param<double>("td_control/M_td", gains.M_td_base, 0.15);
-    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 40.0);
-    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 12.0);
+    nh.param<double>("td_control/M_td", gains.M_td_base, 0.0085);
+    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.085);
+    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 1.1);
 
-    nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.1);
+    nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.05);
     nh.param<double>("pid_roll/ki", gains.ki_roll_base, 0.001);
     nh.param<double>("pid_roll/kd", gains.kd_roll_base, 0.0005);
 
-    nh.param<double>("pid_pitch/kp", gains.kp_pitch_base, 0.1);
+    nh.param<double>("pid_pitch/kp", gains.kp_pitch_base, 0.05);
     nh.param<double>("pid_pitch/ki", gains.ki_pitch_base, 0.001);
     nh.param<double>("pid_pitch/kd", gains.kd_pitch_base, 0.0005);
 
@@ -515,8 +495,6 @@ int main(int argc, char **argv) {
 
     state.target_x = current_x;
     state.target_y = current_y;
-    state.base_x   = current_x;
-    state.base_y   = current_y;
 
     // Dynamic reconfigure server (syncs YAML-loaded values, then enables runtime tuning)
     dynamic_reconfigure::Server<albc_control::ALBCControllerConfig> dr_server(nh);
@@ -567,13 +545,13 @@ int main(int argc, char **argv) {
         int key = readKey();
         if (key >= 0) handleRuntimeKey(key);
 
-        // Mode change: reset base position when entering TDC/PID to prevent jumps
+        // Mode change: reset state for clean transition
         static ControlMode prev_mode = control_mode;
         if (control_mode != prev_mode) {
             if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
                 forwardKinematics(theta1, theta2, current_x, current_y);
-                state.base_x = current_x;
-                state.base_y = current_y;
+                state.target_x = current_x;
+                state.target_y = current_y;
                 state.integral_roll  = 0.0;
                 state.integral_pitch = 0.0;
             }
@@ -622,53 +600,35 @@ int main(int argc, char **argv) {
         } else {
             // Normal feedback modes: TDC / PID / FIXED
 
-            // 1. Error computation
+            // Error
             state.error_roll  = state.target_roll  - state.current_roll;
             state.error_pitch = state.target_pitch - state.current_pitch;
 
-            // 2. Derivative of measurement (avoids derivative kick on setpoint change)
-            //    d(error)/dt ≈ -d(measurement)/dt when target is constant
-            static double filtered_deriv_roll = 0.0, filtered_deriv_pitch = 0.0;
-            double raw_deriv_roll  = -(state.current_roll  - state.prev_roll)  / dt;
-            double raw_deriv_pitch = -(state.current_pitch - state.prev_pitch) / dt;
-            filtered_deriv_roll  = DERIV_FILTER_ALPHA * raw_deriv_roll  + (1.0 - DERIV_FILTER_ALPHA) * filtered_deriv_roll;
-            filtered_deriv_pitch = DERIV_FILTER_ALPHA * raw_deriv_pitch + (1.0 - DERIV_FILTER_ALPHA) * filtered_deriv_pitch;
+            // Integral (original: no dt multiplication)
+            state.integral_roll  += state.error_roll;
+            state.integral_pitch += state.error_pitch;
+            state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
+            state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
 
-            // 3. Control law (uses previous integral — updated AFTER saturation check)
-            computeControlOutput(dt, filtered_deriv_roll, filtered_deriv_pitch);
+            // Derivative (original: error-based, no filter)
+            double derivative_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
+            double derivative_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
 
-            // Store previous states
-            state.prev_roll        = state.current_roll;
-            state.prev_pitch       = state.current_pitch;
+            // Control law
+            computeControlOutput(dt, derivative_roll, derivative_pitch);
+
+            // Store previous
             state.prev_error_roll  = state.error_roll;
             state.prev_error_pitch = state.error_pitch;
             state.prev_w_roll      = state.w_roll;
             state.prev_w_pitch     = state.w_pitch;
 
-            // 4. Radial workspace saturation
+            // Radial workspace saturation
             target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
-            bool saturated = (target_length >= SAFE_ARM_LENGTH);
-            if (saturated) {
+            if (target_length >= SAFE_ARM_LENGTH) {
                 state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
                 state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
             }
-
-            // 5. Conditional integral update (workspace-aware anti-windup)
-            //    When NOT saturated: normal integral accumulation
-            //    When saturated: only allow integral to DECREASE (unwind), not increase
-            if (!saturated) {
-                state.integral_roll  += state.error_roll  * dt;
-                state.integral_pitch += state.error_pitch * dt;
-            } else {
-                double new_ir = state.integral_roll  + state.error_roll  * dt;
-                double new_ip = state.integral_pitch + state.error_pitch * dt;
-                if (std::abs(new_ir) < std::abs(state.integral_roll))
-                    state.integral_roll = new_ir;
-                if (std::abs(new_ip) < std::abs(state.integral_pitch))
-                    state.integral_pitch = new_ip;
-            }
-            state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
-            state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
 
             // Inverse kinematics
             double delta_x = state.target_x - current_x;
@@ -685,11 +645,8 @@ int main(int argc, char **argv) {
                 updateJointAngles(theta1, theta2, delta_x, delta_y);
             }
 
-            // Final FK for accurate display
+            // Final FK for display
             forwardKinematics(theta1, theta2, current_x, current_y);
-
-            // Note: no target reset needed — TDC/PID use absolute positioning
-            // (target = base + delta), computed fresh each cycle.
         }
 
         // Publish joint angles
