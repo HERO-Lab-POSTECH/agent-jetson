@@ -1,7 +1,6 @@
 <launch>
 
   <!-- Launch options -->
-  <arg name="dvl"     default="false" />
   <arg name="rtsp"    default="false" />
   <arg name="teleop"  default="true" />
 
@@ -26,13 +25,6 @@
   <node pkg="hero_agent" name="agent_command" type="agent_command" output="screen">
     <rosparam file="$(find hero_agent)/config/agent_command.yaml" command="load" />
   </node>
-
-  <!-- DVL sensor -->
-  <group if="$(arg dvl)">
-    <node pkg="hero_agent" name="agent_dvl" type="agent_dvl" output="screen">
-      <rosparam file="$(find hero_agent)/config/agent_dvl.yaml" command="load" />
-    </node>
-  </group>
 
   <!-- Agent main (monitoring, rosbag recording) -->
   <node pkg="hero_agent" name="agent_main" type="agent_main" output="screen" />

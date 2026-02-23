@@ -21,10 +21,6 @@ add_executable(agent_main src/agent_main.cpp)
 add_dependencies(agent_main ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(agent_main ${catkin_LIBRARIES})
 
-add_executable(agent_dvl src/agent_dvl.cpp)
-add_dependencies(agent_dvl ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(agent_dvl ${catkin_LIBRARIES})
-
 add_executable(agent_command
   src/agent_command.cpp
   src/lawnmower_survey.cpp
@@ -42,7 +38,6 @@ catkin_install_python(PROGRAMS
 # Install targets
 install(TARGETS
   agent_main
-  agent_dvl
   agent_command
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
