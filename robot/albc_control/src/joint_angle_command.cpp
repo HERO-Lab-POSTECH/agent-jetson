@@ -17,6 +17,7 @@ static constexpr uint16_t ADDR_TORQUE_ENABLE    = 64;
 static constexpr uint16_t ADDR_POSITION_D_GAIN  = 80;
 static constexpr uint16_t ADDR_POSITION_I_GAIN  = 82;
 static constexpr uint16_t ADDR_POSITION_P_GAIN  = 84;
+static constexpr uint16_t ADDR_PROFILE_VELOCITY  = 112;
 static constexpr uint16_t ADDR_GOAL_POSITION    = 116;
 static constexpr uint16_t ADDR_PRESENT_CURRENT  = 126;
 
@@ -56,6 +57,11 @@ void setPosition(uint8_t id, int32_t position) {
     if (result != COMM_SUCCESS) {
         ROS_ERROR_THROTTLE(1.0, "Failed to set position %d for Dynamixel ID %d (err=%d)", position, id, result);
     }
+}
+
+void setProfileVelocity(uint8_t id, uint32_t velocity) {
+    uint8_t error = 0;
+    packet_handler->write4ByteTxRx(port_handler, id, ADDR_PROFILE_VELOCITY, velocity, &error);
 }
 
 int16_t readCurrent(uint8_t id) {
@@ -124,15 +130,33 @@ int main(int argc, char **argv) {
     enableTorque(JOINT1_ID);
     enableTorque(JOINT2_ID);
 
+    // Slow startup: limit servo speed for first 3 seconds
+    // Profile Velocity unit = 0.229 RPM. Value 20 ≈ 4.6 RPM → ~2s for 45° move
+    static constexpr uint32_t STARTUP_VELOCITY = 20;
+    static constexpr int STARTUP_TICKS = 30;  // 3 seconds at 10 Hz
+    setProfileVelocity(JOINT1_ID, STARTUP_VELOCITY);
+    setProfileVelocity(JOINT2_ID, STARTUP_VELOCITY);
+    int startup_counter = 0;
+
     ROS_INFO("===================================");
     ROS_INFO("  Joint Angle Command Initialized");
     ROS_INFO("  Port: %s  Baud: %d", SERIAL_PORT, BAUDRATE);
     ROS_INFO("  Joint1 ID=%d  Joint2 ID=%d", JOINT1_ID, JOINT2_ID);
+    ROS_INFO("  Startup: slow move for %.1f seconds", STARTUP_TICKS / 10.0);
     ROS_INFO("===================================");
 
     ros::Rate loop_rate(10);
 
     while (ros::ok()) {
+        // Restore full speed after startup ramp completes
+        if (startup_counter == STARTUP_TICKS) {
+            setProfileVelocity(JOINT1_ID, 0);
+            setProfileVelocity(JOINT2_ID, 0);
+            ROS_INFO("Startup ramp complete — full speed enabled");
+            startup_counter++;  // only run once
+        } else if (startup_counter < STARTUP_TICKS) {
+            startup_counter++;
+        }
         float current1_mA = static_cast<float>(readCurrent(JOINT1_ID)) * 2.69f;
         float current2_mA = static_cast<float>(readCurrent(JOINT2_ID)) * 2.69f;
 
