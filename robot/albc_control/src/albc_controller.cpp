@@ -400,11 +400,14 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         state.target_x = -L2 + (-1.0) * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
         break;
 
-    case ControlMode::FIXED:
+    case ControlMode::FIXED: {
         // FK(90°, 90°): x = L1*cos(90°) + L2*cos(180°) = -L2, y = L1*sin(90°) + L2*sin(180°) = L1
-        state.target_x = -L2;
-        state.target_y =  L1;
+        // Exponential smoothing to avoid sudden jumps (α=0.05 → ~4s settle at 10Hz)
+        constexpr double FIXED_ALPHA = 0.05;
+        state.target_x += FIXED_ALPHA * (-L2 - state.target_x);
+        state.target_y += FIXED_ALPHA * ( L1 - state.target_y);
         break;
+    }
 
     case ControlMode::MANUAL:
         // Handled in main loop before this function is called
@@ -470,11 +473,11 @@ int main(int argc, char **argv) {
     nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.085);
     nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 1.1);
 
-    nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.05);
+    nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.1);
     nh.param<double>("pid_roll/ki", gains.ki_roll_base, 0.001);
     nh.param<double>("pid_roll/kd", gains.kd_roll_base, 0.0005);
 
-    nh.param<double>("pid_pitch/kp", gains.kp_pitch_base, 0.05);
+    nh.param<double>("pid_pitch/kp", gains.kp_pitch_base, 0.1);
     nh.param<double>("pid_pitch/ki", gains.ki_pitch_base, 0.001);
     nh.param<double>("pid_pitch/kd", gains.kd_pitch_base, 0.0005);
 
