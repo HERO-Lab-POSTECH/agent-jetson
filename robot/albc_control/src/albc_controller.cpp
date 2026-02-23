@@ -387,10 +387,10 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
         state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
 
-        // Buoyancy compensation: Fb / |Fb·cos(roll)·cos(pitch)|
-        // ≈ 1/|cos(roll)·cos(pitch)| ≈ 1.0 at small angles
-        double denominator = std::abs(Fb * cos(state.current_roll) * cos(state.current_pitch));
-        double common_factor = Fb / std::max(denominator, 1e-6);
+        // DLS inverse of buoyancy projection: Λ⁻¹ ≈ 1/Fb [m/N·m]
+        // l_f/(l_f²+λ²) smoothly approximates 1/l_f while avoiding singularity
+        double l_f = Fb * cos(state.current_roll) * cos(state.current_pitch);
+        double common_factor = l_f / (l_f * l_f + LAMBDA_DLS * LAMBDA_DLS);
 
         // Absolute positioning: target = base + delta (no accumulation)
         // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
@@ -474,11 +474,11 @@ int main(int argc, char **argv) {
     double initial_theta1_deg, initial_theta2_deg;
 
     nh.param<int>("loop_rate_hz", loop_rate_hz, 50);
-    nh.param<double>("gain_mult", gains.gain_mult, 1.5);
+    nh.param<double>("gain_mult", gains.gain_mult, 1.0);
 
-    nh.param<double>("td_control/M_td", gains.M_td_base, 0.0085);
-    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.085);
-    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 1.1);
+    nh.param<double>("td_control/M_td", gains.M_td_base, 0.15);
+    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 40.0);
+    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 12.0);
 
     nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.1);
     nh.param<double>("pid_roll/ki", gains.ki_roll_base, 0.001);
