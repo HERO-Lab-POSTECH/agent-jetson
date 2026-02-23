@@ -8,6 +8,11 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   dynamixel_sdk
   hero_msgs
+  dynamic_reconfigure
+)
+
+generate_dynamic_reconfigure_options(
+  cfg/ALBCController.cfg
 )
 
 catkin_package(
@@ -17,6 +22,7 @@ catkin_package(
     std_msgs
     dynamixel_sdk
     hero_msgs
+    dynamic_reconfigure
 )
 
 include_directories(

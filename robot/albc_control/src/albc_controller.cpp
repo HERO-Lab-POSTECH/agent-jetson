@@ -4,9 +4,11 @@
 #include <std_msgs/Float64.h>
 #include <std_msgs/Float64MultiArray.h>
 #include <std_msgs/Float32MultiArray.h>
-#include <std_msgs/Int32.h>
 #include "hero_msgs/hero_agent_sensor.h"
 #include "albc_control/albc_kinematics.h"
+
+#include <dynamic_reconfigure/server.h>
+#include <albc_control/ALBCControllerConfig.h>
 
 #include <cstdlib>
 #include <termios.h>
@@ -191,28 +193,38 @@ void imuCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg) {
     state.current_pitch = -(msg->PITCH);
 }
 
-void targetRollCallback(const std_msgs::Float64::ConstPtr& msg) {
-    state.target_roll = DEG2RAD(msg->data);
-}
+void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
+    control_mode = static_cast<ControlMode>(config.control_mode);
 
-void targetPitchCallback(const std_msgs::Float64::ConstPtr& msg) {
-    state.target_pitch = DEG2RAD(msg->data);
-}
+    state.target_roll  = DEG2RAD(config.target_roll);
+    state.target_pitch = DEG2RAD(config.target_pitch);
 
-void targetGainMultCallback(const std_msgs::Float64::ConstPtr& msg) {
-    double new_mult = msg->data;
-    if (new_mult <= 0.0 || std::isnan(new_mult)) {
-        ROS_WARN("Invalid gain multiplier: %.4f (keeping %.2f)", new_mult, gains.gain_mult);
-        return;
-    }
-    gains.gain_mult = new_mult;
+    gains.M_td_base  = config.M_td;
+    gains.Kp_td_base = config.Kp_td;
+    gains.Kd_td_base = config.Kd_td;
+
+    gains.kp_roll_base  = config.kp_roll;
+    gains.ki_roll_base  = config.ki_roll;
+    gains.kd_roll_base  = config.kd_roll;
+
+    gains.kp_pitch_base  = config.kp_pitch;
+    gains.ki_pitch_base  = config.ki_pitch;
+    gains.kd_pitch_base  = config.kd_pitch;
+
+    gains.gain_mult = config.gain_mult;
     gains.applyMultiplier();
-}
 
-void contVerCallback(const std_msgs::Int32::ConstPtr& msg) {
-    int v = msg->data;
-    if (v >= 1 && v <= 3)
-        control_mode = static_cast<ControlMode>(v);
+    ik_cfg.learning_rate  = config.ik_learning_rate;
+    ik_cfg.lambda_base    = config.ik_lambda_base;
+    ik_cfg.num_iterations = config.ik_num_iterations;
+
+    // Reset integrals on gain change (anti-windup)
+    state.integral_roll  = 0.0;
+    state.integral_pitch = 0.0;
+
+    ROS_INFO("Reconfigure: mode=%s mult=%.2f M=%.4f Kp=%.3f Kd=%.1f",
+             controlModeName(control_mode), gains.gain_mult,
+             gains.M_td, gains.Kp_td, gains.Kd_td);
 }
 
 void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
@@ -416,13 +428,33 @@ int main(int argc, char **argv) {
     state.target_x = current_x;
     state.target_y = current_y;
 
+    // Dynamic reconfigure server (syncs YAML-loaded values, then enables runtime tuning)
+    dynamic_reconfigure::Server<albc_control::ALBCControllerConfig> dr_server(nh);
+    {
+        albc_control::ALBCControllerConfig cfg;
+        cfg.control_mode     = static_cast<int>(control_mode);
+        cfg.target_roll      = 0.0;
+        cfg.target_pitch     = 0.0;
+        cfg.gain_mult        = gains.gain_mult;
+        cfg.M_td             = gains.M_td_base;
+        cfg.Kp_td            = gains.Kp_td_base;
+        cfg.Kd_td            = gains.Kd_td_base;
+        cfg.kp_roll          = gains.kp_roll_base;
+        cfg.ki_roll          = gains.ki_roll_base;
+        cfg.kd_roll          = gains.kd_roll_base;
+        cfg.kp_pitch         = gains.kp_pitch_base;
+        cfg.ki_pitch         = gains.ki_pitch_base;
+        cfg.kd_pitch         = gains.kd_pitch_base;
+        cfg.ik_learning_rate = ik_cfg.learning_rate;
+        cfg.ik_lambda_base   = ik_cfg.lambda_base;
+        cfg.ik_num_iterations = ik_cfg.num_iterations;
+        dr_server.updateConfig(cfg);
+    }
+    dr_server.setCallback(boost::bind(&reconfigureCallback, _1, _2));
+
     // Subscribers
-    ros::Subscriber imu_sub          = nh.subscribe("/hero_agent/sensors", 50, imuCallback);
-    ros::Subscriber target_roll_sub  = nh.subscribe("/target_roll", 10, targetRollCallback);
-    ros::Subscriber target_pitch_sub = nh.subscribe("/target_pitch", 10, targetPitchCallback);
-    ros::Subscriber gain_mult_sub    = nh.subscribe("/target_gain_mult", 10, targetGainMultCallback);
-    ros::Subscriber cont_ver_sub     = nh.subscribe("/cont_ver", 10, contVerCallback);
-    ros::Subscriber current_sub      = nh.subscribe("/joint_currents", 10, jointCurrentsCallback);
+    ros::Subscriber imu_sub     = nh.subscribe("/hero_agent/sensors", 50, imuCallback);
+    ros::Subscriber current_sub = nh.subscribe("/joint_currents", 10, jointCurrentsCallback);
 
     // Publishers
     ros::Publisher angle_pub_1 = nh.advertise<std_msgs::Float64>(
