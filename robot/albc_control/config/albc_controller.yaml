@@ -1,8 +1,12 @@
 # albc_controller node parameters
 # All values match original hardcoded defaults
 
-# TD controller gains (base values)
+# TD controller gains (base values, before gain_mult scaling)
+# With TDE disabled, these act as position-space incremental PD gains.
 td_control:
+  # M_td: Combined scaling factor (NOT physical inertia M̄).
+  # In standard TDC, M̄ ≈ rotational inertia (~0.29 kg·m²).
+  # Here M_td acts as a position-space gain after Λ^{-1} scaling.
   M_td: 0.0085
   Kp_td: 0.085
   Kd_td: 1.1

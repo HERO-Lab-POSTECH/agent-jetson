@@ -77,9 +77,9 @@ struct ControlState {
     double target_roll, target_pitch;
     double target_x, target_y;
 
-    // TODO: w_roll and w_pitch are always 0 because no angular velocity topic is subscribed.
-    // This means acceleration feedforward (a_roll, a_pitch) in TDC mode is effectively disabled.
-    // To enable it, subscribe to an angular velocity topic and update w_roll/w_pitch in the callback.
+    // w_roll/w_pitch are intentionally unused (always 0).
+    // Angular velocity feedforward (-M̄·ν̇) was disabled after simulation showed
+    // finite-difference amplification exceeds actuator authority at all M̄ values.
     double w_roll, w_pitch;
     double prev_w_roll, prev_w_pitch;
     double a_roll, a_pitch;
@@ -199,12 +199,13 @@ void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
 void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
     switch (control_mode) {
     case ControlMode::TDC: {
-        // NOTE: This is a simplified TDC implementation (scaled incremental PD).
-        // The full TDC law from the paper requires:
-        //   p_EE,t = Λ_t^{-1} [Λ_{t-L}·p_{EE,t-L} - M̄·ν̇_{t-L} + M̄(Kd·ė + Kp·e) + ΔT_b]
-        // Currently missing: TDE terms (Λ_{t-L}·p_{EE,t-L}), angular velocity
-        // subscription (ν̇ always 0), and passive restoring force change (ΔT_b).
-        // TODO: Implement full TDC for paper alignment.
+        // Simplified TDC: incremental PD with buoyancy compensation.
+        // Full TDE terms (Λ_{t-L}·p_{EE}, -M̄·ν̇) are intentionally disabled:
+        // simulation experiments showed TDE causes divergence due to
+        // (1) Lambda time-variance creating positive feedback,
+        // (2) finite-difference ν̇ amplification exceeding actuator authority,
+        // (3) H_t ≈ H_{t-L} assumption structurally violated in this system.
+        // See: references/docs/tdc-tuning-history.md
         state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
         state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
 
@@ -378,6 +379,14 @@ int main(int argc, char **argv) {
 
         // Final FK for accurate display
         forwardKinematics(theta1, theta2, current_x, current_y);
+
+        // Anti-windup: reset TDC target to actual FK position.
+        // Prevents target drift when IK cannot reach the commanded position
+        // (e.g., near singularity). In normal operation target ≈ current.
+        if (control_mode == ControlMode::TDC) {
+            state.target_x = current_x;
+            state.target_y = current_y;
+        }
 
         // Publish joint angles
         std_msgs::Float64 ros_theta1, ros_theta2;
