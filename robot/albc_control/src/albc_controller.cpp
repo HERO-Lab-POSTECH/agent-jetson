@@ -69,7 +69,7 @@ static const char* controlModeName(ControlMode m) {
 // ==============================
 
 static constexpr double INTEGRAL_MAX        = 0.3;   // was 2.0; ki_eff×0.3 = 0.0225m max
-static constexpr double DERIV_FILTER_ALPHA  = 0.3;   // EMA filter for derivative (moderate smoothing at 50Hz)
+static constexpr double DERIV_FILTER_ALPHA  = 0.1;   // EMA filter for derivative (strong smoothing at 50Hz, ~2s settling)
 static constexpr double LAMBDA_DLS           = 0.13;  // DLS damping for buoyancy division (≈Fb×0.01)
 static constexpr double DET_EPSILON         = 1e-6;
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
@@ -110,6 +110,7 @@ struct ControlGains {
 
 struct ControlState {
     double current_roll, current_pitch;
+    double prev_roll, prev_pitch;           // previous IMU measurements (for derivative of measurement)
     double error_roll, error_pitch;
     double integral_roll, integral_pitch;
     double prev_error_roll, prev_error_pitch;
@@ -396,9 +397,11 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         break;
     }
     case ControlMode::PID:
-        // Nominal position FK(90°,90°) + PID correction
-        state.target_x = -L2 + (-1.0) * (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
-        state.target_y = L1 + (-1.0) * (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        // Incremental PID: delta applied from current position each cycle.
+        // Prevents P-term vanishing (EE snap-back) when error suddenly drops to zero.
+        // Anti-windup reset (target=current after IK) ensures no drift accumulation.
+        state.target_x -= (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
+        state.target_y -= (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
         break;
 
     case ControlMode::FIXED: {
@@ -605,10 +608,11 @@ int main(int argc, char **argv) {
             state.error_roll  = state.target_roll  - state.current_roll;
             state.error_pitch = state.target_pitch - state.current_pitch;
 
-            // 2. Derivative with EMA low-pass filter
+            // 2. Derivative of measurement (avoids derivative kick on setpoint change)
+            //    d(error)/dt ≈ -d(measurement)/dt when target is constant
             static double filtered_deriv_roll = 0.0, filtered_deriv_pitch = 0.0;
-            double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
-            double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+            double raw_deriv_roll  = -(state.current_roll  - state.prev_roll)  / dt;
+            double raw_deriv_pitch = -(state.current_pitch - state.prev_pitch) / dt;
             filtered_deriv_roll  = DERIV_FILTER_ALPHA * raw_deriv_roll  + (1.0 - DERIV_FILTER_ALPHA) * filtered_deriv_roll;
             filtered_deriv_pitch = DERIV_FILTER_ALPHA * raw_deriv_pitch + (1.0 - DERIV_FILTER_ALPHA) * filtered_deriv_pitch;
 
@@ -616,6 +620,8 @@ int main(int argc, char **argv) {
             computeControlOutput(dt, filtered_deriv_roll, filtered_deriv_pitch);
 
             // Store previous states
+            state.prev_roll        = state.current_roll;
+            state.prev_pitch       = state.current_pitch;
             state.prev_error_roll  = state.error_roll;
             state.prev_error_pitch = state.error_pitch;
             state.prev_w_roll      = state.w_roll;
@@ -664,10 +670,11 @@ int main(int argc, char **argv) {
             // Final FK for accurate display
             forwardKinematics(theta1, theta2, current_x, current_y);
 
-            // Anti-windup: reset TDC target to actual FK position.
+            // Anti-windup: reset incremental-mode target to actual FK position.
             // Prevents target drift when IK cannot reach the commanded position
             // (e.g., near singularity). In normal operation target ≈ current.
-            if (control_mode == ControlMode::TDC) {
+            // Applies to both TDC and PID (both use incremental form).
+            if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
                 state.target_x = current_x;
                 state.target_y = current_y;
             }
