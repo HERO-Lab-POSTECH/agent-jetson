@@ -390,18 +390,21 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         double l_f = Fb * cos(state.current_roll) * cos(state.current_pitch);
         double common_factor = l_f / (l_f * l_f + LAMBDA_DLS * LAMBDA_DLS);
 
+        // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
+        // From b = r × F: y_EE generates roll torque, x_EE generates pitch torque
         state.target_x -= common_factor *
-            (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
-        state.target_y -= common_factor *
             (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
+        state.target_y += common_factor *
+            (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
         break;
     }
     case ControlMode::PID:
         // Incremental PID: delta applied from current position each cycle.
         // Prevents P-term vanishing (EE snap-back) when error suddenly drops to zero.
         // Anti-windup reset (target=current after IK) ensures no drift accumulation.
-        state.target_x -= (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
-        state.target_y -= (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
+        state.target_x -= (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        state.target_y += (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
         break;
 
     case ControlMode::FIXED: {
