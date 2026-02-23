@@ -116,6 +116,7 @@ struct ControlState {
     double prev_error_roll, prev_error_pitch;
     double target_roll, target_pitch;
     double target_x, target_y;
+    double base_x, base_y;              // nominal EE position (set at startup / mode switch)
 
     // w_roll/w_pitch are intentionally unused (always 0).
     // Angular velocity feedforward (-M̄·ν̇) was disabled after simulation showed
@@ -391,21 +392,19 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         double denominator = std::abs(Fb * cos(state.current_roll) * cos(state.current_pitch));
         double common_factor = Fb / std::max(denominator, 1e-6);
 
+        // Absolute positioning: target = base + delta (no accumulation)
         // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
-        // From b = r × F: y_EE generates roll torque, x_EE generates pitch torque
-        state.target_x -= common_factor *
+        state.target_x = state.base_x - common_factor *
             (gains.M_td * (-state.a_pitch + gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
-        state.target_y -= common_factor *
+        state.target_y = state.base_y - common_factor *
             (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
         break;
     }
     case ControlMode::PID:
-        // Incremental PID: delta applied from current position each cycle.
-        // Prevents P-term vanishing (EE snap-back) when error suddenly drops to zero.
-        // Anti-windup reset (target=current after IK) ensures no drift accumulation.
+        // Absolute PID: target = base + PID output (no accumulation)
         // Anti-diagonal Λ⁻¹: pitch error → x_EE, roll error → y_EE
-        state.target_x -= (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
-        state.target_y -= (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
+        state.target_x = state.base_x - (gains.kp_pitch * state.error_pitch + gains.ki_pitch * state.integral_pitch + gains.kd_pitch * derivative_pitch);
+        state.target_y = state.base_y - (gains.kp_roll  * state.error_roll  + gains.ki_roll  * state.integral_roll  + gains.kd_roll  * derivative_roll);
         break;
 
     case ControlMode::FIXED: {
@@ -516,6 +515,8 @@ int main(int argc, char **argv) {
 
     state.target_x = current_x;
     state.target_y = current_y;
+    state.base_x   = current_x;
+    state.base_y   = current_y;
 
     // Dynamic reconfigure server (syncs YAML-loaded values, then enables runtime tuning)
     dynamic_reconfigure::Server<albc_control::ALBCControllerConfig> dr_server(nh);
@@ -565,6 +566,19 @@ int main(int argc, char **argv) {
         // Runtime key input (non-blocking)
         int key = readKey();
         if (key >= 0) handleRuntimeKey(key);
+
+        // Mode change: reset base position when entering TDC/PID to prevent jumps
+        static ControlMode prev_mode = control_mode;
+        if (control_mode != prev_mode) {
+            if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
+                forwardKinematics(theta1, theta2, current_x, current_y);
+                state.base_x = current_x;
+                state.base_y = current_y;
+                state.integral_roll  = 0.0;
+                state.integral_pitch = 0.0;
+            }
+            prev_mode = control_mode;
+        }
 
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
         double target_length = 0.0;
@@ -674,14 +688,8 @@ int main(int argc, char **argv) {
             // Final FK for accurate display
             forwardKinematics(theta1, theta2, current_x, current_y);
 
-            // Anti-windup: reset incremental-mode target to actual FK position.
-            // Prevents target drift when IK cannot reach the commanded position
-            // (e.g., near singularity). In normal operation target ≈ current.
-            // Applies to both TDC and PID (both use incremental form).
-            if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
-                state.target_x = current_x;
-                state.target_y = current_y;
-            }
+            // Note: no target reset needed — TDC/PID use absolute positioning
+            // (target = base + delta), computed fresh each cycle.
         }
 
         // Publish joint angles
