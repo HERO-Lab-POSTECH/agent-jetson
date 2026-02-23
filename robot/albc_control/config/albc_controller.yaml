@@ -35,16 +35,16 @@ ik:
 loop_rate_hz: 50
 
 # Initial joint angles (degrees)
-initial_theta1_deg: 45.0
-initial_theta2_deg: 45.0
+initial_theta1_deg: 90.0
+initial_theta2_deg: 90.0
 
 # Control mode (1=TDC, 2=PID, 3=Fixed, 4=Manual)
 control_mode: 1
 
 # Manual mode defaults
 manual:
-  theta1: 45.0
-  theta2: 45.0
+  theta1: 90.0
+  theta2: 90.0
   x: 0.0
   y: 0.0
 

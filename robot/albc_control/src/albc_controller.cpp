@@ -142,7 +142,7 @@ static float joint_current2_mA = 0.0f;
 
 // Manual mode state
 static ManualSubMode manual_submode = ManualSubMode::JOINT;
-static double manual_theta1_deg = 45.0, manual_theta2_deg = 45.0;
+static double manual_theta1_deg = 90.0, manual_theta2_deg = 90.0;
 static double manual_x = 0.0, manual_y = 0.0;
 
 // ==============================
@@ -400,8 +400,9 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
         break;
 
     case ControlMode::FIXED:
-        state.target_y = 0.01;
-        state.target_x = 0.01;
+        // FK(90°, 90°): x = L1*cos(90°) + L2*cos(180°) = -L2, y = L1*sin(90°) + L2*sin(180°) = L1
+        state.target_x = -L2;
+        state.target_y =  L1;
         break;
 
     case ControlMode::MANUAL:
@@ -480,11 +481,11 @@ int main(int argc, char **argv) {
     nh.param<double>("ik/learning_rate", ik_cfg.learning_rate, 0.02);
     nh.param<double>("ik/lambda_base", ik_cfg.lambda_base, 0.15);
 
-    nh.param<double>("initial_theta1_deg", initial_theta1_deg, 45.0);
-    nh.param<double>("initial_theta2_deg", initial_theta2_deg, 45.0);
+    nh.param<double>("initial_theta1_deg", initial_theta1_deg, 90.0);
+    nh.param<double>("initial_theta2_deg", initial_theta2_deg, 90.0);
 
-    nh.param<double>("manual/theta1", manual_theta1_deg, 45.0);
-    nh.param<double>("manual/theta2", manual_theta2_deg, 45.0);
+    nh.param<double>("manual/theta1", manual_theta1_deg, 90.0);
+    nh.param<double>("manual/theta2", manual_theta2_deg, 90.0);
     nh.param<double>("manual/x", manual_x, 0.0);
     nh.param<double>("manual/y", manual_y, 0.0);
 
