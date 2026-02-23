@@ -45,9 +45,9 @@ static dynamixel::PacketHandler* packet_handler = nullptr;
 void enableTorque(uint8_t id) {
     uint8_t error = 0;
     packet_handler->write1ByteTxRx(port_handler, id, ADDR_TORQUE_ENABLE, 1, &error);
-    packet_handler->write4ByteTxRx(port_handler, id, ADDR_POSITION_D_GAIN, 40, &error);
-    packet_handler->write4ByteTxRx(port_handler, id, ADDR_POSITION_I_GAIN, 1, &error);
-    packet_handler->write4ByteTxRx(port_handler, id, ADDR_POSITION_P_GAIN, 800, &error);
+    packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_D_GAIN, 40, &error);
+    packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_I_GAIN, 1, &error);
+    packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_P_GAIN, 800, &error);
 }
 
 void setPosition(uint8_t id, int32_t position) {

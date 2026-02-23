@@ -15,6 +15,9 @@ using namespace albc;
 // ==============================
 
 enum class ControlMode : int { TDC = 1, PID = 2, FIXED = 3 };
+// TDC: Simplified Time-Delay Control (currently incremental PD with buoyancy compensation)
+// PID: Standard PID with separate roll/pitch gains
+// FIXED: Fixed end-effector position (0.01, 0.01) for testing
 
 static const char* controlModeName(ControlMode m) {
     switch (m) {
@@ -29,8 +32,8 @@ static const char* controlModeName(ControlMode m) {
 // Constants
 // ==============================
 
-static constexpr double INTEGRAL_MAX        = 100.0;
-static constexpr double COS_EPSILON         = 1e-6;
+static constexpr double INTEGRAL_MAX        = 2.0;
+static constexpr double LAMBDA_DLS           = 0.13;  // DLS damping for buoyancy division (≈Fb×0.01)
 static constexpr double DET_EPSILON         = 1e-6;
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
@@ -128,11 +131,11 @@ void updateJointAngles(double& theta1, double& theta2, double delta_x, double de
     double inv12 = -jtj_12 / det;
     double inv22 =  jtj_11 / det;
 
-    // Pseudo-inverse: (J^T J + lambda^2 I)^-1 * J^T
-    double j11_inv = inv11 * j11 + inv12 * j21;
-    double j12_inv = inv11 * j12 + inv12 * j22;
-    double j21_inv = inv12 * j11 + inv22 * j21;
-    double j22_inv = inv12 * j12 + inv22 * j22;
+    // Pseudo-inverse: (J^T J + lambda^2 I)^{-1} * J^T
+    double j11_inv = inv11 * j11 + inv12 * j12;
+    double j12_inv = inv11 * j21 + inv12 * j22;
+    double j21_inv = inv12 * j11 + inv22 * j12;
+    double j22_inv = inv12 * j21 + inv22 * j22;
 
     double update_angle1 = ik_cfg.learning_rate * (j11_inv * delta_x + j12_inv * delta_y);
     double update_angle2 = ik_cfg.learning_rate * (j21_inv * delta_x + j22_inv * delta_y);
@@ -196,17 +199,18 @@ void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
 void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
     switch (control_mode) {
     case ControlMode::TDC: {
+        // NOTE: This is a simplified TDC implementation (scaled incremental PD).
+        // The full TDC law from the paper requires:
+        //   p_EE,t = Λ_t^{-1} [Λ_{t-L}·p_{EE,t-L} - M̄·ν̇_{t-L} + M̄(Kd·ė + Kp·e) + ΔT_b]
+        // Currently missing: TDE terms (Λ_{t-L}·p_{EE,t-L}), angular velocity
+        // subscription (ν̇ always 0), and passive restoring force change (ΔT_b).
+        // TODO: Implement full TDC for paper alignment.
         state.a_roll  = (state.w_roll  - state.prev_w_roll)  / dt;
         state.a_pitch = (state.w_pitch - state.prev_w_pitch) / dt;
 
-        double cos_product = cos(state.current_roll) * cos(state.current_pitch);
-        double denominator = std::abs(Fb * cos_product);
-
-        if (denominator < COS_EPSILON) {
-            ROS_WARN_THROTTLE(2.0, "Denominator too small (Fb*cos=%.6f), capped", denominator);
-        }
-
-        double common_factor = Fb / std::max(denominator, COS_EPSILON);
+        // DLS-style division: preserves sign, graceful degradation near singularity
+        double l_f = Fb * cos(state.current_roll) * cos(state.current_pitch);
+        double common_factor = l_f / (l_f * l_f + LAMBDA_DLS * LAMBDA_DLS);
 
         state.target_y -= common_factor *
             (-1.0 * (gains.M_td * (-state.a_roll + gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
@@ -332,8 +336,8 @@ int main(int argc, char **argv) {
         state.error_pitch = state.target_pitch - state.current_pitch;
 
         // Integral with anti-windup
-        state.integral_roll  += state.error_roll;
-        state.integral_pitch += state.error_pitch;
+        state.integral_roll  += state.error_roll * dt;
+        state.integral_pitch += state.error_pitch * dt;
         state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
         state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
 
