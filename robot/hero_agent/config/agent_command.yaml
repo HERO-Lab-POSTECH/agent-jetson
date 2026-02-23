@@ -8,26 +8,16 @@ darknet:
   y_target: 300.0
   saturation: 100.0
 
-# Mosaic survey pattern
-mosaic:
+# Lawnmower survey pattern
+lawnmower:
   sway_num: 300
   surge_num: 50
   move_dis: 0.01
 
-# Winch model coefficients (quadratic rope model)
-winch:
-  coeff_a: 0.00171073
-  coeff_b: 0.534071
-  ticks_per_rev: 4096
-  gear_ratio_num: 435.45
-  gear_ratio_den: 73.45613
-
-# Teleop keyboard step sizes (key mapping in teleop.cpp:processKey)
-# Movement: w/s/a/d/r/f  |  Winch step: 4/5
+# Teleop keyboard step sizes
 teleop:
   xy_step: 0.05
   z_step: 0.01
-  winch_step: 10000
 
 # Loop rate
 loop_rate_hz: 100

@@ -72,9 +72,7 @@ static int _getch()
 //
 // Jetson-side key mapping (processKey):
 //   Movement:  w/s=Surge  a/d=Sway  r/f=Heave
-//   Target:    e=Send  q=Reset
-//   Winch:     1=Calib  2/3=Meter+/-  4/5=Step+/-
-//   Mosaic:    p=Start  o=Stop
+//   Lawnmower: p=Start  o=Stop
 //   Darknet:   n=On  m=Off
 //
 // NOTE: This processKey receives TRANSLATED keys from agent_main
@@ -88,44 +86,6 @@ static void processKey(int ch, ros::Rate& loop_rate)
 
     switch (ch) {
 
-    // --- Target reset ---
-    case 'q':
-        target.x = 0; target.y = 0; target.z = 0; target.yaw = 0;
-        break;
-
-    // --- Send current target to controller ---
-    case 'e':
-        msg_target.command = 1;
-        msg_target.TARGET_X = target.x;
-        msg_target.TARGET_Y = target.y;
-        msg_target.TARGET_Z = target.z;
-        pub_target.publish(msg_target);
-        msg_target.command = 0;
-        break;
-
-    // --- Winch ---
-    case '1':
-        winch.calib_position = winch.current_position;
-        winch.target_position = winch.current_position;
-        winch.target_meter = 0;
-        break;
-    case '2':
-        if (winch.target_meter < 20) winch.target_meter++;
-        break;
-    case '3':
-        if (winch.target_meter > 0) winch.target_meter--;
-        break;
-    case '4':
-        winch.target_position += teleop_winch_step;
-        msg_winch_target.data = winch.target_position;
-        pub_winch_target.publish(msg_winch_target);
-        break;
-    case '5':
-        winch.target_position -= teleop_winch_step;
-        msg_winch_target.data = winch.target_position;
-        pub_winch_target.publish(msg_winch_target);
-        break;
-
     // --- XYZ teleop ---
     case 'w': target.x += teleop_xy_step;  break;
     case 's': target.x -= teleop_xy_step;  break;
@@ -134,12 +94,12 @@ static void processKey(int ch, ros::Rate& loop_rate)
     case 'r': target.z -= teleop_z_step;   break;
     case 'f': target.z += teleop_z_step;   break;
 
-    // --- Mosaic control ---
-    case 'o': ctrl.mosaic = 0; break;
+    // --- Lawnmower control ---
+    case 'o': ctrl.lawnmower = 0; break;
     case 'p':
-        ctrl.mosaic = 1;
-        mosaic.sway_count = 0;
-        mosaic.surge_count = 0;
+        ctrl.lawnmower = 1;
+        lawnmower.sway_count = 0;
+        lawnmower.surge_count = 0;
         break;
 
     // --- DARKNET control ---

@@ -50,7 +50,7 @@ int relay_enabled = 0, laser_enabled = 0;
 // ==============================
 // Jetson-only toggle states (not available from Arduino)
 // ==============================
-static bool mosaic_on = false;
+static bool lawnmower_on = false;
 static bool darknet_on = false;
 
 // ==============================
@@ -175,33 +175,7 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_command(laser_enabled ? 'f' : 'r');
         break;
 
-    // ── Number Row: Winch (Jetson only, translated) ──
-
-    case '6':  // Winch Calibrate → Jetson '1'
-        send_translated('1');
-        break;
-
-    case '7':  // Winch Meter + → Jetson '2'
-        send_translated('2');
-        break;
-
-    case '8':  // Winch Meter - → Jetson '3'
-        send_translated('3');
-        break;
-
-    case '9':  // Winch Step + → Jetson '4'
-        send_translated('4');
-        break;
-
-    case '0':  // Winch Step - → Jetson '5'
-        send_translated('5');
-        break;
-
     // ── Letter Keys: Jetson-Only ──
-
-    case 'e':  // Send Target
-        send_translated('e');
-        break;
 
     case 'r':  // Heave Up (target.z)
         send_translated('r');
@@ -211,14 +185,10 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_translated('f');
         break;
 
-    case 'q':  // Target Reset
-        send_translated('q');
-        break;
-
-    case 'p':  // Toggle Mosaic (Jetson only)
+    case 'p':  // Toggle Lawnmower (Jetson only)
         if (!debounce_ok('p')) break;
-        mosaic_on = !mosaic_on;
-        send_translated(mosaic_on ? 'p' : 'o');
+        lawnmower_on = !lawnmower_on;
+        send_translated(lawnmower_on ? 'p' : 'o');
         break;
 
     case 'n':  // Toggle Darknet (Jetson only)
@@ -247,6 +217,13 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
     case 'g':
     case 'y':
     case 'h':
+    case 'e':   // was: Send Target (removed)
+    case 'q':   // was: Target Reset (removed)
+    case '6':   // was: Winch Calibrate (removed)
+    case '7':   // was: Winch Meter + (removed)
+    case '8':   // was: Winch Meter - (removed)
+    case '9':   // was: Winch Step + (removed)
+    case '0':   // was: Winch Step - (removed)
         break;
 
     // ── Rosbag Toggle (agent_main internal) ──
@@ -444,9 +421,7 @@ void print_monitor_status()
     printf(" Depth   o/l=+/-0.1\n");
     printf(" Grip    c=Open  v=Stop  b=Close\n");
     printf("──────────────── Jetson Only ──────────────────────\n");
-    printf(" Target  e=Send  q=Reset\n");
-    printf(" Winch   6=Cal  7/8=Meter  9/0=Step\n");
-    printf(" Mosaic  p=Toggle   Dknet  n=Toggle\n");
+    printf(" Lawnmow p=Toggle   Dknet  n=Toggle\n");
     printf(" Rec     R=Rosbag\n");
     printf("═══════════════════════════════════════════════════\n");
     if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());
