@@ -1,13 +1,5 @@
 # agent_command node parameters
 
-# DARKNET visual servoing
-darknet:
-  Kp: 0.1
-  Kd: 0.1
-  x_target: 320.0
-  y_target: 300.0
-  saturation: 100.0
-
 # Lawnmower survey pattern
 lawnmower:
   sway_num: 300

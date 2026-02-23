@@ -22,7 +22,7 @@
     <param name="baud"    value="76800"/>
   </node>
 
-  <!-- Agent command (DARKNET, mosaic, teleop) -->
+  <!-- Agent command (lawnmower, teleop) -->
   <node pkg="hero_agent" name="agent_command" type="agent_command" output="screen">
     <rosparam file="$(find hero_agent)/config/agent_command.yaml" command="load" />
   </node>

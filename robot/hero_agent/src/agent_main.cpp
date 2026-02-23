@@ -53,7 +53,6 @@ int relay_enabled = 0, laser_enabled = 0;
 // Jetson-only toggle states (not available from Arduino)
 // ==============================
 static bool lawnmower_on = false;
-static bool darknet_on = false;
 
 // ==============================
 // Toggle debounce (500ms)
@@ -201,12 +200,6 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_translated(lawnmower_on ? 'p' : 'o');
         break;
 
-    case 'n':  // Toggle Darknet (Jetson only)
-        if (!debounce_ok('n')) break;
-        darknet_on = !darknet_on;
-        send_translated(darknet_on ? 'n' : 'm');
-        break;
-
     // ── Letter Keys: Arduino-Only ──
 
     case 'N':  // Yaw Reset → Arduino 'n'
@@ -220,6 +213,7 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
     // ── Blocked Keys (freed, no function) ──
 
     case ';':
+    case 'n':
     case 'm':
     case '.':
     case ',':
@@ -444,7 +438,7 @@ void print_monitor_status()
     printf(" Yaw     i/k=+/-0.1\n");
     printf(" Depth   o/l=+/-0.1\n");
     printf(" Grip    c=Open  v=Stop  b=Close\n");
-    printf(" Auto    p=Lawnmower  n=Darknet\n");
+    printf(" Auto    p=Lawnmower\n");
     printf(" Rec     R=Rosbag\n");
     printf("═══════════════════════════════════════════════════\n");
     if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());

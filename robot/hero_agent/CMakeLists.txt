@@ -27,7 +27,6 @@ target_link_libraries(agent_dvl ${catkin_LIBRARIES})
 
 add_executable(agent_command
   src/agent_command.cpp
-  src/darknet_control.cpp
   src/lawnmower_survey.cpp
   src/teleop.cpp
 )
