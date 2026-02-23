@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <regex>
 #include <atomic>
+#include <mutex>
 #include <set>
 
 #include <unistd.h>
@@ -33,6 +34,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <cerrno>
 #include <dirent.h>
 
 using namespace std;
@@ -83,11 +85,15 @@ std_msgs::Int8 translated_msg;
 std::atomic<int> record_flag(0);
 int prev_record_flag = 0;
 pid_t rosbag_pid = -1;
+std::mutex csv_mutex;
 std::ofstream fout_csv;
 std::string rosbag_file_path = "";
 std::string albc_csv_path = "";
 std::string rosbag_status_msg = "";
 std::string csv_status_msg = "";
+
+// Signal flag (async-signal-safe)
+static volatile sig_atomic_t signal_received = 0;
 
 // Forward declarations
 void send_command(char cmd);
@@ -125,13 +131,17 @@ void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
     if (record_flag.load() == 1 && msg->data.size() >= 8)
     {
         double current_time = ros::Time::now().toSec();
-        fout_csv
-            << current_time << ","
-            << msg->data[0] << "," << msg->data[1] << ","
-            << msg->data[2] << "," << msg->data[3] << ","
-            << msg->data[4] << "," << msg->data[5] << ","
-            << msg->data[6] << "," << msg->data[7] << ","
-            << target_depth << "," << depth << "\n";
+        std::lock_guard<std::mutex> lock(csv_mutex);
+        if (fout_csv.is_open()) {
+            fout_csv
+                << current_time << ","
+                << msg->data[0] << "," << msg->data[1] << ","
+                << msg->data[2] << "," << msg->data[3] << ","
+                << msg->data[4] << "," << msg->data[5] << ","
+                << msg->data[6] << "," << msg->data[7] << ","
+                << target_depth << "," << depth << "\n";
+            fout_csv.flush();
+        }
     }
 }
 
@@ -156,18 +166,18 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_command(relay_enabled ? 't' : 'e');
         break;
 
-    case '2':  // PWM Init → Arduino only
-        send_command('g');
-        break;
-
-    case '3':  // Toggle Yaw
-        if (!debounce_ok('3')) break;
+    case '2':  // Toggle Yaw
+        if (!debounce_ok('2')) break;
         send_command(control_yaw_enabled ? 'h' : 'y');
         break;
 
-    case '4':  // Toggle Depth
-        if (!debounce_ok('4')) break;
+    case '3':  // Toggle Depth
+        if (!debounce_ok('3')) break;
         send_command(control_depth_enabled ? ';' : 'p');
+        break;
+
+    case '4':  // PWM Init → Arduino only
+        send_command('g');
         break;
 
     case '5':  // Toggle Laser
@@ -229,7 +239,7 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
     // ── Rosbag Toggle (agent_main internal) ──
 
     case 'R':
-        record_flag.store(record_flag.load() == 0 ? 1 : 0);
+        record_flag.fetch_xor(1);
         break;
 
     // ── Pass-Through: Both Arduino + Jetson ──
@@ -276,25 +286,35 @@ int main(int argc, char** argv)
 
     printf("\n  Agent Main Initialized (V3 key translation + monitor)\n\n");
 
-    while (ros::ok())
+    while (ros::ok() && !signal_received)
     {
         // Recording state change
         int current_record = record_flag.load();
         if (current_record != prev_record_flag) {
             if (current_record == 1) {
-                if (fout_csv.is_open()) fout_csv.close();
                 int log_index = get_next_log_index(base_traj_dir);
                 albc_csv_path = base_traj_dir + "/albc_status_" + std::to_string(log_index) + ".csv";
                 rosbag_file_path = base_rosbag_dir + "/record_" + std::to_string(log_index) + ".bag";
-                fout_csv.open(albc_csv_path);
-                if (fout_csv.is_open()) {
-                    fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,target_depth,depth\n";
-                    csv_status_msg = "Logging started";
-                }
                 start_rosbag_record();
-                rosbag_status_msg = "Recording started";
+                if (rosbag_pid > 0) {
+                    std::lock_guard<std::mutex> lock(csv_mutex);
+                    if (fout_csv.is_open()) fout_csv.close();
+                    fout_csv.open(albc_csv_path);
+                    if (fout_csv.is_open()) {
+                        fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,target_depth,depth\n";
+                        fout_csv.flush();
+                        csv_status_msg = "Logging started";
+                    }
+                    rosbag_status_msg = "Recording started";
+                } else {
+                    record_flag.store(0);
+                    rosbag_status_msg = "Recording failed (fork error)";
+                }
             } else {
-                if (fout_csv.is_open()) fout_csv.close();
+                {
+                    std::lock_guard<std::mutex> lock(csv_mutex);
+                    if (fout_csv.is_open()) fout_csv.close();
+                }
                 csv_status_msg = "Logging stopped";
                 stop_rosbag_record();
                 rosbag_status_msg = "Recording stopped";
@@ -308,7 +328,11 @@ int main(int argc, char** argv)
 
     spinner.stop();
     stop_rosbag_record();
-    if (fout_csv.is_open()) fout_csv.close();
+    {
+        std::lock_guard<std::mutex> lock(csv_mutex);
+        if (fout_csv.is_open()) fout_csv.close();
+    }
+    ros::shutdown();
     return 0;
 }
 
@@ -330,17 +354,16 @@ void send_translated(char cmd)
 
 void handle_signal(int sig)
 {
-    if (rosbag_pid > 0) {
-        kill(rosbag_pid, SIGTERM);
-        rosbag_pid = -1;
-    }
-    ros::shutdown();
+    signal_received = 1;  // async-signal-safe: only set flag
 }
 
 void ensure_directory(const std::string& path)
 {
     struct stat st;
-    if (stat(path.c_str(), &st) != 0) mkdir(path.c_str(), 0775);
+    if (stat(path.c_str(), &st) != 0) {
+        if (mkdir(path.c_str(), 0775) != 0)
+            ROS_ERROR("Failed to create directory: %s (errno=%d)", path.c_str(), errno);
+    }
 }
 
 int get_next_log_index(const std::string& base_path)
@@ -393,7 +416,8 @@ void stop_rosbag_record()
     std::ifstream infile(active_file.c_str());
     if (infile.good()) {
         infile.close();
-        std::rename(active_file.c_str(), rosbag_file_path.c_str());
+        if (std::rename(active_file.c_str(), rosbag_file_path.c_str()) != 0)
+            ROS_ERROR("Failed to rename %s → %s (errno=%d)", active_file.c_str(), rosbag_file_path.c_str(), errno);
     }
 }
 
@@ -411,10 +435,10 @@ void print_monitor_status()
            relay_enabled ? "ON" : "OFF", laser_enabled ? "ON" : "OFF",
            move_speed, record_flag.load() ? "REC" : "---");
     printf("═══════════════════════════════════════════════════\n");
-    printf(" STARTUP: 1=Relay 3=Yaw 4=Depth z=Spd wasd\n");
+    printf(" STARTUP: 1=Relay 2=Yaw 3=Depth\n");
     printf("═══════════════════════════════════════════════════\n");
-    printf(" Toggle  1=Relay  3=Yaw  4=Depth  5=Laser\n");
-    printf(" Init    2=PWM  N=YawReset\n");
+    printf(" Toggle  1=Relay  2=Yaw  3=Depth  5=Laser\n");
+    printf(" Init    4=PWM  N=YawReset\n");
     printf(" Move    w/s/a/d  r/f=Heave\n");
     printf(" Speed   z/x=+/-10  u/j=Throttle+/-10\n");
     printf(" Yaw     i/k=+/-0.1\n");
