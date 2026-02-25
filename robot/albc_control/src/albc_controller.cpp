@@ -112,13 +112,16 @@ struct ControlGains {
 };
 
 struct ControlState {
-    double current_roll, current_pitch;
+    double current_roll, current_pitch, current_yaw;
     double error_roll, error_pitch;
     double integral_roll, integral_pitch;
     double prev_error_roll, prev_error_pitch;
     double target_roll, target_pitch;
     double target_x, target_y;
     double filtered_deriv_roll, filtered_deriv_pitch;
+    double prev_roll, prev_pitch, prev_yaw;
+    double angular_vel_roll, angular_vel_pitch, angular_vel_yaw;
+    double filtered_ang_vel_roll, filtered_ang_vel_pitch, filtered_ang_vel_yaw;
 };
 
 struct IKConfig {
@@ -206,6 +209,7 @@ void imuCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg) {
     double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
     state.current_roll  =  c * raw_roll + s * raw_pitch;
     state.current_pitch = -s * raw_roll + c * raw_pitch;
+    state.current_yaw   = msg->YAW;
 }
 
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
@@ -577,6 +581,23 @@ int main(int argc, char **argv) {
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
         double target_length = 0.0;
 
+        // Angular velocity via numerical differentiation + LPF
+        double raw_ang_vel_roll  = (state.current_roll  - state.prev_roll)  / dt;
+        double raw_ang_vel_pitch = (state.current_pitch - state.prev_pitch) / dt;
+        double raw_ang_vel_yaw   = (state.current_yaw   - state.prev_yaw)  / dt;
+
+        state.angular_vel_roll  = DERIV_LPF_ALPHA * raw_ang_vel_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_ang_vel_roll;
+        state.angular_vel_pitch = DERIV_LPF_ALPHA * raw_ang_vel_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_ang_vel_pitch;
+        state.angular_vel_yaw   = DERIV_LPF_ALPHA * raw_ang_vel_yaw   + (1.0 - DERIV_LPF_ALPHA) * state.filtered_ang_vel_yaw;
+
+        state.filtered_ang_vel_roll  = state.angular_vel_roll;
+        state.filtered_ang_vel_pitch = state.angular_vel_pitch;
+        state.filtered_ang_vel_yaw   = state.angular_vel_yaw;
+
+        state.prev_roll  = state.current_roll;
+        state.prev_pitch = state.current_pitch;
+        state.prev_yaw   = state.current_yaw;
+
         if (control_mode == ControlMode::MANUAL) {
             // Manual mode: bypass IMU feedback pipeline entirely
             if (manual_submode == ManualSubMode::JOINT) {
@@ -681,7 +702,8 @@ int main(int argc, char **argv) {
             RAD2DEG(state.target_roll), RAD2DEG(state.current_roll),
             RAD2DEG(state.target_pitch), RAD2DEG(state.current_pitch),
             state.target_x, state.target_y,
-            current_x, current_y
+            current_x, current_y,
+            state.angular_vel_roll, state.angular_vel_pitch, state.angular_vel_yaw
         };
         status_pub.publish(status_msg);
 

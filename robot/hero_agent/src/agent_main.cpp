@@ -152,7 +152,7 @@ void sensorCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
 // ==============================
 void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
 {
-    if (record_flag.load() == 1 && msg->data.size() >= 8)
+    if (record_flag.load() == 1 && msg->data.size() >= 11)
     {
         double current_time = ros::Time::now().toSec();
         std::lock_guard<std::mutex> lock(csv_mutex);
@@ -163,6 +163,7 @@ void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
                 << msg->data[2] << "," << msg->data[3] << ","
                 << msg->data[4] << "," << msg->data[5] << ","
                 << msg->data[6] << "," << msg->data[7] << ","
+                << msg->data[8] << "," << msg->data[9] << "," << msg->data[10] << ","
                 << target_depth << "," << depth << ","
                 << sensor_roll << "," << sensor_pitch << "," << sensor_yaw << "\n";
             fout_csv.flush();
@@ -327,7 +328,7 @@ int main(int argc, char** argv)
                     if (fout_csv.is_open()) fout_csv.close();
                     fout_csv.open(albc_csv_path);
                     if (fout_csv.is_open()) {
-                        fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,target_depth,depth,sensor_roll,sensor_pitch,sensor_yaw\n";
+                        fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,angular_vel_roll,angular_vel_pitch,angular_vel_yaw,target_depth,depth,sensor_roll,sensor_pitch,sensor_yaw\n";
                         fout_csv.flush();
                         csv_status_msg = "Logging started";
                     }
