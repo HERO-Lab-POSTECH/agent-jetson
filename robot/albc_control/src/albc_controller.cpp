@@ -76,7 +76,6 @@ static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.23
 static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
 static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
 static constexpr double LEVEL_THRESHOLD      = 0.01745; // rad (1 deg). If |current roll/pitch| < this, treat as level — freeze target as equilibrium point (prevents D-kick from external disturbances like manual righting)
-static constexpr double SELF_CORRECT_DERIV   = 1.5;   // rad/s. If |derivative| exceeds this AND error*deriv<0 (system already self-correcting), zero D-term — blocks D-kick from manual righting while preserving natural dynamics
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
@@ -683,14 +682,15 @@ int main(int argc, char **argv) {
             double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
             double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
 
-            // Self-correcting gate on RAW (before LPF): if system is already moving toward setpoint fast
-            // (error*raw_deriv<0 AND |raw_deriv| large), external force is settling the robot — zero raw derivative
-            // to prevent spike from entering LPF memory. Natural damped dynamics (|raw_deriv| < SELF_CORRECT_DERIV)
-            // are unaffected. Must gate raw (not filtered) because LPF's internal state carries spike across ticks.
-            if (state.error_roll * raw_deriv_roll < 0 && std::abs(raw_deriv_roll) > SELF_CORRECT_DERIV) {
+            // Asymmetric damping: zero D-term whenever error is decreasing (error × d_error/dt < 0).
+            // This means system is already converging toward setpoint — no additional D-correction needed.
+            // Applies regardless of speed (slow natural settling OR fast manual righting both handled).
+            // D-term resumes during error growth (e × ė > 0, needs damping) and overshoot (also e × ė > 0).
+            // Gate on RAW (before LPF) because LPF memory otherwise carries past spikes into future ticks.
+            if (state.error_roll * raw_deriv_roll < 0) {
                 raw_deriv_roll = 0.0;
             }
-            if (state.error_pitch * raw_deriv_pitch < 0 && std::abs(raw_deriv_pitch) > SELF_CORRECT_DERIV) {
+            if (state.error_pitch * raw_deriv_pitch < 0) {
                 raw_deriv_pitch = 0.0;
             }
 
