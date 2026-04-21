@@ -385,17 +385,19 @@ static void handleRuntimeKey(int ch) {
 void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
     switch (control_mode) {
     case ControlMode::TDC: {
-        // Incremental PD with buoyancy compensation
+        // Incremental P (no D-term). When error=0, dy=0 automatically — robot at target → buoyancy stops.
+        // D-term removed because its "predictive" behavior incorrectly reacts to external disturbances
+        // (e.g. manual righting, waves) as if they were controller-driven motions. Water viscous damping
+        // provides natural damping that D-term would otherwise contribute.
         double denominator = std::abs(Fb * cos(state.current_roll) * cos(state.current_pitch));
         double common_factor = std::min(
             Fb / std::max(denominator, COS_EPSILON),
             COMMON_FACTOR_MAX);
 
-        double dy = common_factor * (gains.M_td * (gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
-        double dx = -common_factor * (gains.M_td * (gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
+        double dy =  common_factor * (gains.M_td * gains.Kp_td * state.error_roll);
+        double dx = -common_factor * (gains.M_td * gains.Kp_td * state.error_pitch);
 
-        // Equilibrium hold: when robot is within LEVEL_THRESHOLD of zero, current target is the equilibrium
-        // → freeze axis to preserve user-established position and ignore D-kicks from external disturbances
+        // Equilibrium hold: within LEVEL_THRESHOLD, clamp dy/dx to 0 to guard against IMU noise drift
         if (std::abs(state.current_roll)  < LEVEL_THRESHOLD) dy = 0.0;
         if (std::abs(state.current_pitch) < LEVEL_THRESHOLD) dx = 0.0;
 
