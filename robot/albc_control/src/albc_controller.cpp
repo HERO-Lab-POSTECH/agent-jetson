@@ -76,6 +76,7 @@ static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.23
 static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
 static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
 static constexpr double LEVEL_THRESHOLD      = 0.01745; // rad (1 deg). If |current roll/pitch| < this, treat as level — freeze target as equilibrium point (prevents D-kick from external disturbances like manual righting)
+static constexpr double SELF_CORRECT_DERIV   = 1.5;   // rad/s. If |derivative| exceeds this AND error*deriv<0 (system already self-correcting), zero D-term — blocks D-kick from manual righting while preserving natural dynamics
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
@@ -685,6 +686,16 @@ int main(int argc, char **argv) {
             double derivative_pitch = DERIV_LPF_ALPHA * raw_deriv_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_pitch;
             state.filtered_deriv_roll  = derivative_roll;
             state.filtered_deriv_pitch = derivative_pitch;
+
+            // Self-correcting gate: if system is already moving toward setpoint fast (error*deriv<0 AND |deriv| large),
+            // external force is settling the robot — zero D-term to prevent D-kick from driving target back toward initial.
+            // Natural damped dynamics (|deriv| < SELF_CORRECT_DERIV) are unaffected.
+            if (state.error_roll * derivative_roll < 0 && std::abs(derivative_roll) > SELF_CORRECT_DERIV) {
+                derivative_roll = 0.0;
+            }
+            if (state.error_pitch * derivative_pitch < 0 && std::abs(derivative_pitch) > SELF_CORRECT_DERIV) {
+                derivative_pitch = 0.0;
+            }
 
             // Control law
             computeControlOutput(dt, derivative_roll, derivative_pitch);
