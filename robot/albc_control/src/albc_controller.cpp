@@ -682,20 +682,22 @@ int main(int argc, char **argv) {
             // Derivative with 1st-order low-pass filter to attenuate sensor noise
             double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
             double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
+
+            // Self-correcting gate on RAW (before LPF): if system is already moving toward setpoint fast
+            // (error*raw_deriv<0 AND |raw_deriv| large), external force is settling the robot — zero raw derivative
+            // to prevent spike from entering LPF memory. Natural damped dynamics (|raw_deriv| < SELF_CORRECT_DERIV)
+            // are unaffected. Must gate raw (not filtered) because LPF's internal state carries spike across ticks.
+            if (state.error_roll * raw_deriv_roll < 0 && std::abs(raw_deriv_roll) > SELF_CORRECT_DERIV) {
+                raw_deriv_roll = 0.0;
+            }
+            if (state.error_pitch * raw_deriv_pitch < 0 && std::abs(raw_deriv_pitch) > SELF_CORRECT_DERIV) {
+                raw_deriv_pitch = 0.0;
+            }
+
             double derivative_roll  = DERIV_LPF_ALPHA * raw_deriv_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_roll;
             double derivative_pitch = DERIV_LPF_ALPHA * raw_deriv_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_pitch;
             state.filtered_deriv_roll  = derivative_roll;
             state.filtered_deriv_pitch = derivative_pitch;
-
-            // Self-correcting gate: if system is already moving toward setpoint fast (error*deriv<0 AND |deriv| large),
-            // external force is settling the robot — zero D-term to prevent D-kick from driving target back toward initial.
-            // Natural damped dynamics (|deriv| < SELF_CORRECT_DERIV) are unaffected.
-            if (state.error_roll * derivative_roll < 0 && std::abs(derivative_roll) > SELF_CORRECT_DERIV) {
-                derivative_roll = 0.0;
-            }
-            if (state.error_pitch * derivative_pitch < 0 && std::abs(derivative_pitch) > SELF_CORRECT_DERIV) {
-                derivative_pitch = 0.0;
-            }
 
             // Control law
             computeControlOutput(dt, derivative_roll, derivative_pitch);
