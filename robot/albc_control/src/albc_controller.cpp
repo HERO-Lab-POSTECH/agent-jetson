@@ -75,6 +75,7 @@ static constexpr double DET_EPSILON          = 1e-6;
 static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.233
 static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
 static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
+static constexpr double LEVEL_THRESHOLD      = 0.01745; // rad (1 deg). If |current roll/pitch| < this, treat as level — freeze target as equilibrium point (prevents D-kick from external disturbances like manual righting)
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
@@ -390,19 +391,31 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
             Fb / std::max(denominator, COS_EPSILON),
             COMMON_FACTOR_MAX);
 
-        state.target_y -= common_factor *
-            (-1.0 * (gains.M_td * (gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
-        state.target_x -= common_factor *
-            (gains.M_td * (gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
+        double dy = common_factor * (gains.M_td * (gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll));
+        double dx = -common_factor * (gains.M_td * (gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
+
+        // Equilibrium hold: when robot is within LEVEL_THRESHOLD of zero, current target is the equilibrium
+        // → freeze axis to preserve user-established position and ignore D-kicks from external disturbances
+        if (std::abs(state.current_roll)  < LEVEL_THRESHOLD) dy = 0.0;
+        if (std::abs(state.current_pitch) < LEVEL_THRESHOLD) dx = 0.0;
+
+        state.target_y += dy;
+        state.target_x += dx;
         break;
     }
     case ControlMode::PID:
-        state.target_y = PID_BASE_Y + gains.kp_roll  * state.error_roll
-                         + gains.ki_roll  * state.integral_roll
-                         + gains.kd_roll  * derivative_roll;
-        state.target_x = PID_BASE_X + (-1.0) * (gains.kp_pitch * state.error_pitch
-                         + gains.ki_pitch * state.integral_pitch
-                         + gains.kd_pitch * derivative_pitch);
+        // Equilibrium hold: only recompute target when out of level band.
+        // When level, keep the last target (= equilibrium point) instead of snapping back to PID_BASE.
+        if (std::abs(state.current_roll) >= LEVEL_THRESHOLD) {
+            state.target_y = PID_BASE_Y + gains.kp_roll  * state.error_roll
+                             + gains.ki_roll  * state.integral_roll
+                             + gains.kd_roll  * derivative_roll;
+        }
+        if (std::abs(state.current_pitch) >= LEVEL_THRESHOLD) {
+            state.target_x = PID_BASE_X + (-1.0) * (gains.kp_pitch * state.error_pitch
+                             + gains.ki_pitch * state.integral_pitch
+                             + gains.kd_pitch * derivative_pitch);
+        }
         break;
 
     case ControlMode::FIXED: {
@@ -565,7 +578,7 @@ int main(int argc, char **argv) {
         int key = readKey();
         if (key >= 0) handleRuntimeKey(key);
 
-        // Mode change: reset state for clean transition
+        // Mode change: reset state for clean transition (prevents first-tick D-spike)
         static ControlMode prev_mode = control_mode;
         if (control_mode != prev_mode) {
             if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
@@ -574,6 +587,18 @@ int main(int argc, char **argv) {
                 state.target_y = current_y;
                 state.integral_roll  = 0.0;
                 state.integral_pitch = 0.0;
+
+                // Also reset derivative-related state so next tick derivative = 0
+                state.prev_error_roll      = state.error_roll;
+                state.prev_error_pitch     = state.error_pitch;
+                state.filtered_deriv_roll  = 0.0;
+                state.filtered_deriv_pitch = 0.0;
+                state.prev_roll   = state.current_roll;
+                state.prev_pitch  = state.current_pitch;
+                state.prev_yaw    = state.current_yaw;
+                state.filtered_ang_vel_roll  = 0.0;
+                state.filtered_ang_vel_pitch = 0.0;
+                state.filtered_ang_vel_yaw   = 0.0;
             }
             prev_mode = control_mode;
         }
@@ -643,10 +668,15 @@ int main(int argc, char **argv) {
 
             // Integral accumulation (without dt multiplication — gains are tuned for 50Hz loop)
             // If loop_rate_hz changes, ki gains must be rescaled proportionally
-            state.integral_roll  += state.error_roll;
-            state.integral_pitch += state.error_pitch;
-            state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
-            state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
+            // Freeze integral when level — prevents windup while robot is at equilibrium
+            if (std::abs(state.current_roll) >= LEVEL_THRESHOLD) {
+                state.integral_roll  += state.error_roll;
+                state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
+            }
+            if (std::abs(state.current_pitch) >= LEVEL_THRESHOLD) {
+                state.integral_pitch += state.error_pitch;
+                state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
+            }
 
             // Derivative with 1st-order low-pass filter to attenuate sensor noise
             double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
