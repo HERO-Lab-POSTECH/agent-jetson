@@ -22,6 +22,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 #include <string>
 #include <cstdlib>
 #include <cmath>
@@ -100,6 +101,15 @@ std::string albc_csv_path = "";
 std::string rosbag_status_msg = "";
 std::string csv_status_msg = "";
 
+// ==============================
+// ALBC status cache (updated by callback, used by main loop CSV writer)
+// When ALBC controller is not running, albc_active stays false
+// and target/current values default to 0
+// ==============================
+static std::mutex albc_mutex;
+static double albc_data[11] = {0};
+static bool albc_active = false;
+
 // Signal flag (async-signal-safe)
 static volatile sig_atomic_t signal_received = 0;
 
@@ -110,6 +120,7 @@ void ensure_directory(const std::string& path);
 int get_next_log_index(const std::string& base_path);
 void start_rosbag_record();
 void stop_rosbag_record();
+void write_csv_line();
 void print_monitor_status();
 void handle_signal(int sig);
 
@@ -136,8 +147,6 @@ void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
 // ==============================
 void sensorCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
 {
-    // Apply same coordinate correction as albc_controller:
-    // pitch sign inversion + yaw offset rotation to align with body frame
     double raw_roll  = msg->ROLL;
     double raw_pitch = -(msg->PITCH);
     double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
@@ -148,36 +157,52 @@ void sensorCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
 }
 
 // ==============================
-// ALBC status CSV logging
+// ALBC status callback - cache data only
 // ==============================
 void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
 {
-    if (record_flag.load() == 1 && msg->data.size() >= 11)
+    if (msg->data.size() >= 11)
     {
-        double current_time = ros::Time::now().toSec();
-        std::lock_guard<std::mutex> lock(csv_mutex);
-        if (fout_csv.is_open()) {
-            fout_csv
-                << current_time << ","
-                << msg->data[0] << "," << msg->data[1] << ","
-                << msg->data[2] << "," << msg->data[3] << ","
-                << msg->data[4] << "," << msg->data[5] << ","
-                << msg->data[6] << "," << msg->data[7] << ","
-                << msg->data[8] << "," << msg->data[9] << "," << msg->data[10] << ","
-                << target_depth << "," << depth << ","
-                << sensor_roll << "," << sensor_pitch << "," << sensor_yaw << "\n";
-            fout_csv.flush();
+        std::lock_guard<std::mutex> lock(albc_mutex);
+        for (int i = 0; i < 11; i++) albc_data[i] = msg->data[i];
+        albc_active = true;
+    }
+}
+
+// ==============================
+// CSV line writer (called from main loop at 50Hz)
+// If ALBC is not running, target/current roll/pitch = 0, sensor data still recorded
+// ==============================
+void write_csv_line()
+{
+    if (record_flag.load() != 1) return;
+
+    double current_time = ros::Time::now().toSec();
+    double data[11] = {0};
+    {
+        std::lock_guard<std::mutex> lock(albc_mutex);
+        if (albc_active) {
+            for (int i = 0; i < 11; i++) data[i] = albc_data[i];
         }
+    }
+
+    std::lock_guard<std::mutex> lock(csv_mutex);
+    if (fout_csv.is_open()) {
+        fout_csv << std::fixed << std::setprecision(6)
+            << current_time << ","
+            << data[0] << "," << data[1] << ","
+            << data[2] << "," << data[3] << ","
+            << data[4] << "," << data[5] << ","
+            << data[6] << "," << data[7] << ","
+            << data[8] << "," << data[9] << "," << data[10] << ","
+            << target_depth << "," << depth << ","
+            << sensor_roll << "," << sensor_pitch << "," << sensor_yaw << "\n";
+        fout_csv.flush();
     }
 }
 
 // ==============================
 // V3 Key Translation Layer
-//
-// Receives V3 key codes from /hero_agent/key_input and routes to:
-//   - /hero_agent/command (Arduino) via send_command()
-//   - /hero_agent/key_translated (Jetson) via send_translated()
-//   - Both, or neither (blocked keys)
 // ==============================
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
@@ -310,6 +335,7 @@ int main(int argc, char** argv)
     pub_key_translated = nh.advertise<std_msgs::Int8>("/hero_agent/key_translated", 100);
 
     ros::Rate loop_rate(100);
+    int csv_counter = 0;
 
     printf("\n  Agent Main Initialized (V3 key translation + monitor)\n\n");
 
@@ -323,7 +349,9 @@ int main(int argc, char** argv)
                 albc_csv_path = base_traj_dir + "/albc_status_" + std::to_string(log_index) + ".csv";
                 rosbag_file_path = base_rosbag_dir + "/record_" + std::to_string(log_index) + ".bag";
                 start_rosbag_record();
-                if (rosbag_pid > 0) {
+                rosbag_status_msg = (rosbag_pid > 0) ? "Recording started" : "Rosbag failed, CSV only";
+                // Open CSV independently of rosbag
+                {
                     std::lock_guard<std::mutex> lock(csv_mutex);
                     if (fout_csv.is_open()) fout_csv.close();
                     fout_csv.open(albc_csv_path);
@@ -331,11 +359,15 @@ int main(int argc, char** argv)
                         fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,angular_vel_roll,angular_vel_pitch,angular_vel_yaw,target_depth,depth,sensor_roll,sensor_pitch,sensor_yaw\n";
                         fout_csv.flush();
                         csv_status_msg = "Logging started";
+                    } else {
+                        csv_status_msg = "CSV open failed";
                     }
-                    rosbag_status_msg = "Recording started";
-                } else {
-                    record_flag.store(0);
-                    rosbag_status_msg = "Recording failed (fork error)";
+                }
+                // Reset ALBC active flag for new recording
+                {
+                    std::lock_guard<std::mutex> lock(albc_mutex);
+                    albc_active = false;
+                    for (int i = 0; i < 11; i++) albc_data[i] = 0;
                 }
             } else {
                 {
@@ -347,6 +379,12 @@ int main(int argc, char** argv)
                 rosbag_status_msg = "Recording stopped";
             }
             prev_record_flag = current_record;
+        }
+
+        // Write CSV at 50Hz (every 2nd iteration of 100Hz loop)
+        if (++csv_counter >= 2) {
+            write_csv_line();
+            csv_counter = 0;
         }
 
         print_monitor_status();
@@ -388,7 +426,7 @@ void ensure_directory(const std::string& path)
 {
     struct stat st;
     if (stat(path.c_str(), &st) != 0) {
-        if (mkdir(path.c_str(), 0775) != 0)
+        if (system(("mkdir -p " + path).c_str()) != 0)
             ROS_ERROR("Failed to create directory: %s (errno=%d)", path.c_str(), errno);
     }
 }
