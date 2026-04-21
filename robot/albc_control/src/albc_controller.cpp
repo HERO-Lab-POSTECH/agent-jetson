@@ -676,7 +676,7 @@ int main(int argc, char **argv) {
             double derivative_roll  = DERIV_LPF_ALPHA * raw_deriv_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_roll;
             double derivative_pitch = DERIV_LPF_ALPHA * raw_deriv_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_pitch;
 
-            // Clamp derivative: natural underwater dynamics stay < 2 rad/s; DERIV_CLAMP (3 rad/s) provides safety margin while rejecting human-hand / impact disturbances
+            // Clamp derivative: reject human-hand / impact disturbances while passing natural dynamics (< 2 rad/s)
             derivative_roll  = std::max(-DERIV_CLAMP, std::min(DERIV_CLAMP, derivative_roll));
             derivative_pitch = std::max(-DERIV_CLAMP, std::min(DERIV_CLAMP, derivative_pitch));
 
