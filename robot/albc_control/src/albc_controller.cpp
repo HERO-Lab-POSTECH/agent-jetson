@@ -74,9 +74,7 @@ static constexpr double COMMON_FACTOR_MAX    = 10.0;
 static constexpr double DET_EPSILON          = 1e-6;
 static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.233
 static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
-static constexpr double DERIV_LPF_ALPHA      = 0.1;   // 1st-order LPF for derivative (lower = smoother). Lowered from 0.2 for stronger noise/step-input suppression
-static constexpr double DERIV_CLAMP          = 3.0;   // rad/s. D-term saturation — clips human-hand/impact disturbance (>170 deg/s) while passing natural underwater dynamics
-static constexpr double TARGET_DELTA_MAX     = 0.005; // m per tick (5mm). TDC target rate limit — caps buoyancy command step (= 0.25 m/s at 50Hz)
+static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
 static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
 static constexpr double IK_DELTA_THRESHOLD  = 0.01;
 static constexpr int    IK_REDUCED_ITERATIONS = 500;
@@ -392,18 +390,10 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
             Fb / std::max(denominator, COS_EPSILON),
             COMMON_FACTOR_MAX);
 
-        // Compute proposed increments
-        double dy = -common_factor *
+        state.target_y -= common_factor *
             (-1.0 * (gains.M_td * (gains.Kd_td * derivative_roll + gains.Kp_td * state.error_roll)));
-        double dx = -common_factor *
+        state.target_x -= common_factor *
             (gains.M_td * (gains.Kd_td * derivative_pitch + gains.Kp_td * state.error_pitch));
-
-        // Rate limit: cap per-tick target change to prevent spike propagation
-        dy = std::max(-TARGET_DELTA_MAX, std::min(TARGET_DELTA_MAX, dy));
-        dx = std::max(-TARGET_DELTA_MAX, std::min(TARGET_DELTA_MAX, dx));
-
-        state.target_y += dy;
-        state.target_x += dx;
         break;
     }
     case ControlMode::PID:
@@ -575,7 +565,7 @@ int main(int argc, char **argv) {
         int key = readKey();
         if (key >= 0) handleRuntimeKey(key);
 
-        // Mode change: reset state for clean transition (prevents first-tick D-spike)
+        // Mode change: reset state for clean transition
         static ControlMode prev_mode = control_mode;
         if (control_mode != prev_mode) {
             if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
@@ -584,18 +574,6 @@ int main(int argc, char **argv) {
                 state.target_y = current_y;
                 state.integral_roll  = 0.0;
                 state.integral_pitch = 0.0;
-
-                // Also reset derivative-related state so next tick derivative = 0
-                state.prev_error_roll      = state.error_roll;
-                state.prev_error_pitch     = state.error_pitch;
-                state.filtered_deriv_roll  = 0.0;
-                state.filtered_deriv_pitch = 0.0;
-                state.prev_roll   = state.current_roll;
-                state.prev_pitch  = state.current_pitch;
-                state.prev_yaw    = state.current_yaw;
-                state.filtered_ang_vel_roll  = 0.0;
-                state.filtered_ang_vel_pitch = 0.0;
-                state.filtered_ang_vel_yaw   = 0.0;
             }
             prev_mode = control_mode;
         }
@@ -675,11 +653,6 @@ int main(int argc, char **argv) {
             double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
             double derivative_roll  = DERIV_LPF_ALPHA * raw_deriv_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_roll;
             double derivative_pitch = DERIV_LPF_ALPHA * raw_deriv_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_pitch;
-
-            // Clamp derivative: reject human-hand / impact disturbances while passing natural dynamics (< 2 rad/s)
-            derivative_roll  = std::max(-DERIV_CLAMP, std::min(DERIV_CLAMP, derivative_roll));
-            derivative_pitch = std::max(-DERIV_CLAMP, std::min(DERIV_CLAMP, derivative_pitch));
-
             state.filtered_deriv_roll  = derivative_roll;
             state.filtered_deriv_pitch = derivative_pitch;
 
