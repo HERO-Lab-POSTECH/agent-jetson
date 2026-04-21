@@ -19,7 +19,7 @@ pid_pitch:
   kd: 0.0005
 
 # Gain multiplier
-gain_mult: 1.5
+gain_mult: 3.0
 
 # IMU mounting yaw offset (degrees, FRD convention)
 imu_yaw_offset: 45.0
