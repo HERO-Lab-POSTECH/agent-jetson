@@ -60,11 +60,6 @@ float sensor_depth = 0.0f;
 static double imu_yaw_offset_rad = 45.0 * M_PI / 180.0;
 
 // ==============================
-// Jetson-only toggle states (not available from Arduino)
-// ==============================
-static bool lawnmower_on = false;
-
-// ==============================
 // Toggle debounce (500ms)
 // ==============================
 static ros::Time last_toggle_time[256];
@@ -246,12 +241,6 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         send_translated('f');
         break;
 
-    case 'p':  // Toggle Lawnmower (Jetson only)
-        if (!debounce_ok('p')) break;
-        lawnmower_on = !lawnmower_on;
-        send_translated(lawnmower_on ? 'p' : 'o');
-        break;
-
     // ── Letter Keys: Arduino-Only ──
 
     case 'N':  // Yaw Reset → Arduino 'n'
@@ -264,6 +253,7 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 
     // ── Blocked Keys (freed, no function) ──
 
+    case 'p':   // was: Toggle survey mode (removed)
     case ';':
     case 'n':
     case 'm':
@@ -516,7 +506,6 @@ void print_monitor_status()
     printf(" Yaw     i/k=+/-0.1\n");
     printf(" Depth   o/l=+/-0.1\n");
     printf(" Grip    c=Open  v=Stop  b=Close\n");
-    printf(" Auto    p=Lawnmower\n");
     printf(" Rec     R=Rosbag\n");
     printf("═══════════════════════════════════════════════════\n");
     if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());

@@ -5,8 +5,6 @@
 // ==============================
 
 TargetState target;
-LawnmowerState lawnmower;
-ControlFlags ctrl;
 
 // ROS publishers
 ros::Publisher pub_command;
@@ -39,11 +37,6 @@ void key_translated_callback(const std_msgs::Int8::ConstPtr &msg) {
 
 static void loadParameters(ros::NodeHandle& nh)
 {
-    // Lawnmower
-    nh.param<int>("lawnmower/sway_num", lawnmower.sway_num, 300);
-    nh.param<int>("lawnmower/surge_num", lawnmower.surge_num, 50);
-    nh.param<float>("lawnmower/move_dis", lawnmower.move_dis, 0.01f);
-
     // Teleop
     nh.param<double>("teleop/xy_step", teleop_xy_step, 0.05);
     nh.param<double>("teleop/z_step", teleop_z_step, 0.01);
@@ -86,14 +79,10 @@ int main(int argc, char **argv)
     ROS_INFO("===================================");
 
     float pre_x = 0, pre_y = 0, pre_z = 0, pre_yaw = 0;
-    int count = 0;
 
     while (ros::ok())
     {
-        count = (count + 1) % 10;
-
-        // Control modules
-        executeLawnmowerSurvey(count);
+        // Keyboard input
         handleKeyboardInput(loop_rate);
 
         // Publish target if changed (command=0 for incremental updates)
@@ -109,8 +98,7 @@ int main(int argc, char **argv)
 
         // Status logging (DEBUG level to avoid interfering with agent_main dashboard)
         ROS_DEBUG_THROTTLE(param_log_period,
-            "lm=%d | Tgt(%.2f,%.2f,%.2f)",
-            ctrl.lawnmower,
+            "Tgt(%.2f,%.2f,%.2f)",
             target.x, target.y, target.z);
 
         loop_rate.sleep();

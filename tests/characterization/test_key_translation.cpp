@@ -64,24 +64,13 @@ int main()
     // ── Jetson-only letter keys ──
     expect_xlate(off, 'r', 0, 'r', "heave up   -> translated 'r' only");
     expect_xlate(off, 'f', 0, 'f', "heave down -> translated 'f' only");
-    // lawnmower 'p' is a stateful toggle: prev OFF -> 'p', prev ON -> 'o'
-    KeyXlate lm_start = translate_key('p', off, /*lawnmower_on_prev=*/false);
-    checks++; if (lm_start.cmd != 0 || lm_start.translated != 'p') {
-        failures++; std::printf("FAIL lawnmower start: want tr='p' got (cmd=%d,tr=%d)\n",
-                                 lm_start.cmd, lm_start.translated);
-    }
-    KeyXlate lm_stop = translate_key('p', off, /*lawnmower_on_prev=*/true);
-    checks++; if (lm_stop.cmd != 0 || lm_stop.translated != 'o') {
-        failures++; std::printf("FAIL lawnmower stop: want tr='o' got (cmd=%d,tr=%d)\n",
-                                 lm_stop.cmd, lm_stop.translated);
-    }
 
     // ── Arduino-only letter keys ──
     expect_xlate(off, 'N', 'n', 0, "yaw reset  -> command 'n' only");
     expect_xlate(off, 'o', 'o', 0, "depth -0.1 -> command 'o' only");
 
     // ── Blocked keys: no output at all ──
-    const char* blocked = ";nm.,tgyheq67890";
+    const char* blocked = ";nm.,tgyheq67890p";
     for (const char* k = blocked; *k; ++k)
         expect_xlate(off, *k, 0, 0, "blocked key -> no output");
 

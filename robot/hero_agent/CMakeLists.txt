@@ -23,7 +23,6 @@ target_link_libraries(agent_main ${catkin_LIBRARIES})
 
 add_executable(agent_command
   src/agent_command.cpp
-  src/lawnmower_survey.cpp
   src/teleop.cpp
 )
 add_dependencies(agent_command ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

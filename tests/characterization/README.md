@@ -23,8 +23,8 @@ tests/characterization/run.sh        # 전부 빌드+실행, 하나라도 실패
 | 테스트 | 대상 (원본) | 박제 내용 |
 |:---|:---|:---|
 | `test_key_translation.cpp` | `agent_main.cpp:207-298` (V3 키 번역 switch) | 입력키 → `/hero_agent/command` char + `/hero_agent/key_translated` char. 토글 ON/OFF 양분기, blocked 키, pass-through 25종 |
-| `test_lawnmower_fsm.cpp` | `lawnmower_survey.cpp:7-49` | state 1→2→3→4→0 전이 시퀀스 + target.x/y 변위(종이계산 상수와 대조) |
-| `test_processkey.cpp` | `teleop.cpp:82-107` | 키 → target.x/y/z 변위 + 부호 규약(r=z−, f=z+) + lawnmower 토글 |
+| `test_keymap_table.cpp` | `keymap.h` (선언형 KEYMAP 테이블) | 토글/고정/translated 키 정의 + `is_blocked_key`/`lookup_key` 분기 |
+| `test_processkey.cpp` | `teleop.cpp` (processKey) | 키 → target.x/y/z 변위 + 부호 규약(r=z−, f=z+) |
 
 ## oracle 의 정직성
 
@@ -33,9 +33,6 @@ tests/characterization/run.sh        # 전부 빌드+실행, 하나라도 실패
 
 - ✅ 보장: 재설계 코드 == oracle (테스트가 PASS면 거동 불변)
 - ⚠️ 전제: oracle == 원본 (추출 시점에 1:1로 박제 — 줄번호 주석으로 검증 가능)
-
-lawnmower 최종 변위는 oracle 자기검증이 아니라 **명세에서 손으로 계산한 상수**
-(x=0.04, y=0.00)와 대조한다 — oracle 이 틀려도 독립 계산이 잡아낸다.
 
 ## 박제하지 않은 것 (의도적 제외)
 

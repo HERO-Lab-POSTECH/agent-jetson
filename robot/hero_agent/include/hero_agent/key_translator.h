@@ -8,16 +8,8 @@ namespace hero {
 struct KeyXlate { char cmd; char translated; };  // 0 = not published
 
 // keymap 테이블 룩업 기반 V3 번역. 거동은 기존 oracle과 byte-identical.
-// lawnmower_on_prev: 'p'(lawnmower) 특수처리에만 사용. (Task 4에서 'p' 제거 예정)
-inline KeyXlate translate_key(int ch, const ToggleState& st,
-                              bool lawnmower_on_prev = false) {
+inline KeyXlate translate_key(int ch, const ToggleState& st) {
     KeyXlate out = {0, 0};
-
-    // lawnmower 'p' 특수처리 (테이블에 없음; Task 4에서 제거)
-    if (ch == 'p') {
-        out.translated = (!lawnmower_on_prev) ? 'p' : 'o';
-        return out;
-    }
 
     const KeyDef* k = lookup_key(ch);
     if (k) {

@@ -30,23 +30,11 @@ struct TargetState {
     float x = 0, y = 0, z = 0, yaw = 0;
 };
 
-struct LawnmowerState {
-    int sway_count = 0, sway_num = 300;
-    int surge_count = 0, surge_num = 50;
-    float move_dis = 0.01f;
-};
-
-struct ControlFlags {
-    int lawnmower = 0;
-};
-
 // ==============================
 // Shared state (extern declarations)
 // ==============================
 
 extern TargetState target;
-extern LawnmowerState lawnmower;
-extern ControlFlags ctrl;
 
 // ROS publishers
 extern ros::Publisher pub_command;
@@ -67,9 +55,6 @@ extern std::queue<int> key_input_queue;
 // ==============================
 // Module function declarations
 // ==============================
-
-// lawnmower_survey.cpp
-void executeLawnmowerSurvey(int count);
 
 // teleop.cpp
 void init_keyboard();

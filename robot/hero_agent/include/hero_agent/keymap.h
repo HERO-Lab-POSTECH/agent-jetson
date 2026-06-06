@@ -53,6 +53,7 @@ inline const KeyDef* lookup_key(int ch) {
 // 차단키 집합(테이블엔 없지만 pass-through도 아닌, 명시적 no-op 키)
 inline bool is_blocked_key(int ch) {
     switch (ch) {
+    case 'p':
     case ';': case 'n': case 'm': case '.': case ',':
     case 't': case 'g': case 'y': case 'h': case 'e': case 'q':
     case '6': case '7': case '8': case '9': case '0':

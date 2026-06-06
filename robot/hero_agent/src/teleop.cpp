@@ -72,7 +72,6 @@ static int _getch()
 //
 // Jetson-side key mapping (processKey):
 //   Movement:  w/s=Surge  a/d=Sway  r/f=Heave
-//   Lawnmower: p=Start  o=Stop
 //
 // NOTE: This processKey receives TRANSLATED keys from agent_main
 //       via /hero_agent/key_translated. The keys arriving here use
@@ -92,14 +91,6 @@ static void processKey(int ch, ros::Rate& loop_rate)
     case 'a': target.y -= teleop_xy_step;  break;
     case 'r': target.z -= teleop_z_step;   break;
     case 'f': target.z += teleop_z_step;   break;
-
-    // --- Lawnmower control ---
-    case 'o': ctrl.lawnmower = 0; break;
-    case 'p':
-        ctrl.lawnmower = 1;
-        lawnmower.sway_count = 0;
-        lawnmower.surge_count = 0;
-        break;
 
     default:
         break;

@@ -1,11 +1,5 @@
 # agent_command node parameters
 
-# Lawnmower survey pattern
-lawnmower:
-  sway_num: 300
-  surge_num: 50
-  move_dis: 0.01
-
 # Teleop keyboard step sizes
 teleop:
   xy_step: 0.05

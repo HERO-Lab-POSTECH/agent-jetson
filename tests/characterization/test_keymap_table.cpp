@@ -3,8 +3,8 @@
 // Verifies the V3 keymap moved from code (giant switch) into data (KEYMAP[]).
 // Toggle keys carry cmd_off/cmd_on + toggle_bit; blocked keys and pass-through
 // keys are both absent from the table — lookup_key returns nullptr for them, and
-// is_blocked_key separates the two cases. lawnmower 'p' is intentionally NOT in
-// the table (removed in a later task).
+// is_blocked_key separates the two cases. The 'p' key is intentionally NOT in
+// the table (its former survey-mode function was removed).
 //
 // Build & run (local, no ROS):
 //   c++ -std=c++11 -Wall -I. test_keymap_table.cpp -o /tmp/tk && /tmp/tk
@@ -124,8 +124,9 @@ int main()
     expect_true(is_blocked_key('R'), "'R' is_blocked==true");
     expect_true(is_blocked_key('6'), "'6' is_blocked==true");
 
-    // (7) lawnmower 'p' removed: absent from table
+    // (7) lawnmower 'p' removed: absent from table, now a blocked key
     expect_null(lookup_key('p'), "'p' lookup==nullptr (lawnmower removed)");
+    expect_true(is_blocked_key('p'), "'p' is_blocked==true (no function)");
 
     // (8) debounce flags: '1'/'2'/'3'/'4'/'5' true; 'N'/'o'/'r'/'f' false
     {
