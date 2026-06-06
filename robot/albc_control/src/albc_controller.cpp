@@ -7,6 +7,7 @@
 #include "hero_msgs/hero_agent_sensor.h"
 #include "albc_control/albc_kinematics.h"
 #include "albc_control/inverse_kinematics.h"
+#include "albc_control/imu_processor.h"
 
 #include <dynamic_reconfigure/server.h>
 #include <albc_control/ALBCControllerConfig.h>
@@ -130,7 +131,7 @@ static ControlMode control_mode = ControlMode::TDC;
 static ControlGains gains = {};
 static ControlState state = {};
 static InverseKinematics ik;  // DLS IK solver (absorbs the former IKConfig)
-static double imu_yaw_offset_rad = DEG2RAD(45.0);  // IMU mounting yaw offset [rad]
+static ImuProcessor imu_proc;  // IMU callback wrapper (owns yaw offset + cached RPY)
 static float joint_current1_mA = 0.0f;
 static float joint_current2_mA = 0.0f;
 
@@ -150,16 +151,9 @@ static double manual_x = 0.0, manual_y = 0.0;
 // Callbacks
 // ==============================
 
-void imuCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg) {
-    double raw_roll  = msg->ROLL;
-    double raw_pitch = -(msg->PITCH);
-
-    // Rotate IMU readings by yaw offset to align with robot body frame
-    double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
-    state.current_roll  =  c * raw_roll + s * raw_pitch;
-    state.current_pitch = -s * raw_roll + c * raw_pitch;
-    state.current_yaw   = msg->YAW;
-}
+// imuCallback now lives in the ImuProcessor class (imu_processor.h): onImu()
+// delegates the rotation to rotateImu() (imu_rotation.h). state.current_* is
+// synced from imu_proc at the top of each control-loop iteration.
 
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
     control_mode = static_cast<ControlMode>(config.control_mode);
@@ -184,7 +178,7 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
 
     ik.setConfig(config.ik_learning_rate, config.ik_lambda_base, config.ik_num_iterations);
 
-    imu_yaw_offset_rad = DEG2RAD(config.imu_yaw_offset);
+    imu_proc.setOffset(DEG2RAD(config.imu_yaw_offset));
 
     manual_theta1_deg = config.manual_theta1;
     manual_theta2_deg = config.manual_theta2;
@@ -453,7 +447,7 @@ int main(int argc, char **argv) {
 
     double imu_yaw_offset_deg;
     nh.param<double>("imu_yaw_offset", imu_yaw_offset_deg, 45.0);
-    imu_yaw_offset_rad = DEG2RAD(imu_yaw_offset_deg);
+    imu_proc.setOffset(DEG2RAD(imu_yaw_offset_deg));
 
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 90.0);
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 90.0);
@@ -509,7 +503,8 @@ int main(int argc, char **argv) {
     dr_server.setCallback(boost::bind(&reconfigureCallback, _1, _2));
 
     // Subscribers
-    ros::Subscriber imu_sub     = nh.subscribe("/hero_agent/sensors", 50, imuCallback);
+    ros::Subscriber imu_sub     = nh.subscribe("/hero_agent/sensors", 50,
+                                               &ImuProcessor::onImu, &imu_proc);
     ros::Subscriber current_sub = nh.subscribe("/joint_currents", 10, jointCurrentsCallback);
 
     // Publishers
@@ -528,6 +523,12 @@ int main(int argc, char **argv) {
         // Runtime key input (non-blocking)
         int key = readKey();
         if (key >= 0) handleRuntimeKey(key);
+
+        // Sync cached IMU attitude (ImuProcessor owns the source; updated in
+        // the onImu callback during ros::spinOnce() at the loop bottom).
+        state.current_roll  = imu_proc.roll();
+        state.current_pitch = imu_proc.pitch();
+        state.current_yaw   = imu_proc.yaw();
 
         // Mode change: reset state for clean transition (prevents first-tick D-spike)
         static ControlMode prev_mode = control_mode;
