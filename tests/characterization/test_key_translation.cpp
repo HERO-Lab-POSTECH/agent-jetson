@@ -17,9 +17,11 @@
 // Build & run (local, no ROS needed):
 //   c++ -std=c++11 -I. tests/characterization/test_key_translation.cpp -o /tmp/t && /tmp/t
 
-#include "key_translation_oracle.h"
+#include "../../robot/hero_agent/include/hero_agent/key_translator.h"
 #include <cstdio>
 #include <cstring>
+
+using namespace hero;
 
 static int failures = 0;
 static int checks = 0;

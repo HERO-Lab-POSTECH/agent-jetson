@@ -8,7 +8,7 @@ set -u
 
 cd "$(dirname "$0")"
 CXX="${CXX:-c++}"
-FLAGS="-std=c++11 -Wall -I."
+FLAGS="-std=c++11 -Wall -I. -I../../robot/hero_agent/include"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
