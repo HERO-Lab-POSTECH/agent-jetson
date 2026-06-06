@@ -1,15 +1,13 @@
 // ==============================
-// agent_main: V3 key translation layer, state monitoring, rosbag recording
+// agent: single-node V3 key translation + teleop + state monitoring + rosbag
 //
-// Architecture:
+// Architecture (single node — no topic round-trip):
 //   key_teleop.py → /hero_agent/key_input (V3 keys)
 //                          ↓
-//                agent_main.cpp (THIS FILE — TRANSLATION LAYER)
+//                   agent.cpp (THIS FILE)
 //                 ↓                    ↓
-//   /hero_agent/command          /hero_agent/key_translated
-//   (Arduino original keys)      (Jetson original keys)
-//                                      ↓
-//                          agent_command processKey()
+//   /hero_agent/command          TeleopController.apply() → /hero_agent/dvl
+//   (Arduino original keys)      (in-process target update)
 // ==============================
 
 #include <ros/ros.h>
@@ -17,6 +15,11 @@
 #include <std_msgs/Float64MultiArray.h>
 #include "hero_msgs/hero_agent_state.h"
 #include "hero_msgs/hero_agent_sensor.h"
+#include "hero_msgs/hero_agent_dvl.h"
+
+#include "hero_agent/key_translator.h"
+#include "hero_agent/teleop_controller.h"
+#include "hero_agent/topics.h"
 
 #include <iostream>
 #include <fstream>
@@ -39,6 +42,7 @@
 #include <dirent.h>
 
 using namespace std;
+using namespace hero;
 
 // ==============================
 // State variables (from Arduino state topic)
@@ -77,9 +81,15 @@ static bool debounce_ok(int ch)
 // ROS publishers and messages
 // ==============================
 ros::Publisher pub_command;
-ros::Publisher pub_key_translated;
+ros::Publisher pub_target;
 std_msgs::Int8 command_msg;
-std_msgs::Int8 translated_msg;
+
+// ==============================
+// Teleop (in-process — replaces the old translated-key topic round-trip)
+// xy_step/z_step match original hardcoded teleop defaults (0.05 / 0.01)
+// ==============================
+TeleopController g_teleop(0.05, 0.01);
+std::atomic<bool> g_target_dirty(false);
 
 // ==============================
 // Rosbag recording
@@ -108,7 +118,6 @@ static volatile sig_atomic_t signal_received = 0;
 
 // Forward declarations
 void send_command(char cmd);
-void send_translated(char cmd);
 void ensure_directory(const std::string& path);
 int get_next_log_index(const std::string& base_path);
 void start_rosbag_record();
@@ -195,93 +204,44 @@ void write_csv_line()
 }
 
 // ==============================
-// V3 Key Translation Layer
+// V3 Key Translation Layer (single-node: translate then dispatch in-process)
+//
+// translate_key (key_translator.h) is the byte-identical oracle for V3 keys.
+// debounce stays a callback-layer concern (KeyTranslator is a pure function):
+// only toggle keys with debounce flag are 500ms gated — '1'/'2'/'3'/'5'.
+// '4' (PWM) is toggle=false so it is NOT gated, preserving prior behavior.
 // ==============================
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
     int ch = msg->data;
 
-    switch (ch) {
-
-    // ── Number Row: Hardware Toggles ──
-
-    case '1':  // Toggle Relay
-        if (!debounce_ok('1')) break;
-        send_command(relay_enabled ? 't' : 'e');
-        break;
-
-    case '2':  // Toggle Yaw
-        if (!debounce_ok('2')) break;
-        send_command(control_yaw_enabled ? 'h' : 'y');
-        break;
-
-    case '3':  // Toggle Depth
-        if (!debounce_ok('3')) break;
-        send_command(control_depth_enabled ? ';' : 'p');
-        break;
-
-    case '4':  // PWM Init → Arduino only
-        send_command('g');
-        break;
-
-    case '5':  // Toggle Laser
-        if (!debounce_ok('5')) break;
-        send_command(laser_enabled ? 'f' : 'r');
-        break;
-
-    // ── Letter Keys: Jetson-Only ──
-
-    case 'r':  // Heave Up (target.z)
-        send_translated('r');
-        break;
-
-    case 'f':  // Heave Down (target.z)
-        send_translated('f');
-        break;
-
-    // ── Letter Keys: Arduino-Only ──
-
-    case 'N':  // Yaw Reset → Arduino 'n'
-        send_command('n');
-        break;
-
-    case 'o':  // Depth -0.1 → Arduino 'o'
-        send_command('o');
-        break;
-
-    // ── Blocked Keys (freed, no function) ──
-
-    case 'p':   // was: Toggle survey mode (removed)
-    case ';':
-    case 'n':
-    case 'm':
-    case '.':
-    case ',':
-    case 't':
-    case 'g':
-    case 'y':
-    case 'h':
-    case 'e':   // was: Send Target (removed)
-    case 'q':   // was: Target Reset (removed)
-    case '6':   // was: Winch Calibrate (removed)
-    case '7':   // was: Winch Meter + (removed)
-    case '8':   // was: Winch Meter - (removed)
-    case '9':   // was: Winch Step + (removed)
-    case '0':   // was: Winch Step - (removed)
-        break;
-
-    // ── Rosbag Toggle (agent_main internal) ──
-
-    case 'R':
+    // Rosbag toggle (KeyTranslator 범위 밖, agent 내부 플래그)
+    if (ch == 'R') {
         record_flag.fetch_xor(1);
-        break;
+        return;
+    }
 
-    // ── Pass-Through: Both Arduino + Jetson ──
-    // w/s/a/d, z/x, u/j, i/k, l, c/v/b
-    default:
-        send_command(ch);
-        send_translated(ch);
-        break;
+    // Current toggle state (built from state-callback globals)
+    ToggleState st;
+    st.relay_enabled         = relay_enabled;
+    st.control_yaw_enabled   = control_yaw_enabled;
+    st.control_depth_enabled = control_depth_enabled;
+    st.laser_enabled         = laser_enabled;
+
+    // Debounce: only toggle keys carrying the debounce flag are gated.
+    // '1'/'2'/'3'/'5' are toggle=true+debounce=true → gated.
+    // '4' is toggle=false → excluded, preserving the prior gated key set.
+    const KeyDef* kd = lookup_key(ch);
+    if (kd && kd->toggle && kd->debounce) {
+        if (!debounce_ok(ch)) return;
+    }
+
+    KeyXlate out = translate_key(ch, st);
+    if (out.cmd != 0)
+        send_command(out.cmd);
+    if (out.translated != 0) {
+        if (g_teleop.apply(out.translated))
+            g_target_dirty.store(true);
     }
 }
 
@@ -295,7 +255,7 @@ int main(int argc, char** argv)
     ensure_directory(base_traj_dir);
     ensure_directory(base_rosbag_dir);
 
-    ros::init(argc, argv, "agent_main", ros::init_options::NoSigintHandler);
+    ros::init(argc, argv, "agent", ros::init_options::NoSigintHandler);
     ros::NodeHandle nh;
     ros::AsyncSpinner spinner(2);
     spinner.start();
@@ -313,19 +273,19 @@ int main(int argc, char** argv)
     for (int i = 0; i < 256; i++) last_toggle_time[i] = now;
 
     // Subscribers
-    ros::Subscriber sub_state = nh.subscribe("/hero_agent/state", 100, msg_callback_state);
-    ros::Subscriber sub_sensor = nh.subscribe("/hero_agent/sensors", 100, sensorCallback);
-    ros::Subscriber sub_albc_status = nh.subscribe("/albc_status", 10, albcStatusCallback);
-    ros::Subscriber sub_key_input = nh.subscribe("/hero_agent/key_input", 10, key_input_callback);
+    ros::Subscriber sub_state = nh.subscribe(topics::STATE, 100, msg_callback_state);
+    ros::Subscriber sub_sensor = nh.subscribe(topics::SENSORS, 100, sensorCallback);
+    ros::Subscriber sub_albc_status = nh.subscribe(topics::ALBC_STATUS, 10, albcStatusCallback);
+    ros::Subscriber sub_key_input = nh.subscribe(topics::KEY_INPUT, 10, key_input_callback);
 
     // Publishers
-    pub_command = nh.advertise<std_msgs::Int8>("/hero_agent/command", 100);
-    pub_key_translated = nh.advertise<std_msgs::Int8>("/hero_agent/key_translated", 100);
+    pub_command = nh.advertise<std_msgs::Int8>(topics::COMMAND, 100);
+    pub_target = nh.advertise<hero_msgs::hero_agent_dvl>(topics::DVL, 100);
 
     ros::Rate loop_rate(100);
     int csv_counter = 0;
 
-    printf("\n  Agent Main Initialized (V3 key translation + monitor)\n\n");
+    printf("\n  Agent Initialized (V3 key translation + teleop + monitor)\n\n");
 
     while (ros::ok() && !signal_received)
     {
@@ -369,6 +329,16 @@ int main(int argc, char** argv)
             prev_record_flag = current_record;
         }
 
+        // Publish teleop target when changed (command=0 for incremental updates)
+        if (g_target_dirty.exchange(false)) {
+            hero_msgs::hero_agent_dvl msg_target;
+            msg_target.command = 0;
+            msg_target.TARGET_X = g_teleop.x();
+            msg_target.TARGET_Y = g_teleop.y();
+            msg_target.TARGET_Z = g_teleop.z();
+            pub_target.publish(msg_target);
+        }
+
         // Write CSV at 50Hz (every 2nd iteration of 100Hz loop)
         if (++csv_counter >= 2) {
             write_csv_line();
@@ -397,12 +367,6 @@ void send_command(char cmd)
 {
     command_msg.data = cmd;
     pub_command.publish(command_msg);
-}
-
-void send_translated(char cmd)
-{
-    translated_msg.data = cmd;
-    pub_key_translated.publish(translated_msg);
 }
 
 void handle_signal(int sig)

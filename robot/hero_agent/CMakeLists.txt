@@ -17,16 +17,9 @@ include_directories(
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(agent_main src/agent_main.cpp)
-add_dependencies(agent_main ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(agent_main ${catkin_LIBRARIES})
-
-add_executable(agent_command
-  src/agent_command.cpp
-  src/teleop.cpp
-)
-add_dependencies(agent_command ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-target_link_libraries(agent_command ${catkin_LIBRARIES})
+add_executable(agent src/agent.cpp)
+add_dependencies(agent ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(agent ${catkin_LIBRARIES})
 
 # Install Python scripts
 catkin_install_python(PROGRAMS
@@ -36,8 +29,7 @@ catkin_install_python(PROGRAMS
 
 # Install targets
 install(TARGETS
-  agent_main
-  agent_command
+  agent
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
