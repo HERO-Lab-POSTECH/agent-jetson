@@ -8,6 +8,7 @@
 #include "albc_control/albc_kinematics.h"
 #include "albc_control/inverse_kinematics.h"
 #include "albc_control/imu_processor.h"
+#include "albc_control/attitude_controller.h"
 
 #include <dynamic_reconfigure/server.h>
 #include <albc_control/ALBCControllerConfig.h>
@@ -70,66 +71,26 @@ static const char* controlModeName(ControlMode m) {
 // Constants
 // ==============================
 
-static constexpr double INTEGRAL_MAX         = 100.0;
-static constexpr double COS_EPSILON          = 1e-6;
-static constexpr double COMMON_FACTOR_MAX    = 10.0;
-static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.233
-static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
-static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
-static constexpr double LEVEL_THRESHOLD      = 0.01745; // rad (1 deg). If |current roll/pitch| < this, treat as level — freeze target as equilibrium point (prevents D-kick from external disturbances like manual righting)
+// INTEGRAL_MAX / COS_EPSILON / COMMON_FACTOR_MAX / PID_BASE_X / PID_BASE_Y /
+// DERIV_LPF_ALPHA / LEVEL_THRESHOLD now live inside AttitudeController (via the
+// control_law.h / feedback_filters.h oracle constants). See attitude_controller.h.
 static constexpr double MANUAL_ANGLE_STEP     = 5.0;   // deg per keypress
 static constexpr double MANUAL_POS_STEP       = 0.01;  // m per keypress
 
 // ==============================
 // State Structures
 // ==============================
-
-struct ControlGains {
-    // Base values (reference for gain_mult)
-    double M_td_base, Kp_td_base, Kd_td_base;
-    double kp_roll_base, ki_roll_base, kd_roll_base;
-    double kp_pitch_base, ki_pitch_base, kd_pitch_base;
-
-    // Active values (= base * gain_mult)
-    double M_td, Kp_td, Kd_td;
-    double kp_roll, ki_roll, kd_roll;
-    double kp_pitch, ki_pitch, kd_pitch;
-
-    double gain_mult;
-
-    void applyMultiplier() {
-        M_td  = M_td_base  * gain_mult;
-        Kp_td = Kp_td_base * gain_mult;
-        Kd_td = Kd_td_base * gain_mult;
-        kp_roll  = kp_roll_base  * gain_mult;
-        ki_roll  = ki_roll_base  * gain_mult;
-        kd_roll  = kd_roll_base  * gain_mult;
-        kp_pitch = kp_pitch_base * gain_mult;
-        ki_pitch = ki_pitch_base * gain_mult;
-        kd_pitch = kd_pitch_base * gain_mult;
-    }
-};
-
-struct ControlState {
-    double current_roll, current_pitch, current_yaw;
-    double error_roll, error_pitch;
-    double integral_roll, integral_pitch;
-    double prev_error_roll, prev_error_pitch;
-    double target_roll, target_pitch;
-    double target_x, target_y;
-    double filtered_deriv_roll, filtered_deriv_pitch;
-    double prev_roll, prev_pitch, prev_yaw;
-    double angular_vel_roll, angular_vel_pitch, angular_vel_yaw;
-    double filtered_ang_vel_roll, filtered_ang_vel_pitch, filtered_ang_vel_yaw;
-};
+//
+// The former ControlGains / ControlState structs and the computeControlOutput()
+// function now live inside AttitudeController (attitude_controller.h), which
+// owns the feedback pipeline + 4-mode control law.
 
 // ==============================
 // Globals
 // ==============================
 
 static ControlMode control_mode = ControlMode::TDC;
-static ControlGains gains = {};
-static ControlState state = {};
+static AttitudeController attitude;  // feedback pipeline + 4-mode control law (absorbs ControlState/ControlGains/computeControlOutput)
 static InverseKinematics ik;  // DLS IK solver (absorbs the former IKConfig)
 static ImuProcessor imu_proc;  // IMU callback wrapper (owns yaw offset + cached RPY)
 static float joint_current1_mA = 0.0f;
@@ -158,23 +119,12 @@ static double manual_x = 0.0, manual_y = 0.0;
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
     control_mode = static_cast<ControlMode>(config.control_mode);
 
-    state.target_roll  = DEG2RAD(config.target_roll);
-    state.target_pitch = DEG2RAD(config.target_pitch);
+    attitude.setTargets(DEG2RAD(config.target_roll), DEG2RAD(config.target_pitch));
 
-    gains.M_td_base  = config.M_td;
-    gains.Kp_td_base = config.Kp_td;
-    gains.Kd_td_base = config.Kd_td;
-
-    gains.kp_roll_base  = config.kp_roll;
-    gains.ki_roll_base  = config.ki_roll;
-    gains.kd_roll_base  = config.kd_roll;
-
-    gains.kp_pitch_base  = config.kp_pitch;
-    gains.ki_pitch_base  = config.ki_pitch;
-    gains.kd_pitch_base  = config.kd_pitch;
-
-    gains.gain_mult = config.gain_mult;
-    gains.applyMultiplier();
+    attitude.setGains(config.M_td, config.Kp_td, config.Kd_td,
+                      config.kp_roll, config.ki_roll, config.kd_roll,
+                      config.kp_pitch, config.ki_pitch, config.kd_pitch,
+                      config.gain_mult);
 
     ik.setConfig(config.ik_learning_rate, config.ik_lambda_base, config.ik_num_iterations);
 
@@ -186,12 +136,11 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
     manual_y          = config.manual_y;
 
     // Reset integrals on gain change (anti-windup)
-    state.integral_roll  = 0.0;
-    state.integral_pitch = 0.0;
+    attitude.resetIntegrals();
 
     ROS_INFO("Reconfigure: mode=%s mult=%.2f M=%.4f Kp=%.3f Kd=%.1f",
-             controlModeName(control_mode), gains.gain_mult,
-             gains.M_td, gains.Kp_td, gains.Kd_td);
+             controlModeName(control_mode), attitude.gainMult(),
+             attitude.Mtd(), attitude.Kptd(), attitude.Kdtd());
 }
 
 void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
@@ -321,56 +270,9 @@ static void handleRuntimeKey(int ch) {
 // ==============================
 // Control Law
 // ==============================
-
-void computeControlOutput(double dt, double derivative_roll, double derivative_pitch) {
-    switch (control_mode) {
-    case ControlMode::TDC: {
-        // Incremental P (no D-term). When error=0, dy=0 automatically — robot at target → buoyancy stops.
-        // D-term removed because its "predictive" behavior incorrectly reacts to external disturbances
-        // (e.g. manual righting, waves) as if they were controller-driven motions. Water viscous damping
-        // provides natural damping that D-term would otherwise contribute.
-        double denominator = std::abs(Fb * cos(state.current_roll) * cos(state.current_pitch));
-        double common_factor = std::min(
-            Fb / std::max(denominator, COS_EPSILON),
-            COMMON_FACTOR_MAX);
-
-        double dy =  common_factor * (gains.M_td * gains.Kp_td * state.error_roll);
-        double dx = -common_factor * (gains.M_td * gains.Kp_td * state.error_pitch);
-
-        // Equilibrium hold: within LEVEL_THRESHOLD, clamp dy/dx to 0 to guard against IMU noise drift
-        if (std::abs(state.current_roll)  < LEVEL_THRESHOLD) dy = 0.0;
-        if (std::abs(state.current_pitch) < LEVEL_THRESHOLD) dx = 0.0;
-
-        state.target_y += dy;
-        state.target_x += dx;
-        break;
-    }
-    case ControlMode::PID:
-        // Equilibrium hold: only recompute target when out of level band.
-        // When level, keep the last target (= equilibrium point) instead of snapping back to PID_BASE.
-        if (std::abs(state.current_roll) >= LEVEL_THRESHOLD) {
-            state.target_y = PID_BASE_Y + gains.kp_roll  * state.error_roll
-                             + gains.ki_roll  * state.integral_roll
-                             + gains.kd_roll  * derivative_roll;
-        }
-        if (std::abs(state.current_pitch) >= LEVEL_THRESHOLD) {
-            state.target_x = PID_BASE_X + (-1.0) * (gains.kp_pitch * state.error_pitch
-                             + gains.ki_pitch * state.integral_pitch
-                             + gains.kd_pitch * derivative_pitch);
-        }
-        break;
-
-    case ControlMode::FIXED: {
-        constexpr double FIXED_ALPHA = 0.05;
-        state.target_x += FIXED_ALPHA * (-L2 - state.target_x);
-        state.target_y += FIXED_ALPHA * ( L1 - state.target_y);
-        break;
-    }
-
-    case ControlMode::MANUAL:
-        break;
-    }
-}
+//
+// The 4-mode control-law switch (former computeControlOutput) now lives inside
+// AttitudeController::update -> computeControlOutputOracle (control_law.h).
 
 // ==============================
 // Dashboard
@@ -378,7 +280,8 @@ void computeControlOutput(double dt, double derivative_roll, double derivative_p
 
 void printDashboard(double theta1, double theta2,
                     double current_x, double current_y,
-                    double target_length) {
+                    double target_length,
+                    double current_roll, double current_pitch) {
     printf("\033[2J\033[H");
     printf("═══════════════════════════════════════════════════\n");
     if (control_mode == ControlMode::MANUAL) {
@@ -389,17 +292,17 @@ void printDashboard(double theta1, double theta2,
     }
     printf("═══════════════════════════════════════════════════\n");
     printf(" Roll  %+7.2f / %+7.2f deg  (err %+.2f)\n",
-           RAD2DEG(state.current_roll), RAD2DEG(state.target_roll), RAD2DEG(state.error_roll));
+           RAD2DEG(current_roll), RAD2DEG(attitude.targetRoll()), RAD2DEG(attitude.errorRoll()));
     printf(" Pitch %+7.2f / %+7.2f deg  (err %+.2f)\n",
-           RAD2DEG(state.current_pitch), RAD2DEG(state.target_pitch), RAD2DEG(state.error_pitch));
+           RAD2DEG(current_pitch), RAD2DEG(attitude.targetPitch()), RAD2DEG(attitude.errorPitch()));
     printf("───────────────────────────────────────────────────\n");
     printf(" Target (%+.4f, %+.4f)   FK (%+.4f, %+.4f)\n",
-           state.target_x, state.target_y, current_x, current_y);
+           attitude.targetX(), attitude.targetY(), current_x, current_y);
     printf(" Joints J1=%.1f  J2=%.1f deg   Len=%.4f/%.4f\n",
            RAD2DEG(theta1), RAD2DEG(theta2), target_length, SAFE_ARM_LENGTH);
     printf("───────────────────────────────────────────────────\n");
     printf(" Gains  mult=%.2f  M=%.4f  Kp=%.3f  Kd=%.1f\n",
-           gains.gain_mult, gains.M_td, gains.Kp_td, gains.Kd_td);
+           attitude.gainMult(), attitude.Mtd(), attitude.Kptd(), attitude.Kdtd());
     printf(" Motor  J1=%+.0f mA  J2=%+.0f mA\n",
            joint_current1_mA, joint_current2_mA);
     printf("───────────────────────────────────────────────────\n");
@@ -424,19 +327,25 @@ int main(int argc, char **argv) {
     double initial_theta1_deg, initial_theta2_deg;
 
     nh.param<int>("loop_rate_hz", loop_rate_hz, 50);
-    nh.param<double>("gain_mult", gains.gain_mult, 1.5);
 
-    nh.param<double>("td_control/M_td", gains.M_td_base, 0.004);
-    nh.param<double>("td_control/Kp_td", gains.Kp_td_base, 0.04);
-    nh.param<double>("td_control/Kd_td", gains.Kd_td_base, 0.55);
+    // Gain params (loaded into locals, then handed to AttitudeController::setGains).
+    double gain_mult;
+    double M_td_base, Kp_td_base, Kd_td_base;
+    double kp_roll_base, ki_roll_base, kd_roll_base;
+    double kp_pitch_base, ki_pitch_base, kd_pitch_base;
+    nh.param<double>("gain_mult", gain_mult, 1.5);
 
-    nh.param<double>("pid_roll/kp", gains.kp_roll_base, 0.05);
-    nh.param<double>("pid_roll/ki", gains.ki_roll_base, 0.001);
-    nh.param<double>("pid_roll/kd", gains.kd_roll_base, 0.0005);
+    nh.param<double>("td_control/M_td", M_td_base, 0.004);
+    nh.param<double>("td_control/Kp_td", Kp_td_base, 0.04);
+    nh.param<double>("td_control/Kd_td", Kd_td_base, 0.55);
 
-    nh.param<double>("pid_pitch/kp", gains.kp_pitch_base, 0.05);
-    nh.param<double>("pid_pitch/ki", gains.ki_pitch_base, 0.001);
-    nh.param<double>("pid_pitch/kd", gains.kd_pitch_base, 0.0005);
+    nh.param<double>("pid_roll/kp", kp_roll_base, 0.05);
+    nh.param<double>("pid_roll/ki", ki_roll_base, 0.001);
+    nh.param<double>("pid_roll/kd", kd_roll_base, 0.0005);
+
+    nh.param<double>("pid_pitch/kp", kp_pitch_base, 0.05);
+    nh.param<double>("pid_pitch/ki", ki_pitch_base, 0.001);
+    nh.param<double>("pid_pitch/kd", kd_pitch_base, 0.0005);
 
     int    ik_num_iterations;
     double ik_learning_rate, ik_lambda_base;
@@ -457,7 +366,10 @@ int main(int argc, char **argv) {
     nh.param<double>("manual/x", manual_x, 0.0);
     nh.param<double>("manual/y", manual_y, 0.0);
 
-    gains.applyMultiplier();
+    attitude.setGains(M_td_base, Kp_td_base, Kd_td_base,
+                      kp_roll_base, ki_roll_base, kd_roll_base,
+                      kp_pitch_base, ki_pitch_base, kd_pitch_base,
+                      gain_mult);
 
     // Interactive mode selection (blocks until user picks 1/2/3/4)
     control_mode = selectModeInteractive();
@@ -470,8 +382,7 @@ int main(int argc, char **argv) {
     double current_x, current_y;
     forwardKinematics(theta1, theta2, current_x, current_y);
 
-    state.target_x = current_x;
-    state.target_y = current_y;
+    attitude.setTarget(current_x, current_y);
 
     // Dynamic reconfigure server (syncs YAML-loaded values, then enables runtime tuning)
     dynamic_reconfigure::Server<albc_control::ALBCControllerConfig> dr_server(nh);
@@ -480,16 +391,16 @@ int main(int argc, char **argv) {
         cfg.control_mode     = static_cast<int>(control_mode);
         cfg.target_roll      = 0.0;
         cfg.target_pitch     = 0.0;
-        cfg.gain_mult        = gains.gain_mult;
-        cfg.M_td             = gains.M_td_base;
-        cfg.Kp_td            = gains.Kp_td_base;
-        cfg.Kd_td            = gains.Kd_td_base;
-        cfg.kp_roll          = gains.kp_roll_base;
-        cfg.ki_roll          = gains.ki_roll_base;
-        cfg.kd_roll          = gains.kd_roll_base;
-        cfg.kp_pitch         = gains.kp_pitch_base;
-        cfg.ki_pitch         = gains.ki_pitch_base;
-        cfg.kd_pitch         = gains.kd_pitch_base;
+        cfg.gain_mult        = gain_mult;
+        cfg.M_td             = M_td_base;
+        cfg.Kp_td            = Kp_td_base;
+        cfg.Kd_td            = Kd_td_base;
+        cfg.kp_roll          = kp_roll_base;
+        cfg.ki_roll          = ki_roll_base;
+        cfg.kd_roll          = kd_roll_base;
+        cfg.kp_pitch         = kp_pitch_base;
+        cfg.ki_pitch         = ki_pitch_base;
+        cfg.kd_pitch         = kd_pitch_base;
         cfg.ik_learning_rate  = ik_learning_rate;
         cfg.ik_lambda_base    = ik_lambda_base;
         cfg.ik_num_iterations = ik_num_iterations;
@@ -526,31 +437,19 @@ int main(int argc, char **argv) {
 
         // Sync cached IMU attitude (ImuProcessor owns the source; updated in
         // the onImu callback during ros::spinOnce() at the loop bottom).
-        state.current_roll  = imu_proc.roll();
-        state.current_pitch = imu_proc.pitch();
-        state.current_yaw   = imu_proc.yaw();
+        double current_roll  = imu_proc.roll();
+        double current_pitch = imu_proc.pitch();
+        double current_yaw   = imu_proc.yaw();
 
         // Mode change: reset state for clean transition (prevents first-tick D-spike)
         static ControlMode prev_mode = control_mode;
         if (control_mode != prev_mode) {
             if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
                 forwardKinematics(theta1, theta2, current_x, current_y);
-                state.target_x = current_x;
-                state.target_y = current_y;
-                state.integral_roll  = 0.0;
-                state.integral_pitch = 0.0;
-
-                // Also reset derivative-related state so next tick derivative = 0
-                state.prev_error_roll      = state.error_roll;
-                state.prev_error_pitch     = state.error_pitch;
-                state.filtered_deriv_roll  = 0.0;
-                state.filtered_deriv_pitch = 0.0;
-                state.prev_roll   = state.current_roll;
-                state.prev_pitch  = state.current_pitch;
-                state.prev_yaw    = state.current_yaw;
-                state.filtered_ang_vel_roll  = 0.0;
-                state.filtered_ang_vel_pitch = 0.0;
-                state.filtered_ang_vel_yaw   = 0.0;
+                // Seed setpoint to current EE, zero integrals, clear derivative /
+                // angular-velocity memory so next tick produces derivative = 0.
+                attitude.resetForModeChange(current_x, current_y,
+                                            current_roll, current_pitch, current_yaw);
             }
             prev_mode = control_mode;
         }
@@ -558,22 +457,8 @@ int main(int argc, char **argv) {
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
         double target_length = 0.0;
 
-        // Angular velocity via numerical differentiation + LPF
-        double raw_ang_vel_roll  = (state.current_roll  - state.prev_roll)  / dt;
-        double raw_ang_vel_pitch = (state.current_pitch - state.prev_pitch) / dt;
-        double raw_ang_vel_yaw   = (state.current_yaw   - state.prev_yaw)  / dt;
-
-        state.angular_vel_roll  = DERIV_LPF_ALPHA * raw_ang_vel_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_ang_vel_roll;
-        state.angular_vel_pitch = DERIV_LPF_ALPHA * raw_ang_vel_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_ang_vel_pitch;
-        state.angular_vel_yaw   = DERIV_LPF_ALPHA * raw_ang_vel_yaw   + (1.0 - DERIV_LPF_ALPHA) * state.filtered_ang_vel_yaw;
-
-        state.filtered_ang_vel_roll  = state.angular_vel_roll;
-        state.filtered_ang_vel_pitch = state.angular_vel_pitch;
-        state.filtered_ang_vel_yaw   = state.angular_vel_yaw;
-
-        state.prev_roll  = state.current_roll;
-        state.prev_pitch = state.current_pitch;
-        state.prev_yaw   = state.current_yaw;
+        // Angular velocity via numerical differentiation + LPF (state display).
+        attitude.updateAngularVel(current_roll, current_pitch, current_yaw, dt);
 
         if (control_mode == ControlMode::MANUAL) {
             // Manual mode: bypass IMU feedback pipeline entirely
@@ -582,66 +467,26 @@ int main(int argc, char **argv) {
                 theta1 = DEG2RAD(manual_theta1_deg);
                 theta2 = DEG2RAD(manual_theta2_deg);
                 forwardKinematics(theta1, theta2, current_x, current_y);
-                state.target_x = current_x;
-                state.target_y = current_y;
+                attitude.setTarget(current_x, current_y);
             } else {
                 // Direct EE position — workspace saturation + IK only
-                state.target_x = manual_x;
-                state.target_y = manual_y;
-
-                ik.solveIK(state.target_x, state.target_y,
+                double tx = manual_x, ty = manual_y;
+                ik.solveIK(tx, ty,
                            theta1, theta2, current_x, current_y, target_length);
+                attitude.setTarget(tx, ty);   // store the saturated setpoint
             }
         } else {
             // Normal feedback modes: TDC / PID / FIXED
-
-            // Error
-            state.error_roll  = state.target_roll  - state.current_roll;
-            state.error_pitch = state.target_pitch - state.current_pitch;
-
-            // Integral accumulation (without dt multiplication — gains are tuned for 50Hz loop)
-            // If loop_rate_hz changes, ki gains must be rescaled proportionally
-            // Freeze integral when level — prevents windup while robot is at equilibrium
-            if (std::abs(state.current_roll) >= LEVEL_THRESHOLD) {
-                state.integral_roll  += state.error_roll;
-                state.integral_roll  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_roll));
-            }
-            if (std::abs(state.current_pitch) >= LEVEL_THRESHOLD) {
-                state.integral_pitch += state.error_pitch;
-                state.integral_pitch = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, state.integral_pitch));
-            }
-
-            // Derivative with 1st-order low-pass filter to attenuate sensor noise
-            double raw_deriv_roll  = (state.error_roll  - state.prev_error_roll)  / dt;
-            double raw_deriv_pitch = (state.error_pitch - state.prev_error_pitch) / dt;
-
-            // Asymmetric damping: zero D-term whenever error is decreasing (error × d_error/dt < 0).
-            // This means system is already converging toward setpoint — no additional D-correction needed.
-            // Applies regardless of speed (slow natural settling OR fast manual righting both handled).
-            // D-term resumes during error growth (e × ė > 0, needs damping) and overshoot (also e × ė > 0).
-            // Gate on RAW (before LPF) because LPF memory otherwise carries past spikes into future ticks.
-            if (state.error_roll * raw_deriv_roll < 0) {
-                raw_deriv_roll = 0.0;
-            }
-            if (state.error_pitch * raw_deriv_pitch < 0) {
-                raw_deriv_pitch = 0.0;
-            }
-
-            double derivative_roll  = DERIV_LPF_ALPHA * raw_deriv_roll  + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_roll;
-            double derivative_pitch = DERIV_LPF_ALPHA * raw_deriv_pitch + (1.0 - DERIV_LPF_ALPHA) * state.filtered_deriv_pitch;
-            state.filtered_deriv_roll  = derivative_roll;
-            state.filtered_deriv_pitch = derivative_pitch;
-
-            // Control law
-            computeControlOutput(dt, derivative_roll, derivative_pitch);
-
-            // Store previous
-            state.prev_error_roll  = state.error_roll;
-            state.prev_error_pitch = state.error_pitch;
+            // Error -> integral (freeze+clamp) -> derivative (gate+LPF) ->
+            // 4-mode control law -> prev save. All inside AttitudeController::update.
+            attitude.update(static_cast<int>(control_mode),
+                            current_roll, current_pitch, dt);
 
             // Radial workspace saturation + inverse kinematics + final FK
-            ik.solveIK(state.target_x, state.target_y,
+            double tx = attitude.targetX(), ty = attitude.targetY();
+            ik.solveIK(tx, ty,
                        theta1, theta2, current_x, current_y, target_length);
+            attitude.setTarget(tx, ty);   // store the saturated setpoint
         }
 
         // Publish joint angles
@@ -654,18 +499,19 @@ int main(int argc, char **argv) {
         // Publish status
         std_msgs::Float64MultiArray status_msg;
         status_msg.data = {
-            RAD2DEG(state.target_roll), RAD2DEG(state.current_roll),
-            RAD2DEG(state.target_pitch), RAD2DEG(state.current_pitch),
-            state.target_x, state.target_y,
+            RAD2DEG(attitude.targetRoll()), RAD2DEG(current_roll),
+            RAD2DEG(attitude.targetPitch()), RAD2DEG(current_pitch),
+            attitude.targetX(), attitude.targetY(),
             current_x, current_y,
-            state.angular_vel_roll, state.angular_vel_pitch, state.angular_vel_yaw
+            attitude.angularVelRoll(), attitude.angularVelPitch(), attitude.angularVelYaw()
         };
         status_pub.publish(status_msg);
 
         // Dashboard (~4 Hz)
         if (++dashboard_counter >= dashboard_interval) {
             dashboard_counter = 0;
-            printDashboard(theta1, theta2, current_x, current_y, target_length);
+            printDashboard(theta1, theta2, current_x, current_y, target_length,
+                           current_roll, current_pitch);
         }
 
         ros::spinOnce();
