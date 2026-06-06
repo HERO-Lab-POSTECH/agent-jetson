@@ -19,3 +19,6 @@ Thumbs.db
 
 # OMC orchestration artifacts
 .omc/
+
+# superpowers scratch (design/plan intermediate artifacts)
+.sp/
