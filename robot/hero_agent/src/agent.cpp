@@ -30,7 +30,6 @@
 #include "hero_agent/csv_logger.h"
 #include "hero_agent/rosbag_recorder.h"
 
-#include <iostream>
 #include <string>
 #include <cstdlib>
 #include <cmath>
@@ -58,10 +57,11 @@ CsvLogger      csv_logger;
 RosbagRecorder rosbag_recorder;
 
 // ==============================
-// Toggle debounce (500ms) — KeyTranslator-layer concern, kept as free global.
+// Toggle debounce — KeyTranslator-layer concern, kept as free global.
+// non-const so main can override from the debounce_sec param (default 0.5 = prior behavior).
 // ==============================
 static ros::Time last_toggle_time[256];
-static const double DEBOUNCE_SEC = 0.5;
+static double DEBOUNCE_SEC = 0.5;
 
 static bool debounce_ok(int ch)
 {
@@ -82,7 +82,8 @@ std_msgs::Int8 command_msg;
 
 // ==============================
 // Teleop (in-process — replaces the old translated-key topic round-trip)
-// xy_step/z_step match original hardcoded teleop defaults (0.05 / 0.01)
+// Constructed with the prior hardcoded defaults (0.05 / 0.01); main re-applies
+// the teleop/xy_step and teleop/z_step params via setSteps() after loading them.
 // ==============================
 TeleopController g_teleop(0.05, 0.01);
 std::atomic<bool> g_target_dirty(false);
@@ -143,15 +144,41 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 // ==============================
 int main(int argc, char** argv)
 {
-    std::string base_traj_dir = "/home/nvidia/catkin_ws/agent_results/trajectory";
-    std::string base_rosbag_dir = "/home/nvidia/catkin_ws/agent_results/rosbags";
-    ensure_directory(base_traj_dir);
-    ensure_directory(base_rosbag_dir);
-
     ros::init(argc, argv, "agent", ros::init_options::NoSigintHandler);
     ros::NodeHandle nh;
     ros::AsyncSpinner spinner(2);
     spinner.start();
+
+    // ==============================
+    // Config params — loaded from node-private namespace ("~") because the launch
+    // file loads config/agent.yaml into the node's private ns. global nh stays for
+    // subscribe/advertise (topic names are absolute, so unaffected). Defaults match
+    // the prior hardcoded values, preserving behavior when no YAML is present.
+    // ==============================
+    ros::NodeHandle pnh("~");
+    double xy_step, z_step;
+    int loop_rate_hz, csv_rate_hz;
+    double debounce_sec, log_period;
+    std::string base_results;
+    pnh.param<double>("teleop/xy_step", xy_step, 0.05);
+    pnh.param<double>("teleop/z_step", z_step, 0.01);
+    pnh.param<int>("loop_rate_hz", loop_rate_hz, 100);
+    pnh.param<int>("csv_rate_hz", csv_rate_hz, 50);
+    pnh.param<double>("debounce_sec", debounce_sec, 0.5);
+    pnh.param<double>("log_period", log_period, 0.5);
+    pnh.param<std::string>("results_dir", base_results, std::string("/home/nvidia/catkin_ws/agent_results"));
+    (void)log_period;  // monitor render does not throttle yet; param reserved for future use
+
+    g_teleop.setSteps(xy_step, z_step);
+    DEBOUNCE_SEC = debounce_sec;
+    // CSV gating divisor: prior code wrote every 2nd 100Hz iter (100/50). Generalize.
+    int csv_div = (csv_rate_hz > 0) ? (loop_rate_hz / csv_rate_hz) : 1;
+    if (csv_div < 1) csv_div = 1;
+
+    std::string base_traj_dir = base_results + "/trajectory";
+    std::string base_rosbag_dir = base_results + "/rosbags";
+    ensure_directory(base_traj_dir);
+    ensure_directory(base_rosbag_dir);
 
     // Load IMU yaw offset (same parameter as albc_controller)
     double imu_yaw_offset_deg;
@@ -175,7 +202,7 @@ int main(int argc, char** argv)
     pub_command = nh.advertise<std_msgs::Int8>(topics::COMMAND, 100);
     pub_target = nh.advertise<hero_msgs::hero_agent_dvl>(topics::DVL, 100);
 
-    ros::Rate loop_rate(100);
+    ros::Rate loop_rate(loop_rate_hz);
     int csv_counter = 0;
     int prev_record_flag = 0;
 
@@ -215,8 +242,8 @@ int main(int argc, char** argv)
             pub_target.publish(msg_target);
         }
 
-        // Write CSV at 50Hz (every 2nd iteration of 100Hz loop)
-        if (++csv_counter >= 2) {
+        // Write CSV at csv_rate_hz (every csv_div-th loop iter; default 100/50 = 2)
+        if (++csv_counter >= csv_div) {
             csv_logger.writeLine(state_monitor);
             csv_counter = 0;
         }

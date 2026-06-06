@@ -23,7 +23,7 @@
 
   <!-- Agent (key translation + teleop + monitor + rosbag) -->
   <node pkg="hero_agent" name="agent" type="agent" output="screen">
-    <rosparam file="$(find hero_agent)/config/agent_command.yaml" command="load" />
+    <rosparam file="$(find hero_agent)/config/agent.yaml" command="load" />
   </node>
 
   <!-- Teleop (needs terminal window for keyboard input) -->

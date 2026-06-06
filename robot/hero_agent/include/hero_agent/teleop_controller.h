@@ -24,6 +24,10 @@ public:
         }
     }
 
+    // step 크기 재설정 (main에서 param 로드 후 전역 인스턴스 갱신용).
+    // 생성자 인자가 const라 재설정이 불가하므로 setter로 노출.
+    void setSteps(double xy, double z) { xy_step_ = xy; z_step_ = z; }
+
     double x() const { return x_; }
     double y() const { return y_; }
     double z() const { return z_; }

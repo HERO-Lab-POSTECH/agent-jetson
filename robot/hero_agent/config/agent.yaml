@@ -1,0 +1,21 @@
+# agent node parameters
+
+# Teleop keyboard step sizes
+teleop:
+  xy_step: 0.05
+  z_step: 0.01
+
+# Loop rate (Hz)
+loop_rate_hz: 100
+
+# CSV logging rate (Hz) — must divide loop_rate_hz
+csv_rate_hz: 50
+
+# Toggle debounce gate (seconds)
+debounce_sec: 0.5
+
+# Logging output period (ROS_INFO_THROTTLE seconds)
+log_period: 0.5
+
+# Results output base directory (trajectory/ and rosbags/ created under it)
+results_dir: /home/nvidia/catkin_ws/agent_results
