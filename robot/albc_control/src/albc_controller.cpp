@@ -9,63 +9,24 @@
 #include "albc_control/inverse_kinematics.h"
 #include "albc_control/imu_processor.h"
 #include "albc_control/attitude_controller.h"
+#include "albc_control/mode_manager.h"
+#include "albc_control/dashboard.h"
 
 #include <dynamic_reconfigure/server.h>
 #include <albc_control/ALBCControllerConfig.h>
 
 #include <cstdlib>
-#include <termios.h>
-#include <unistd.h>
 
 using namespace albc;
 
 // ==============================
-// Terminal keyboard (raw mode for key input)
+// Control Mode / keyboard
 // ==============================
-
-static struct termios initial_term_settings;
-
-static void initKeyboard() {
-    // Use already-saved initial_term_settings (saved in selectModeInteractive)
-    struct termios raw = initial_term_settings;
-    raw.c_lflag &= ~(ICANON | ECHO);
-    raw.c_cc[VMIN] = 0;   // non-blocking
-    raw.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-}
-
-static void closeKeyboard() {
-    tcsetattr(STDIN_FILENO, TCSANOW, &initial_term_settings);
-}
-
-static int readKey() {
-    char ch;
-    if (read(STDIN_FILENO, &ch, 1) == 1)
-        return ch;
-    return -1;
-}
-
-// ==============================
-// Control Mode
-// ==============================
-
-enum class ControlMode : int { TDC = 1, PID = 2, FIXED = 3, MANUAL = 4 };
-// TDC: Simplified Time-Delay Control (currently incremental PD with buoyancy compensation)
-// PID: Standard PID with separate roll/pitch gains
-// FIXED: Fixed end-effector position FK(90°,90°) for testing
-// MANUAL: Direct joint angle or EE position control for calibration/testing
-
-enum class ManualSubMode { JOINT, POSITION };
-
-static const char* controlModeName(ControlMode m) {
-    switch (m) {
-        case ControlMode::TDC:    return "TDC";
-        case ControlMode::PID:    return "PID";
-        case ControlMode::FIXED:  return "FIXED";
-        case ControlMode::MANUAL: return "MANUAL";
-        default:                  return "???";
-    }
-}
+//
+// ControlMode / ManualSubMode enums, controlModeName(), the raw-terminal
+// keyboard helpers (initKeyboard/closeKeyboard/readKey), the blocking
+// selectModeInteractive(), cycleMode(), handleRuntimeKey() and the
+// mode-change detection now live in ModeManager (mode_manager.h).
 
 // ==============================
 // Constants
@@ -74,8 +35,7 @@ static const char* controlModeName(ControlMode m) {
 // INTEGRAL_MAX / COS_EPSILON / COMMON_FACTOR_MAX / PID_BASE_X / PID_BASE_Y /
 // DERIV_LPF_ALPHA / LEVEL_THRESHOLD now live inside AttitudeController (via the
 // control_law.h / feedback_filters.h oracle constants). See attitude_controller.h.
-static constexpr double MANUAL_ANGLE_STEP     = 5.0;   // deg per keypress
-static constexpr double MANUAL_POS_STEP       = 0.01;  // m per keypress
+// MANUAL_ANGLE_STEP / MANUAL_POS_STEP now live inside ModeManager.
 
 // ==============================
 // State Structures
@@ -89,17 +49,12 @@ static constexpr double MANUAL_POS_STEP       = 0.01;  // m per keypress
 // Globals
 // ==============================
 
-static ControlMode control_mode = ControlMode::TDC;
+static ModeManager mode_mgr;  // control-mode FSM + key handling (absorbs control_mode/manual_* + key funcs)
 static AttitudeController attitude;  // feedback pipeline + 4-mode control law (absorbs ControlState/ControlGains/computeControlOutput)
 static InverseKinematics ik;  // DLS IK solver (absorbs the former IKConfig)
 static ImuProcessor imu_proc;  // IMU callback wrapper (owns yaw offset + cached RPY)
 static float joint_current1_mA = 0.0f;
 static float joint_current2_mA = 0.0f;
-
-// Manual mode state
-static ManualSubMode manual_submode = ManualSubMode::JOINT;
-static double manual_theta1_deg = 90.0, manual_theta2_deg = 90.0;
-static double manual_x = 0.0, manual_y = 0.0;
 
 // ==============================
 // Inverse Kinematics (Damped Least Squares)
@@ -117,7 +72,7 @@ static double manual_x = 0.0, manual_y = 0.0;
 // synced from imu_proc at the top of each control-loop iteration.
 
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
-    control_mode = static_cast<ControlMode>(config.control_mode);
+    mode_mgr.setMode(static_cast<ControlMode>(config.control_mode));
 
     attitude.setTargets(DEG2RAD(config.target_roll), DEG2RAD(config.target_pitch));
 
@@ -130,16 +85,14 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
 
     imu_proc.setOffset(DEG2RAD(config.imu_yaw_offset));
 
-    manual_theta1_deg = config.manual_theta1;
-    manual_theta2_deg = config.manual_theta2;
-    manual_x          = config.manual_x;
-    manual_y          = config.manual_y;
+    mode_mgr.setManualState(config.manual_theta1, config.manual_theta2,
+                            config.manual_x, config.manual_y);
 
     // Reset integrals on gain change (anti-windup)
     attitude.resetIntegrals();
 
     ROS_INFO("Reconfigure: mode=%s mult=%.2f M=%.4f Kp=%.3f Kd=%.1f",
-             controlModeName(control_mode), attitude.gainMult(),
+             controlModeName(mode_mgr.mode()), attitude.gainMult(),
              attitude.Mtd(), attitude.Kptd(), attitude.Kdtd());
 }
 
@@ -151,168 +104,18 @@ void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
 }
 
 // ==============================
-// Mode Selection (blocking, before control loop)
-// ==============================
-
-static ControlMode selectModeInteractive() {
-    // Save original terminal settings before any modification
-    tcgetattr(STDIN_FILENO, &initial_term_settings);
-
-    printf("\033[2J\033[H");
-    printf("═══════════════════════════════════════════════════\n");
-    printf("        ALBC Controller - Mode Selection\n");
-    printf("═══════════════════════════════════════════════════\n");
-    printf("  [1] TDC    - Time-Delay Control\n");
-    printf("  [2] PID    - PID Control\n");
-    printf("  [3] FIXED  - Fixed Position (test)\n");
-    printf("  [4] MANUAL - Manual Position\n");
-    printf("═══════════════════════════════════════════════════\n");
-    printf(" Select mode (1/2/3/4): ");
-    fflush(stdout);
-
-    // Blocking read for mode selection
-    struct termios blocking = initial_term_settings;
-    blocking.c_lflag &= ~(ICANON | ECHO);
-    blocking.c_cc[VMIN] = 1;   // block until 1 char
-    blocking.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &blocking);
-
-    ControlMode selected = ControlMode::TDC;
-    while (true) {
-        char ch;
-        if (read(STDIN_FILENO, &ch, 1) == 1) {
-            if (ch >= '1' && ch <= '4') {
-                selected = static_cast<ControlMode>(ch - '0');
-                printf("%c\n\n Starting [%s] mode...\n", ch, controlModeName(selected));
-                fflush(stdout);
-                usleep(500000);  // brief pause to show selection
-                break;
-            }
-        }
-    }
-
-    // Switch to non-blocking for runtime
-    initKeyboard();
-    return selected;
-}
-
-// ==============================
-// Runtime key handling
-// ==============================
-
-static void cycleMode() {
-    int m = static_cast<int>(control_mode);
-    m = (m % 4) + 1;  // 1→2→3→4→1
-    control_mode = static_cast<ControlMode>(m);
-}
-
-static void handleRuntimeKey(int ch) {
-    switch (ch) {
-    case '=':   // Cycle mode: TDC→PID→FIXED→TDC
-        cycleMode();
-        break;
-    case '1':   // Direct select: TDC
-        control_mode = ControlMode::TDC;
-        break;
-    case '2':   // Direct select: PID
-        control_mode = ControlMode::PID;
-        break;
-    case '3':   // Direct select: FIXED
-        control_mode = ControlMode::FIXED;
-        break;
-    case '4':   // Direct select: MANUAL
-        control_mode = ControlMode::MANUAL;
-        break;
-    // Manual mode keys (only active in MANUAL mode)
-    case 'w':
-        if (control_mode == ControlMode::MANUAL) {
-            if (manual_submode == ManualSubMode::JOINT)
-                manual_theta1_deg += MANUAL_ANGLE_STEP;
-            else
-                manual_y += MANUAL_POS_STEP;
-        }
-        break;
-    case 's':
-        if (control_mode == ControlMode::MANUAL) {
-            if (manual_submode == ManualSubMode::JOINT)
-                manual_theta1_deg -= MANUAL_ANGLE_STEP;
-            else
-                manual_y -= MANUAL_POS_STEP;
-        }
-        break;
-    case 'a':
-        if (control_mode == ControlMode::MANUAL) {
-            if (manual_submode == ManualSubMode::JOINT)
-                manual_theta2_deg -= MANUAL_ANGLE_STEP;
-            else
-                manual_x -= MANUAL_POS_STEP;
-        }
-        break;
-    case 'd':
-        if (control_mode == ControlMode::MANUAL) {
-            if (manual_submode == ManualSubMode::JOINT)
-                manual_theta2_deg += MANUAL_ANGLE_STEP;
-            else
-                manual_x += MANUAL_POS_STEP;
-        }
-        break;
-    case 'm':
-        if (control_mode == ControlMode::MANUAL) {
-            manual_submode = (manual_submode == ManualSubMode::JOINT)
-                             ? ManualSubMode::POSITION : ManualSubMode::JOINT;
-        }
-        break;
-    default:
-        break;
-    }
-}
-
-// ==============================
-// Control Law
+// Mode Selection / runtime keys / Control Law / Dashboard
 // ==============================
 //
-// The 4-mode control-law switch (former computeControlOutput) now lives inside
-// AttitudeController::update -> computeControlOutputOracle (control_law.h).
+// selectModeInteractive(), cycleMode(), handleRuntimeKey() now live in
+// ModeManager (mode_manager.h). The 4-mode control-law switch (former
+// computeControlOutput) lives inside AttitudeController::update ->
+// computeControlOutputOracle (control_law.h). printDashboard() now lives in
+// Dashboard::render (dashboard.h).
 
-// ==============================
-// Dashboard
-// ==============================
-
-void printDashboard(double theta1, double theta2,
-                    double current_x, double current_y,
-                    double target_length,
-                    double current_roll, double current_pitch) {
-    printf("\033[2J\033[H");
-    printf("═══════════════════════════════════════════════════\n");
-    if (control_mode == ControlMode::MANUAL) {
-        const char* sub = (manual_submode == ManualSubMode::JOINT) ? "JOINT" : "POSITION";
-        printf("          ALBC Controller [MANUAL:%s]\n", sub);
-    } else {
-        printf("            ALBC Controller [%s]\n", controlModeName(control_mode));
-    }
-    printf("═══════════════════════════════════════════════════\n");
-    printf(" Roll  %+7.2f / %+7.2f deg  (err %+.2f)\n",
-           RAD2DEG(current_roll), RAD2DEG(attitude.targetRoll()), RAD2DEG(attitude.errorRoll()));
-    printf(" Pitch %+7.2f / %+7.2f deg  (err %+.2f)\n",
-           RAD2DEG(current_pitch), RAD2DEG(attitude.targetPitch()), RAD2DEG(attitude.errorPitch()));
-    printf("───────────────────────────────────────────────────\n");
-    printf(" Target (%+.4f, %+.4f)   FK (%+.4f, %+.4f)\n",
-           attitude.targetX(), attitude.targetY(), current_x, current_y);
-    printf(" Joints J1=%.1f  J2=%.1f deg   Len=%.4f/%.4f\n",
-           RAD2DEG(theta1), RAD2DEG(theta2), target_length, SAFE_ARM_LENGTH);
-    printf("───────────────────────────────────────────────────\n");
-    printf(" Gains  mult=%.2f  M=%.4f  Kp=%.3f  Kd=%.1f\n",
-           attitude.gainMult(), attitude.Mtd(), attitude.Kptd(), attitude.Kdtd());
-    printf(" Motor  J1=%+.0f mA  J2=%+.0f mA\n",
-           joint_current1_mA, joint_current2_mA);
-    printf("───────────────────────────────────────────────────\n");
-    if (control_mode == ControlMode::MANUAL)
-        printf(" Keys  ==Cycle  1-4=Mode  w/s/a/d=Adjust  m=SubMode\n");
-    else
-        printf(" Keys  ==Cycle  1=TDC  2=PID  3=FIXED  4=MANUAL\n");
-    printf("═══════════════════════════════════════════════════\n");
-    fflush(stdout);
-}
+// atexit() needs a free function; forward to mode_mgr.closeKeyboard() so the
+// terminal is restored on any exit path (former atexit(closeKeyboard), :376).
+static void restoreKeyboardAtExit() { mode_mgr.closeKeyboard(); }
 
 // ==============================
 // Main
@@ -361,10 +164,12 @@ int main(int argc, char **argv) {
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 90.0);
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 90.0);
 
+    double manual_theta1_deg, manual_theta2_deg, manual_x, manual_y;
     nh.param<double>("manual/theta1", manual_theta1_deg, 90.0);
     nh.param<double>("manual/theta2", manual_theta2_deg, 90.0);
     nh.param<double>("manual/x", manual_x, 0.0);
     nh.param<double>("manual/y", manual_y, 0.0);
+    mode_mgr.setManualState(manual_theta1_deg, manual_theta2_deg, manual_x, manual_y);
 
     attitude.setGains(M_td_base, Kp_td_base, Kd_td_base,
                       kp_roll_base, ki_roll_base, kd_roll_base,
@@ -372,8 +177,8 @@ int main(int argc, char **argv) {
                       gain_mult);
 
     // Interactive mode selection (blocks until user picks 1/2/3/4)
-    control_mode = selectModeInteractive();
-    atexit(closeKeyboard);  // restore terminal on any exit path
+    mode_mgr.selectModeInteractive();
+    atexit(restoreKeyboardAtExit);  // restore terminal on any exit path
 
     // Initial joint angles and end-effector position
     double theta1 = DEG2RAD(initial_theta1_deg);
@@ -388,7 +193,7 @@ int main(int argc, char **argv) {
     dynamic_reconfigure::Server<albc_control::ALBCControllerConfig> dr_server(nh);
     {
         albc_control::ALBCControllerConfig cfg;
-        cfg.control_mode     = static_cast<int>(control_mode);
+        cfg.control_mode     = static_cast<int>(mode_mgr.mode());
         cfg.target_roll      = 0.0;
         cfg.target_pitch     = 0.0;
         cfg.gain_mult        = gain_mult;
@@ -430,10 +235,15 @@ int main(int argc, char **argv) {
     int dashboard_counter = 0;
     const int dashboard_interval = loop_rate_hz / 4;  // ~4 Hz
 
+    // Latch the mode-change baseline to the selected/reconfigured mode so the
+    // first tick never fires a reset (former `static ControlMode prev_mode =
+    // control_mode;` semantics).
+    mode_mgr.syncPrevMode();
+
     while (ros::ok()) {
         // Runtime key input (non-blocking)
-        int key = readKey();
-        if (key >= 0) handleRuntimeKey(key);
+        int key = mode_mgr.readKey();
+        if (key >= 0) mode_mgr.handleRuntimeKey(key);
 
         // Sync cached IMU attitude (ImuProcessor owns the source; updated in
         // the onImu callback during ros::spinOnce() at the loop bottom).
@@ -441,17 +251,15 @@ int main(int argc, char **argv) {
         double current_pitch = imu_proc.pitch();
         double current_yaw   = imu_proc.yaw();
 
-        // Mode change: reset state for clean transition (prevents first-tick D-spike)
-        static ControlMode prev_mode = control_mode;
-        if (control_mode != prev_mode) {
-            if (control_mode == ControlMode::TDC || control_mode == ControlMode::PID) {
-                forwardKinematics(theta1, theta2, current_x, current_y);
-                // Seed setpoint to current EE, zero integrals, clear derivative /
-                // angular-velocity memory so next tick produces derivative = 0.
-                attitude.resetForModeChange(current_x, current_y,
-                                            current_roll, current_pitch, current_yaw);
-            }
-            prev_mode = control_mode;
+        // Mode change: reset state for clean transition (prevents first-tick D-spike).
+        // detectModeChange() returns true only on a transition into TDC/PID
+        // (and latches prev_mode on every change, as the source did).
+        if (mode_mgr.detectModeChange()) {
+            forwardKinematics(theta1, theta2, current_x, current_y);
+            // Seed setpoint to current EE, zero integrals, clear derivative /
+            // angular-velocity memory so next tick produces derivative = 0.
+            attitude.resetForModeChange(current_x, current_y,
+                                        current_roll, current_pitch, current_yaw);
         }
 
         double dt = 1.0 / static_cast<double>(loop_rate_hz);
@@ -460,17 +268,17 @@ int main(int argc, char **argv) {
         // Angular velocity via numerical differentiation + LPF (state display).
         attitude.updateAngularVel(current_roll, current_pitch, current_yaw, dt);
 
-        if (control_mode == ControlMode::MANUAL) {
+        if (mode_mgr.mode() == ControlMode::MANUAL) {
             // Manual mode: bypass IMU feedback pipeline entirely
-            if (manual_submode == ManualSubMode::JOINT) {
+            if (mode_mgr.manualSubmode() == ManualSubMode::JOINT) {
                 // Direct joint angle assignment — no IK needed
-                theta1 = DEG2RAD(manual_theta1_deg);
-                theta2 = DEG2RAD(manual_theta2_deg);
+                theta1 = DEG2RAD(mode_mgr.manualTheta1());
+                theta2 = DEG2RAD(mode_mgr.manualTheta2());
                 forwardKinematics(theta1, theta2, current_x, current_y);
                 attitude.setTarget(current_x, current_y);
             } else {
                 // Direct EE position — workspace saturation + IK only
-                double tx = manual_x, ty = manual_y;
+                double tx = mode_mgr.manualX(), ty = mode_mgr.manualY();
                 ik.solveIK(tx, ty,
                            theta1, theta2, current_x, current_y, target_length);
                 attitude.setTarget(tx, ty);   // store the saturated setpoint
@@ -479,7 +287,7 @@ int main(int argc, char **argv) {
             // Normal feedback modes: TDC / PID / FIXED
             // Error -> integral (freeze+clamp) -> derivative (gate+LPF) ->
             // 4-mode control law -> prev save. All inside AttitudeController::update.
-            attitude.update(static_cast<int>(control_mode),
+            attitude.update(static_cast<int>(mode_mgr.mode()),
                             current_roll, current_pitch, dt);
 
             // Radial workspace saturation + inverse kinematics + final FK
@@ -510,14 +318,16 @@ int main(int argc, char **argv) {
         // Dashboard (~4 Hz)
         if (++dashboard_counter >= dashboard_interval) {
             dashboard_counter = 0;
-            printDashboard(theta1, theta2, current_x, current_y, target_length,
-                           current_roll, current_pitch);
+            Dashboard::render(mode_mgr, attitude,
+                              theta1, theta2, current_x, current_y, target_length,
+                              current_roll, current_pitch,
+                              joint_current1_mA, joint_current2_mA);
         }
 
         ros::spinOnce();
         loop_rate.sleep();
     }
 
-    closeKeyboard();
+    mode_mgr.closeKeyboard();
     return 0;
 }
