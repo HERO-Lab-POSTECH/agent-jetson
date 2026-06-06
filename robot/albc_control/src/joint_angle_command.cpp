@@ -3,32 +3,9 @@
 #include "std_msgs/Float32MultiArray.h"
 #include "dynamixel_sdk/dynamixel_sdk.h"
 
+#include "albc_control/dynamixel_config.h"
+
 #include <cmath>
-
-// Dynamixel configuration
-static constexpr uint8_t  JOINT1_ID   = 11;
-static constexpr uint8_t  JOINT2_ID   = 12;
-static constexpr int      BAUDRATE    = 57600;
-static const char*        SERIAL_PORT = "/dev/ttyDynamixel";
-static constexpr float    PROTOCOL    = 2.0;
-
-// Dynamixel register addresses
-static constexpr uint16_t ADDR_TORQUE_ENABLE       = 64;
-static constexpr uint16_t ADDR_POSITION_D_GAIN     = 80;
-static constexpr uint16_t ADDR_POSITION_I_GAIN     = 82;
-static constexpr uint16_t ADDR_POSITION_P_GAIN     = 84;
-static constexpr uint16_t ADDR_PROFILE_ACCELERATION = 108;
-static constexpr uint16_t ADDR_PROFILE_VELOCITY     = 112;
-static constexpr uint16_t ADDR_GOAL_POSITION       = 116;
-static constexpr uint16_t ADDR_PRESENT_CURRENT      = 126;
-static constexpr uint16_t ADDR_PRESENT_POSITION     = 132;
-
-// Motion profile parameters
-static constexpr uint32_t OPERATING_VELOCITY    = 100;  // ~22.9 RPM (~137 deg/s), post-startup
-static constexpr uint32_t PROFILE_ACCELERATION  = 40;   // ~8,583 rev/min², smooth accel/decel
-
-static constexpr double RAD_TO_DXL(double x) { return x / M_PI * 2048.0; }
-static inline double DXL_TO_RAD(int32_t x) { return static_cast<double>(x) / 2048.0 * M_PI; }
 
 // ==============================
 // Joint State
@@ -55,11 +32,27 @@ static int  startup_counter = 0;
 
 void enableTorque(uint8_t id) {
     uint8_t error = 0;
-    packet_handler->write1ByteTxRx(port_handler, id, ADDR_TORQUE_ENABLE, 1, &error);
-    packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_D_GAIN, 40, &error);
-    packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_I_GAIN, 1, &error);
-    packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_P_GAIN, 800, &error);
-    packet_handler->write4ByteTxRx(port_handler, id, ADDR_PROFILE_ACCELERATION, PROFILE_ACCELERATION, &error);
+    int result;
+    result = packet_handler->write1ByteTxRx(port_handler, id, ADDR_TORQUE_ENABLE, 1, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_ERROR_THROTTLE(1.0, "Failed to enable torque for Dynamixel ID %d (err=%d)", id, result);
+    }
+    result = packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_D_GAIN, ADDR_POSITION_D_GAIN_VALUE, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_WARN_THROTTLE(1.0, "Failed to set position D gain for Dynamixel ID %d (err=%d)", id, result);
+    }
+    result = packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_I_GAIN, ADDR_POSITION_I_GAIN_VALUE, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_WARN_THROTTLE(1.0, "Failed to set position I gain for Dynamixel ID %d (err=%d)", id, result);
+    }
+    result = packet_handler->write2ByteTxRx(port_handler, id, ADDR_POSITION_P_GAIN, ADDR_POSITION_P_GAIN_VALUE, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_WARN_THROTTLE(1.0, "Failed to set position P gain for Dynamixel ID %d (err=%d)", id, result);
+    }
+    result = packet_handler->write4ByteTxRx(port_handler, id, ADDR_PROFILE_ACCELERATION, PROFILE_ACCELERATION, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_WARN_THROTTLE(1.0, "Failed to set profile acceleration for Dynamixel ID %d (err=%d)", id, result);
+    }
 }
 
 void setPosition(uint8_t id, int32_t position) {
@@ -72,7 +65,10 @@ void setPosition(uint8_t id, int32_t position) {
 
 void setProfileVelocity(uint8_t id, uint32_t velocity) {
     uint8_t error = 0;
-    packet_handler->write4ByteTxRx(port_handler, id, ADDR_PROFILE_VELOCITY, velocity, &error);
+    int result = packet_handler->write4ByteTxRx(port_handler, id, ADDR_PROFILE_VELOCITY, velocity, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_WARN_THROTTLE(1.0, "Failed to set profile velocity %u for Dynamixel ID %d (err=%d)", velocity, id, result);
+    }
 }
 
 int16_t readCurrent(uint8_t id) {
@@ -88,7 +84,10 @@ int16_t readCurrent(uint8_t id) {
 int32_t readPosition(uint8_t id) {
     uint8_t error = 0;
     uint32_t raw = 0;
-    packet_handler->read4ByteTxRx(port_handler, id, ADDR_PRESENT_POSITION, &raw, &error);
+    int result = packet_handler->read4ByteTxRx(port_handler, id, ADDR_PRESENT_POSITION, &raw, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_ERROR_THROTTLE(1.0, "Failed to read position for Dynamixel ID %d (err=%d)", id, result);
+    }
     return static_cast<int32_t>(raw);
 }
 
@@ -165,9 +164,7 @@ int main(int argc, char **argv) {
     if (joint2.prev_commanded < 0.0) joint2.prev_commanded += 2.0 * M_PI;
 
     // Slow startup: limit servo speed until first command + ramp duration
-    // Profile Velocity unit = 0.229 RPM. Value 20 ≈ 4.6 RPM → ~2s for 45° move
-    static constexpr uint32_t STARTUP_VELOCITY = 20;
-    static constexpr int STARTUP_TICKS = 50;  // 5 seconds at 10 Hz (accounts for up to ~130° move)
+    // (STARTUP_VELOCITY / STARTUP_TICKS defined in dynamixel_config.h)
     setProfileVelocity(JOINT1_ID, STARTUP_VELOCITY);
     setProfileVelocity(JOINT2_ID, STARTUP_VELOCITY);
 
@@ -195,8 +192,8 @@ int main(int argc, char **argv) {
                 startup_counter++;
             }
         }
-        float current1_mA = static_cast<float>(readCurrent(JOINT1_ID)) * 2.69f;
-        float current2_mA = static_cast<float>(readCurrent(JOINT2_ID)) * 2.69f;
+        float current1_mA = static_cast<float>(readCurrent(JOINT1_ID)) * CURRENT_TO_MA;
+        float current2_mA = static_cast<float>(readCurrent(JOINT2_ID)) * CURRENT_TO_MA;
 
         std_msgs::Float32MultiArray current_msg;
         current_msg.data = {current1_mA, current2_mA};
