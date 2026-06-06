@@ -62,5 +62,6 @@ tests/characterization/run.sh        # 전부 빌드+실행, 하나라도 실패
 - **Dynamixel I/O** (`joint_angle_command.cpp`): 모터 통신·각도 변환은 하드웨어 의존이라
   ROS-free 박제 불가. `RAD_TO_DXL`/`DXL_TO_RAD`/`updateJoint` unwrap 로직은 향후 필요 시 추가.
 - **dynamic_reconfigure 콜백**: 런타임 게인 주입은 ROS 의존 → oracle 은 게인을 인자로 받음.
-- **dead `Kd_td` 게인**: TDC 식에서 D-term 제거됨(현재 미사용)이나 게인 구조체엔 잔존.
-  oracle 은 현재대로 `Kd_td` 미사용을 박제 (제거는 Phase 2 진단·사용자 확인 후).
+- **dead `Kd_td` 게인**: TDC 식에서 D-term 은 df46b09 에서 제거됨(미사용). oracle(`control_law.h`)
+  은 `Kd_td` 를 입력으로 받지 않으므로 박제에 영향 0. Phase 4 Task 7 에서 게인 구조체·yaml·cfg
+  에 잔존하던 `Kd_td` 도 거동 무변으로 제거 (재도입 필요 시 git 이력 참조).
