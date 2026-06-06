@@ -6,6 +6,7 @@
 #include <std_msgs/Float32MultiArray.h>
 #include "hero_msgs/hero_agent_sensor.h"
 #include "albc_control/albc_kinematics.h"
+#include "albc_control/inverse_kinematics.h"
 
 #include <dynamic_reconfigure/server.h>
 #include <albc_control/ALBCControllerConfig.h>
@@ -71,14 +72,10 @@ static const char* controlModeName(ControlMode m) {
 static constexpr double INTEGRAL_MAX         = 100.0;
 static constexpr double COS_EPSILON          = 1e-6;
 static constexpr double COMMON_FACTOR_MAX    = 10.0;
-static constexpr double DET_EPSILON          = 1e-6;
 static constexpr double PID_BASE_X           = -L2;   // FK(90°,90°).x = -0.233
 static constexpr double PID_BASE_Y           =  L1;   // FK(90°,90°).y =  0.233
 static constexpr double DERIV_LPF_ALPHA      = 0.2;   // 1st-order LPF for derivative (lower = smoother)
 static constexpr double LEVEL_THRESHOLD      = 0.01745; // rad (1 deg). If |current roll/pitch| < this, treat as level — freeze target as equilibrium point (prevents D-kick from external disturbances like manual righting)
-static constexpr double UPDATE_ANGLE_EPSILON = 1e-4;
-static constexpr double IK_DELTA_THRESHOLD  = 0.01;
-static constexpr int    IK_REDUCED_ITERATIONS = 500;
 static constexpr double MANUAL_ANGLE_STEP     = 5.0;   // deg per keypress
 static constexpr double MANUAL_POS_STEP       = 0.01;  // m per keypress
 
@@ -125,12 +122,6 @@ struct ControlState {
     double filtered_ang_vel_roll, filtered_ang_vel_pitch, filtered_ang_vel_yaw;
 };
 
-struct IKConfig {
-    double learning_rate;
-    double lambda_base;
-    int num_iterations;
-};
-
 // ==============================
 // Globals
 // ==============================
@@ -138,7 +129,7 @@ struct IKConfig {
 static ControlMode control_mode = ControlMode::TDC;
 static ControlGains gains = {};
 static ControlState state = {};
-static IKConfig ik_cfg = {};
+static InverseKinematics ik;  // DLS IK solver (absorbs the former IKConfig)
 static double imu_yaw_offset_rad = DEG2RAD(45.0);  // IMU mounting yaw offset [rad]
 static float joint_current1_mA = 0.0f;
 static float joint_current2_mA = 0.0f;
@@ -151,52 +142,9 @@ static double manual_x = 0.0, manual_y = 0.0;
 // ==============================
 // Inverse Kinematics (Damped Least Squares)
 // ==============================
-
-void updateJointAngles(double& theta1, double& theta2, double delta_x, double delta_y) {
-    double lambda = ik_cfg.lambda_base * (
-        1.0 - std::sqrt(std::abs(L1 * L2 * std::sin(theta2))) /
-              std::sqrt(std::abs(L1 * L2))
-    );
-
-    double j11, j12, j21, j22;
-    calculateJacobian(theta1, theta2, j11, j12, j21, j22);
-
-    // J^T * J + lambda^2 * I
-    double jtj_11 = j11 * j11 + j21 * j21 + lambda * lambda;
-    double jtj_12 = j11 * j12 + j21 * j22;
-    double jtj_22 = j12 * j12 + j22 * j22 + lambda * lambda;
-
-    double det = jtj_11 * jtj_22 - jtj_12 * jtj_12;
-    if (std::abs(det) < DET_EPSILON) {
-        ROS_WARN_THROTTLE(2.0, "Jacobian near-singular (det=%.6f)", det);
-        det = (det >= 0.0) ? DET_EPSILON : -DET_EPSILON;
-    }
-
-    // Inverse of (J^T * J + lambda^2 * I)
-    double inv11 =  jtj_22 / det;
-    double inv12 = -jtj_12 / det;
-    double inv22 =  jtj_11 / det;
-
-    // Pseudo-inverse: (J^T J + lambda^2 I)^{-1} * J^T
-    double j11_inv = inv11 * j11 + inv12 * j12;
-    double j12_inv = inv11 * j21 + inv12 * j22;
-    double j21_inv = inv12 * j11 + inv22 * j12;
-    double j22_inv = inv12 * j21 + inv22 * j22;
-
-    double update_angle1 = ik_cfg.learning_rate * (j11_inv * delta_x + j12_inv * delta_y);
-    double update_angle2 = ik_cfg.learning_rate * (j21_inv * delta_x + j22_inv * delta_y);
-
-    // Clamp large updates (near singularity)
-    if (std::abs(update_angle1) > M_PI) {
-        update_angle1 = (update_angle1 > 0) ? UPDATE_ANGLE_EPSILON : -UPDATE_ANGLE_EPSILON;
-    }
-    if (std::abs(update_angle2) > M_PI) {
-        update_angle2 = (update_angle2 > 0) ? UPDATE_ANGLE_EPSILON : -UPDATE_ANGLE_EPSILON;
-    }
-
-    theta1 += update_angle1;
-    theta2 += update_angle2;
-}
+// IK now lives in the InverseKinematics class (inverse_kinematics.h), which
+// delegates each step to dls_oracle::updateJointAnglesOracle (dls_ik.h) — the
+// byte-identical transcription of the former global updateJointAngles().
 
 // ==============================
 // Callbacks
@@ -234,9 +182,7 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
     gains.gain_mult = config.gain_mult;
     gains.applyMultiplier();
 
-    ik_cfg.learning_rate  = config.ik_learning_rate;
-    ik_cfg.lambda_base    = config.ik_lambda_base;
-    ik_cfg.num_iterations = config.ik_num_iterations;
+    ik.setConfig(config.ik_learning_rate, config.ik_lambda_base, config.ik_num_iterations);
 
     imu_yaw_offset_rad = DEG2RAD(config.imu_yaw_offset);
 
@@ -498,9 +444,12 @@ int main(int argc, char **argv) {
     nh.param<double>("pid_pitch/ki", gains.ki_pitch_base, 0.001);
     nh.param<double>("pid_pitch/kd", gains.kd_pitch_base, 0.0005);
 
-    nh.param<int>("ik/num_iterations", ik_cfg.num_iterations, 3000);
-    nh.param<double>("ik/learning_rate", ik_cfg.learning_rate, 0.02);
-    nh.param<double>("ik/lambda_base", ik_cfg.lambda_base, 0.15);
+    int    ik_num_iterations;
+    double ik_learning_rate, ik_lambda_base;
+    nh.param<int>("ik/num_iterations", ik_num_iterations, 3000);
+    nh.param<double>("ik/learning_rate", ik_learning_rate, 0.02);
+    nh.param<double>("ik/lambda_base", ik_lambda_base, 0.15);
+    ik.setConfig(ik_learning_rate, ik_lambda_base, ik_num_iterations);
 
     double imu_yaw_offset_deg;
     nh.param<double>("imu_yaw_offset", imu_yaw_offset_deg, 45.0);
@@ -547,9 +496,9 @@ int main(int argc, char **argv) {
         cfg.kp_pitch         = gains.kp_pitch_base;
         cfg.ki_pitch         = gains.ki_pitch_base;
         cfg.kd_pitch         = gains.kd_pitch_base;
-        cfg.ik_learning_rate  = ik_cfg.learning_rate;
-        cfg.ik_lambda_base    = ik_cfg.lambda_base;
-        cfg.ik_num_iterations = ik_cfg.num_iterations;
+        cfg.ik_learning_rate  = ik_learning_rate;
+        cfg.ik_lambda_base    = ik_lambda_base;
+        cfg.ik_num_iterations = ik_num_iterations;
         cfg.imu_yaw_offset    = imu_yaw_offset_deg;
         cfg.manual_theta1     = manual_theta1_deg;
         cfg.manual_theta2     = manual_theta2_deg;
@@ -639,27 +588,8 @@ int main(int argc, char **argv) {
                 state.target_x = manual_x;
                 state.target_y = manual_y;
 
-                target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
-                if (target_length >= SAFE_ARM_LENGTH) {
-                    state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
-                    state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
-                }
-
-                double delta_x = state.target_x - current_x;
-                double delta_y = state.target_y - current_y;
-                double delta_norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
-
-                int dynamic_iterations = (delta_norm > IK_DELTA_THRESHOLD)
-                                         ? ik_cfg.num_iterations : IK_REDUCED_ITERATIONS;
-
-                for (int i = 0; i < dynamic_iterations; i++) {
-                    forwardKinematics(theta1, theta2, current_x, current_y);
-                    delta_x = state.target_x - current_x;
-                    delta_y = state.target_y - current_y;
-                    updateJointAngles(theta1, theta2, delta_x, delta_y);
-                }
-
-                forwardKinematics(theta1, theta2, current_x, current_y);
+                ik.solveIK(state.target_x, state.target_y,
+                           theta1, theta2, current_x, current_y, target_length);
             }
         } else {
             // Normal feedback modes: TDC / PID / FIXED
@@ -708,30 +638,9 @@ int main(int argc, char **argv) {
             state.prev_error_roll  = state.error_roll;
             state.prev_error_pitch = state.error_pitch;
 
-            // Radial workspace saturation
-            target_length = std::sqrt(state.target_x * state.target_x + state.target_y * state.target_y);
-            if (target_length >= SAFE_ARM_LENGTH) {
-                state.target_x = state.target_x / target_length * SAFE_ARM_LENGTH;
-                state.target_y = state.target_y / target_length * SAFE_ARM_LENGTH;
-            }
-
-            // Inverse kinematics
-            double delta_x = state.target_x - current_x;
-            double delta_y = state.target_y - current_y;
-            double delta_norm = std::sqrt(delta_x * delta_x + delta_y * delta_y);
-
-            int dynamic_iterations = (delta_norm > IK_DELTA_THRESHOLD)
-                                     ? ik_cfg.num_iterations : IK_REDUCED_ITERATIONS;
-
-            for (int i = 0; i < dynamic_iterations; i++) {
-                forwardKinematics(theta1, theta2, current_x, current_y);
-                delta_x = state.target_x - current_x;
-                delta_y = state.target_y - current_y;
-                updateJointAngles(theta1, theta2, delta_x, delta_y);
-            }
-
-            // Final FK for display
-            forwardKinematics(theta1, theta2, current_x, current_y);
+            // Radial workspace saturation + inverse kinematics + final FK
+            ik.solveIK(state.target_x, state.target_y,
+                       theta1, theta2, current_x, current_y, target_length);
         }
 
         // Publish joint angles
