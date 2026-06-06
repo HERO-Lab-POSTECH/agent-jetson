@@ -1,15 +1,14 @@
 #include <ros/ros.h>
 #include <cmath>
 #include <cstdio>
-#include <std_msgs/Float64.h>
-#include <std_msgs/Float64MultiArray.h>
-#include <std_msgs/Float32MultiArray.h>
 #include "hero_msgs/hero_agent_sensor.h"
 #include "albc_control/albc_kinematics.h"
 #include "albc_control/inverse_kinematics.h"
 #include "albc_control/imu_processor.h"
 #include "albc_control/attitude_controller.h"
 #include "albc_control/mode_manager.h"
+#include "albc_control/joint_current_monitor.h"
+#include "albc_control/status_publisher.h"
 #include "albc_control/dashboard.h"
 
 #include <dynamic_reconfigure/server.h>
@@ -48,13 +47,16 @@ using namespace albc;
 // ==============================
 // Globals
 // ==============================
-
-static ModeManager mode_mgr;  // control-mode FSM + key handling (absorbs control_mode/manual_* + key funcs)
-static AttitudeController attitude;  // feedback pipeline + 4-mode control law (absorbs ControlState/ControlGains/computeControlOutput)
-static InverseKinematics ik;  // DLS IK solver (absorbs the former IKConfig)
-static ImuProcessor imu_proc;  // IMU callback wrapper (owns yaw offset + cached RPY)
-static float joint_current1_mA = 0.0f;
-static float joint_current2_mA = 0.0f;
+//
+// All former file-scope state now lives in classes owned by main():
+//   ModeManager / AttitudeController / InverseKinematics / ImuProcessor
+//   JointCurrentMonitor (absorbs joint_current1/2_mA + jointCurrentsCallback)
+//   StatusPublisher      (absorbs angle_pub_1/2 + status_pub + the publish blocks)
+// The only file-scope object left is g_mode_mgr below — a non-owning pointer the
+// atexit handler needs, because atexit() takes a zero-arg free function and so
+// cannot capture main()'s ModeManager. It is set to main()'s `static` local
+// mode_mgr (program lifetime), so the handler is valid even after main returns.
+static ModeManager* g_mode_mgr = nullptr;
 
 // ==============================
 // Inverse Kinematics (Damped Least Squares)
@@ -71,36 +73,34 @@ static float joint_current2_mA = 0.0f;
 // delegates the rotation to rotateImu() (imu_rotation.h). state.current_* is
 // synced from imu_proc at the top of each control-loop iteration.
 
-void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/) {
-    mode_mgr.setMode(static_cast<ControlMode>(config.control_mode));
+// Dynamic-reconfigure callback. Takes the four configured instances by pointer
+// (bound via boost::bind in main) since they are now main() locals, not globals.
+// The body order and every operation are byte-identical to the former version.
+void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/,
+                         ModeManager* mode_mgr, AttitudeController* attitude,
+                         InverseKinematics* ik, ImuProcessor* imu_proc) {
+    mode_mgr->setMode(static_cast<ControlMode>(config.control_mode));
 
-    attitude.setTargets(DEG2RAD(config.target_roll), DEG2RAD(config.target_pitch));
+    attitude->setTargets(DEG2RAD(config.target_roll), DEG2RAD(config.target_pitch));
 
-    attitude.setGains(config.M_td, config.Kp_td, config.Kd_td,
-                      config.kp_roll, config.ki_roll, config.kd_roll,
-                      config.kp_pitch, config.ki_pitch, config.kd_pitch,
-                      config.gain_mult);
+    attitude->setGains(config.M_td, config.Kp_td, config.Kd_td,
+                       config.kp_roll, config.ki_roll, config.kd_roll,
+                       config.kp_pitch, config.ki_pitch, config.kd_pitch,
+                       config.gain_mult);
 
-    ik.setConfig(config.ik_learning_rate, config.ik_lambda_base, config.ik_num_iterations);
+    ik->setConfig(config.ik_learning_rate, config.ik_lambda_base, config.ik_num_iterations);
 
-    imu_proc.setOffset(DEG2RAD(config.imu_yaw_offset));
+    imu_proc->setOffset(DEG2RAD(config.imu_yaw_offset));
 
-    mode_mgr.setManualState(config.manual_theta1, config.manual_theta2,
-                            config.manual_x, config.manual_y);
+    mode_mgr->setManualState(config.manual_theta1, config.manual_theta2,
+                             config.manual_x, config.manual_y);
 
     // Reset integrals on gain change (anti-windup)
-    attitude.resetIntegrals();
+    attitude->resetIntegrals();
 
     ROS_INFO("Reconfigure: mode=%s mult=%.2f M=%.4f Kp=%.3f Kd=%.1f",
-             controlModeName(mode_mgr.mode()), attitude.gainMult(),
-             attitude.Mtd(), attitude.Kptd(), attitude.Kdtd());
-}
-
-void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
-    if (msg->data.size() >= 2) {
-        joint_current1_mA = msg->data[0];
-        joint_current2_mA = msg->data[1];
-    }
+             controlModeName(mode_mgr->mode()), attitude->gainMult(),
+             attitude->Mtd(), attitude->Kptd(), attitude->Kdtd());
 }
 
 // ==============================
@@ -113,9 +113,10 @@ void jointCurrentsCallback(const std_msgs::Float32MultiArray::ConstPtr& msg) {
 // computeControlOutputOracle (control_law.h). printDashboard() now lives in
 // Dashboard::render (dashboard.h).
 
-// atexit() needs a free function; forward to mode_mgr.closeKeyboard() so the
-// terminal is restored on any exit path (former atexit(closeKeyboard), :376).
-static void restoreKeyboardAtExit() { mode_mgr.closeKeyboard(); }
+// atexit() needs a zero-arg free function; forward to the active ModeManager's
+// closeKeyboard() (via g_mode_mgr) so the terminal is restored on any exit path
+// (former atexit(closeKeyboard), :376).
+static void restoreKeyboardAtExit() { if (g_mode_mgr) g_mode_mgr->closeKeyboard(); }
 
 // ==============================
 // Main
@@ -124,6 +125,20 @@ static void restoreKeyboardAtExit() { mode_mgr.closeKeyboard(); }
 int main(int argc, char **argv) {
     ros::init(argc, argv, "albc_controller");
     ros::NodeHandle nh("~");
+
+    // Component instances (former file-scope globals, now owned by main).
+    // mode_mgr is a `static` local: it is no longer a file-scope global, yet
+    // keeps program lifetime so the atexit terminal-restore handler (which runs
+    // AFTER main returns and locals are destroyed) never dereferences a dead
+    // object — exactly the safety the former file-scope `static ModeManager` had.
+    static ModeManager   mode_mgr;     // control-mode FSM + key handling
+    AttitudeController   attitude;     // feedback pipeline + 4-mode control law
+    InverseKinematics    ik;           // DLS IK solver
+    ImuProcessor         imu_proc;     // IMU callback wrapper (yaw offset + cached RPY)
+    JointCurrentMonitor  current_mon;  // cached joint motor currents for the dashboard
+    StatusPublisher      status_pub;   // joint-angle + /albc_status publishers
+
+    g_mode_mgr = &mode_mgr;  // for the atexit terminal-restore handler
 
     // Load parameters
     int loop_rate_hz;
@@ -216,20 +231,17 @@ int main(int argc, char **argv) {
         cfg.manual_y          = manual_y;
         dr_server.updateConfig(cfg);
     }
-    dr_server.setCallback(boost::bind(&reconfigureCallback, _1, _2));
+    dr_server.setCallback(boost::bind(&reconfigureCallback, _1, _2,
+                                      &mode_mgr, &attitude, &ik, &imu_proc));
 
     // Subscribers
     ros::Subscriber imu_sub     = nh.subscribe("/hero_agent/sensors", 50,
                                                &ImuProcessor::onImu, &imu_proc);
-    ros::Subscriber current_sub = nh.subscribe("/joint_currents", 10, jointCurrentsCallback);
+    ros::Subscriber current_sub = nh.subscribe("/joint_currents", 10,
+                                               &JointCurrentMonitor::onJointCurrents, &current_mon);
 
     // Publishers
-    ros::Publisher angle_pub_1 = nh.advertise<std_msgs::Float64>(
-        "/hero_agent/active_joint1_position_controller/command", 1000);
-    ros::Publisher angle_pub_2 = nh.advertise<std_msgs::Float64>(
-        "/hero_agent/active_joint2_position_controller/command", 1000);
-    ros::Publisher status_pub = nh.advertise<std_msgs::Float64MultiArray>(
-        "/albc_status", 10);
+    status_pub.advertise(nh);
 
     ros::Rate loop_rate(loop_rate_hz);
     int dashboard_counter = 0;
@@ -297,23 +309,16 @@ int main(int argc, char **argv) {
             attitude.setTarget(tx, ty);   // store the saturated setpoint
         }
 
-        // Publish joint angles
-        std_msgs::Float64 ros_theta1, ros_theta2;
-        ros_theta1.data = mapTo2Pi(theta1);
-        ros_theta2.data = mapTo2Pi(theta2);
-        angle_pub_1.publish(ros_theta1);
-        angle_pub_2.publish(ros_theta2);
+        // Publish joint angles (mapTo2Pi applied inside StatusPublisher).
+        status_pub.publishJointAngles(theta1, theta2);
 
-        // Publish status
-        std_msgs::Float64MultiArray status_msg;
-        status_msg.data = {
-            RAD2DEG(attitude.targetRoll()), RAD2DEG(current_roll),
-            RAD2DEG(attitude.targetPitch()), RAD2DEG(current_pitch),
+        // Publish /albc_status — 11 fields in the contracted order/units.
+        status_pub.publishStatus(
+            attitude.targetRoll(), current_roll,
+            attitude.targetPitch(), current_pitch,
             attitude.targetX(), attitude.targetY(),
             current_x, current_y,
-            attitude.angularVelRoll(), attitude.angularVelPitch(), attitude.angularVelYaw()
-        };
-        status_pub.publish(status_msg);
+            attitude.angularVelRoll(), attitude.angularVelPitch(), attitude.angularVelYaw());
 
         // Dashboard (~4 Hz)
         if (++dashboard_counter >= dashboard_interval) {
@@ -321,7 +326,7 @@ int main(int argc, char **argv) {
             Dashboard::render(mode_mgr, attitude,
                               theta1, theta2, current_x, current_y, target_length,
                               current_roll, current_pitch,
-                              joint_current1_mA, joint_current2_mA);
+                              current_mon.joint1(), current_mon.joint2());
         }
 
         ros::spinOnce();
