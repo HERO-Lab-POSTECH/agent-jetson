@@ -8,6 +8,12 @@
 //                 ↓                    ↓
 //   /hero_agent/command          TeleopController.apply() → /hero_agent/dvl
 //   (Arduino original keys)      (in-process target update)
+//
+// 전역 상태·자유함수는 책임별 3 클래스로 분해(무변경 리팩터):
+//   StateMonitor   = State/IMU/ALBC 캐시 + 모니터 렌더
+//   CsvLogger      = record_flag + CSV 파일 기록
+//   RosbagRecorder = rosbag record 서브프로세스 fork/exec/signal
+// 콜백 인스턴스는 파일 스코프 전역 — 통합본도 전역이라 거동 동일.
 // ==============================
 
 #include <ros/ros.h>
@@ -20,23 +26,22 @@
 #include "hero_agent/key_translator.h"
 #include "hero_agent/teleop_controller.h"
 #include "hero_agent/topics.h"
+#include "hero_agent/state_monitor.h"
+#include "hero_agent/csv_logger.h"
+#include "hero_agent/rosbag_recorder.h"
 
 #include <iostream>
-#include <fstream>
-#include <iomanip>
 #include <string>
 #include <cstdlib>
 #include <cmath>
 #include <regex>
 #include <atomic>
-#include <mutex>
 #include <set>
 
 #include <unistd.h>
 #include <signal.h>
 #include <csignal>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <sys/stat.h>
 #include <cerrno>
 #include <dirent.h>
@@ -45,24 +50,15 @@ using namespace std;
 using namespace hero;
 
 // ==============================
-// State variables (from Arduino state topic)
+// Responsibility classes (file-scope instances — original was all-global, so
+// free callbacks referencing them keeps behavior identical).
 // ==============================
-float yaw = 0.0f, target_yaw = 0.0f;
-float depth = 0.0f, target_depth = 0.0f;
-int move_speed = 0;
-int control_flags = 0;
-int control_yaw_enabled = 0, control_depth_enabled = 0;
-int relay_enabled = 0, laser_enabled = 0;
+StateMonitor   state_monitor;
+CsvLogger      csv_logger;
+RosbagRecorder rosbag_recorder;
 
 // ==============================
-// IMU sensor variables (from /hero_agent/sensors)
-// ==============================
-float sensor_roll = 0.0f, sensor_pitch = 0.0f, sensor_yaw = 0.0f;
-float sensor_depth = 0.0f;
-static double imu_yaw_offset_rad = 45.0 * M_PI / 180.0;
-
-// ==============================
-// Toggle debounce (500ms)
+// Toggle debounce (500ms) — KeyTranslator-layer concern, kept as free global.
 // ==============================
 static ros::Time last_toggle_time[256];
 static const double DEBOUNCE_SEC = 0.5;
@@ -91,28 +87,6 @@ std_msgs::Int8 command_msg;
 TeleopController g_teleop(0.05, 0.01);
 std::atomic<bool> g_target_dirty(false);
 
-// ==============================
-// Rosbag recording
-// ==============================
-std::atomic<int> record_flag(0);
-int prev_record_flag = 0;
-pid_t rosbag_pid = -1;
-std::mutex csv_mutex;
-std::ofstream fout_csv;
-std::string rosbag_file_path = "";
-std::string albc_csv_path = "";
-std::string rosbag_status_msg = "";
-std::string csv_status_msg = "";
-
-// ==============================
-// ALBC status cache (updated by callback, used by main loop CSV writer)
-// When ALBC controller is not running, albc_active stays false
-// and target/current values default to 0
-// ==============================
-static std::mutex albc_mutex;
-static double albc_data[11] = {0};
-static bool albc_active = false;
-
 // Signal flag (async-signal-safe)
 static volatile sig_atomic_t signal_received = 0;
 
@@ -120,88 +94,7 @@ static volatile sig_atomic_t signal_received = 0;
 void send_command(char cmd);
 void ensure_directory(const std::string& path);
 int get_next_log_index(const std::string& base_path);
-void start_rosbag_record();
-void stop_rosbag_record();
-void write_csv_line();
-void print_monitor_status();
 void handle_signal(int sig);
-
-// ==============================
-// State callback - just update monitoring variables
-// ==============================
-void msg_callback_state(const hero_msgs::hero_agent_state::ConstPtr& msg)
-{
-    yaw           = msg->Yaw;
-    target_yaw    = msg->Target_yaw;
-    depth         = msg->Depth;
-    target_depth  = msg->Target_depth;
-    move_speed    = msg->Move_speed;
-    control_flags = msg->State_addit;
-
-    control_yaw_enabled   = (control_flags & 1)  ? 1 : 0;
-    control_depth_enabled = (control_flags & 2)  ? 1 : 0;
-    relay_enabled         = (control_flags & 4)  ? 1 : 0;
-    laser_enabled         = (control_flags & 8)  ? 1 : 0;
-}
-
-// ==============================
-// IMU sensor callback
-// ==============================
-void sensorCallback(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
-{
-    double raw_roll  = msg->ROLL;
-    double raw_pitch = -(msg->PITCH);
-    double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
-    sensor_roll  = static_cast<float>( c * raw_roll + s * raw_pitch);
-    sensor_pitch = static_cast<float>(-s * raw_roll + c * raw_pitch);
-    sensor_yaw   = msg->YAW;
-    sensor_depth = msg->DEPTH;
-}
-
-// ==============================
-// ALBC status callback - cache data only
-// ==============================
-void albcStatusCallback(const std_msgs::Float64MultiArray::ConstPtr& msg)
-{
-    if (msg->data.size() >= 11)
-    {
-        std::lock_guard<std::mutex> lock(albc_mutex);
-        for (int i = 0; i < 11; i++) albc_data[i] = msg->data[i];
-        albc_active = true;
-    }
-}
-
-// ==============================
-// CSV line writer (called from main loop at 50Hz)
-// If ALBC is not running, target/current roll/pitch = 0, sensor data still recorded
-// ==============================
-void write_csv_line()
-{
-    if (record_flag.load() != 1) return;
-
-    double current_time = ros::Time::now().toSec();
-    double data[11] = {0};
-    {
-        std::lock_guard<std::mutex> lock(albc_mutex);
-        if (albc_active) {
-            for (int i = 0; i < 11; i++) data[i] = albc_data[i];
-        }
-    }
-
-    std::lock_guard<std::mutex> lock(csv_mutex);
-    if (fout_csv.is_open()) {
-        fout_csv << std::fixed << std::setprecision(6)
-            << current_time << ","
-            << data[0] << "," << data[1] << ","
-            << data[2] << "," << data[3] << ","
-            << data[4] << "," << data[5] << ","
-            << data[6] << "," << data[7] << ","
-            << data[8] << "," << data[9] << "," << data[10] << ","
-            << target_depth << "," << depth << ","
-            << sensor_roll << "," << sensor_pitch << "," << sensor_yaw << "\n";
-        fout_csv.flush();
-    }
-}
 
 // ==============================
 // V3 Key Translation Layer (single-node: translate then dispatch in-process)
@@ -217,16 +110,16 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 
     // Rosbag toggle (KeyTranslator 범위 밖, agent 내부 플래그)
     if (ch == 'R') {
-        record_flag.fetch_xor(1);
+        csv_logger.toggle();
         return;
     }
 
-    // Current toggle state (built from state-callback globals)
+    // Current toggle state (built from state-callback cache)
     ToggleState st;
-    st.relay_enabled         = relay_enabled;
-    st.control_yaw_enabled   = control_yaw_enabled;
-    st.control_depth_enabled = control_depth_enabled;
-    st.laser_enabled         = laser_enabled;
+    st.relay_enabled         = state_monitor.relayEnabled();
+    st.control_yaw_enabled   = state_monitor.controlYawEnabled();
+    st.control_depth_enabled = state_monitor.controlDepthEnabled();
+    st.laser_enabled         = state_monitor.laserEnabled();
 
     // Debounce: only toggle keys carrying the debounce flag are gated.
     // '1'/'2'/'3'/'5' are toggle=true+debounce=true → gated.
@@ -263,7 +156,7 @@ int main(int argc, char** argv)
     // Load IMU yaw offset (same parameter as albc_controller)
     double imu_yaw_offset_deg;
     nh.param<double>("/albc_controller/imu_yaw_offset", imu_yaw_offset_deg, 45.0);
-    imu_yaw_offset_rad = imu_yaw_offset_deg * M_PI / 180.0;
+    state_monitor.setImuOffset(imu_yaw_offset_deg * M_PI / 180.0);
 
     signal(SIGINT, handle_signal);
     signal(SIGTERM, handle_signal);
@@ -273,9 +166,9 @@ int main(int argc, char** argv)
     for (int i = 0; i < 256; i++) last_toggle_time[i] = now;
 
     // Subscribers
-    ros::Subscriber sub_state = nh.subscribe(topics::STATE, 100, msg_callback_state);
-    ros::Subscriber sub_sensor = nh.subscribe(topics::SENSORS, 100, sensorCallback);
-    ros::Subscriber sub_albc_status = nh.subscribe(topics::ALBC_STATUS, 10, albcStatusCallback);
+    ros::Subscriber sub_state = nh.subscribe(topics::STATE, 100, &StateMonitor::onState, &state_monitor);
+    ros::Subscriber sub_sensor = nh.subscribe(topics::SENSORS, 100, &StateMonitor::onSensor, &state_monitor);
+    ros::Subscriber sub_albc_status = nh.subscribe(topics::ALBC_STATUS, 10, &StateMonitor::onAlbc, &state_monitor);
     ros::Subscriber sub_key_input = nh.subscribe(topics::KEY_INPUT, 10, key_input_callback);
 
     // Publishers
@@ -284,47 +177,30 @@ int main(int argc, char** argv)
 
     ros::Rate loop_rate(100);
     int csv_counter = 0;
+    int prev_record_flag = 0;
 
     printf("\n  Agent Initialized (V3 key translation + teleop + monitor)\n\n");
 
     while (ros::ok() && !signal_received)
     {
         // Recording state change
-        int current_record = record_flag.load();
+        int current_record = csv_logger.flag();
         if (current_record != prev_record_flag) {
             if (current_record == 1) {
                 int log_index = get_next_log_index(base_traj_dir);
-                albc_csv_path = base_traj_dir + "/albc_status_" + std::to_string(log_index) + ".csv";
-                rosbag_file_path = base_rosbag_dir + "/record_" + std::to_string(log_index) + ".bag";
-                start_rosbag_record();
-                rosbag_status_msg = (rosbag_pid > 0) ? "Recording started" : "Rosbag failed, CSV only";
+                std::string albc_csv_path = base_traj_dir + "/albc_status_" + std::to_string(log_index) + ".csv";
+                std::string rosbag_file_path = base_rosbag_dir + "/record_" + std::to_string(log_index) + ".bag";
+                rosbag_recorder.start(rosbag_file_path);
+                rosbag_recorder.setStatus(rosbag_recorder.active() ? "Recording started" : "Rosbag failed, CSV only");
                 // Open CSV independently of rosbag
-                {
-                    std::lock_guard<std::mutex> lock(csv_mutex);
-                    if (fout_csv.is_open()) fout_csv.close();
-                    fout_csv.open(albc_csv_path);
-                    if (fout_csv.is_open()) {
-                        fout_csv << "ros_time,target_roll,current_roll,target_pitch,current_pitch,target_x,target_y,current_x,current_y,angular_vel_roll,angular_vel_pitch,angular_vel_yaw,target_depth,depth,sensor_roll,sensor_pitch,sensor_yaw\n";
-                        fout_csv.flush();
-                        csv_status_msg = "Logging started";
-                    } else {
-                        csv_status_msg = "CSV open failed";
-                    }
-                }
+                csv_logger.open(albc_csv_path, state_monitor);
                 // Reset ALBC active flag for new recording
-                {
-                    std::lock_guard<std::mutex> lock(albc_mutex);
-                    albc_active = false;
-                    for (int i = 0; i < 11; i++) albc_data[i] = 0;
-                }
+                state_monitor.resetAlbc();
             } else {
-                {
-                    std::lock_guard<std::mutex> lock(csv_mutex);
-                    if (fout_csv.is_open()) fout_csv.close();
-                }
-                csv_status_msg = "Logging stopped";
-                stop_rosbag_record();
-                rosbag_status_msg = "Recording stopped";
+                csv_logger.close();
+                csv_logger.setStopStatus();
+                rosbag_recorder.stop();
+                rosbag_recorder.setStatus("Recording stopped");
             }
             prev_record_flag = current_record;
         }
@@ -341,20 +217,17 @@ int main(int argc, char** argv)
 
         // Write CSV at 50Hz (every 2nd iteration of 100Hz loop)
         if (++csv_counter >= 2) {
-            write_csv_line();
+            csv_logger.writeLine(state_monitor);
             csv_counter = 0;
         }
 
-        print_monitor_status();
+        state_monitor.print(csv_logger.flag(), rosbag_recorder.rosbag_status(), csv_logger.csv_status());
         loop_rate.sleep();
     }
 
     spinner.stop();
-    stop_rosbag_record();
-    {
-        std::lock_guard<std::mutex> lock(csv_mutex);
-        if (fout_csv.is_open()) fout_csv.close();
-    }
+    rosbag_recorder.stop();
+    csv_logger.close();
     ros::shutdown();
     return 0;
 }
@@ -399,78 +272,4 @@ int get_next_log_index(const std::string& base_path)
     closedir(dir);
     while (used_indices.count(index)) ++index;
     return index;
-}
-
-void start_rosbag_record()
-{
-    rosbag_pid = fork();
-    if (rosbag_pid < 0) { rosbag_status_msg = "Fork failed"; return; }
-    if (rosbag_pid == 0) {
-        execlp("rosbag", "rosbag", "record", "-O", rosbag_file_path.c_str(),
-               "/albc_status",
-               "/hero_agent/state",
-               "/hero_agent/sensors",
-               "/hero_agent/dvl",
-               "/joint_currents",
-               NULL);
-        _exit(1);
-    }
-    usleep(500000);
-    int status = 0;
-    pid_t result = waitpid(rosbag_pid, &status, WNOHANG);
-    if (result == rosbag_pid && WIFEXITED(status) && WEXITSTATUS(status) != 0) rosbag_pid = -1;
-}
-
-void stop_rosbag_record()
-{
-    if (rosbag_pid <= 0) return;
-    int status = 0;
-    pid_t result;
-    kill(rosbag_pid, SIGTERM);
-    for (int i = 0; i < 30; ++i) {
-        result = waitpid(rosbag_pid, &status, WNOHANG);
-        if (result == rosbag_pid || result == -1) break;
-        usleep(100000);
-    }
-    if (result == 0) { kill(rosbag_pid, SIGKILL); waitpid(rosbag_pid, &status, 0); }
-    rosbag_pid = -1;
-
-    std::string active_file = rosbag_file_path + ".active";
-    std::ifstream infile(active_file.c_str());
-    if (infile.good()) {
-        infile.close();
-        if (std::rename(active_file.c_str(), rosbag_file_path.c_str()) != 0)
-            ROS_ERROR("Failed to rename %s → %s (errno=%d)", active_file.c_str(), rosbag_file_path.c_str(), errno);
-    }
-}
-
-void print_monitor_status()
-{
-    printf("\033[2J\033[H");
-    printf("═══════════════════════════════════════════════════\n");
-    printf("              HERO Agent Monitor\n");
-    printf("═══════════════════════════════════════════════════\n");
-    printf(" Yaw   %7.1f / %7.1f  [%s]\n",
-           yaw, target_yaw, control_yaw_enabled ? " ON" : "OFF");
-    printf(" Depth %7.3f / %7.3f  [%s]\n",
-           depth, target_depth, control_depth_enabled ? " ON" : "OFF");
-    printf(" Roll  %7.2f   Pitch %7.2f\n", sensor_roll, sensor_pitch);
-    printf(" Relay %-3s   Laser %-3s   Speed %-3d   Rec %-3s\n",
-           relay_enabled ? "ON" : "OFF", laser_enabled ? "ON" : "OFF",
-           move_speed, record_flag.load() ? "REC" : "---");
-    printf("═══════════════════════════════════════════════════\n");
-    printf(" STARTUP: 1=Relay 2=Yaw 3=Depth\n");
-    printf("═══════════════════════════════════════════════════\n");
-    printf(" Toggle  1=Relay  2=Yaw  3=Depth  5=Laser\n");
-    printf(" Init    4=PWM  N=YawReset\n");
-    printf(" Move    w/s/a/d  r/f=Heave\n");
-    printf(" Speed   z/x=+/-10  u/j=Throttle+/-10\n");
-    printf(" Yaw     i/k=+/-0.1\n");
-    printf(" Depth   o/l=+/-0.1\n");
-    printf(" Grip    c=Open  v=Stop  b=Close\n");
-    printf(" Rec     R=Rosbag\n");
-    printf("═══════════════════════════════════════════════════\n");
-    if (!rosbag_status_msg.empty()) printf(" Rosbag: %s\n", rosbag_status_msg.c_str());
-    if (!csv_status_msg.empty())    printf(" CSV:    %s\n", csv_status_msg.c_str());
-    fflush(stdout);
 }
