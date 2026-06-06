@@ -36,11 +36,15 @@ public:
     // Set the base gains + multiplier, then derive the active gains.
     // Mirrors the main() param load (:427-439,460) and reconfigureCallback
     // (:164-177): base values are stored, then applyMultiplier() runs.
-    void setGains(double M_td_base, double Kp_td_base, double Kd_td_base,
+    //
+    // The TDC D-term was removed in df46b09 (computeControlOutputOracle no longer
+    // uses Kd_td), so the Kd_td gain is gone from this signature — its removal is
+    // behavior-neutral. Re-introduction (if ever needed) → see git history.
+    void setGains(double M_td_base, double Kp_td_base,
                   double kp_roll_base, double ki_roll_base, double kd_roll_base,
                   double kp_pitch_base, double ki_pitch_base, double kd_pitch_base,
                   double gain_mult) {
-        M_td_base_  = M_td_base;  Kp_td_base_ = Kp_td_base;  Kd_td_base_ = Kd_td_base;
+        M_td_base_  = M_td_base;  Kp_td_base_ = Kp_td_base;
         kp_roll_base_  = kp_roll_base;   ki_roll_base_  = ki_roll_base;   kd_roll_base_  = kd_roll_base;
         kp_pitch_base_ = kp_pitch_base;  ki_pitch_base_ = ki_pitch_base;  kd_pitch_base_ = kd_pitch_base;
         gain_mult_ = gain_mult;
@@ -52,7 +56,6 @@ public:
     void applyMultiplier() {
         M_td_  = M_td_base_  * gain_mult_;
         Kp_td_ = Kp_td_base_ * gain_mult_;
-        Kd_td_ = Kd_td_base_ * gain_mult_;
         kp_roll_  = kp_roll_base_  * gain_mult_;
         ki_roll_  = ki_roll_base_  * gain_mult_;
         kd_roll_  = kd_roll_base_  * gain_mult_;
@@ -218,7 +221,6 @@ public:
     double gainMult() const { return gain_mult_; }
     double Mtd()      const { return M_td_; }
     double Kptd()     const { return Kp_td_; }
-    double Kdtd()     const { return Kd_td_; }
 
 private:
     // Attitude state (former ControlState, albc_controller.cpp:113-124).
@@ -234,10 +236,10 @@ private:
     double filtered_ang_vel_roll_ = 0.0, filtered_ang_vel_pitch_ = 0.0, filtered_ang_vel_yaw_ = 0.0;
 
     // Gains (former ControlGains, albc_controller.cpp:87-111).
-    double M_td_base_ = 0.0, Kp_td_base_ = 0.0, Kd_td_base_ = 0.0;
+    double M_td_base_ = 0.0, Kp_td_base_ = 0.0;
     double kp_roll_base_ = 0.0, ki_roll_base_ = 0.0, kd_roll_base_ = 0.0;
     double kp_pitch_base_ = 0.0, ki_pitch_base_ = 0.0, kd_pitch_base_ = 0.0;
-    double M_td_ = 0.0, Kp_td_ = 0.0, Kd_td_ = 0.0;
+    double M_td_ = 0.0, Kp_td_ = 0.0;
     double kp_roll_ = 0.0, ki_roll_ = 0.0, kd_roll_ = 0.0;
     double kp_pitch_ = 0.0, ki_pitch_ = 0.0, kd_pitch_ = 0.0;
     double gain_mult_ = 0.0;

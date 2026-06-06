@@ -1,10 +1,13 @@
 #!/bin/bash
-# launch_albc.sh — Start ALBC controller with interactive mode selection
+# launch_albc.sh — Start ALBC controller (initial mode from control_mode param)
 #
 # Usage: launch-albc  (alias this script)
 #
-# Runs joint_angle_command in background, albc_controller in foreground
-# so that albc_controller gets stdin for key input (mode selection + runtime).
+# The controller boots straight into the control_mode param (yaml, default
+# 1=TDC) — there is no blocking startup mode prompt anymore. This script keeps
+# albc_controller in the FOREGROUND so it still owns stdin for RUNTIME key input
+# (= cycle, 1-4 select, MANUAL w/s/a/d/m). joint_angle_command runs in the
+# background. (roslaunch albc.launch also works now; use this only for the keys.)
 
 set -e
 

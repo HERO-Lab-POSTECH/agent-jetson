@@ -2,10 +2,10 @@
 # All values match original hardcoded defaults
 
 # TD controller gains (base values, before gain_mult scaling)
+# Kd_td removed (TDC D-term dropped in df46b09, unused); see git history to restore.
 td_control:
   M_td: 0.004
   Kp_td: 0.04
-  Kd_td: 0.55
 
 # PID controller gains (base values)
 pid_roll:

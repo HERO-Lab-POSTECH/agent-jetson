@@ -6,17 +6,19 @@
 //   - globals control_mode, manual_submode, manual_theta1/2_deg, manual_x/y
 //     (:92, :100-102)
 //   - raw-terminal keyboard (initKeyboard/closeKeyboard/readKey)  (:26-46)
-//   - selectModeInteractive()  (:157-197)  — blocking startup mode picker
+//   - initInteractive()  — startup terminal init (Task-7: param-driven, was the
+//     former blocking selectModeInteractive() mode picker, :157-197)
 //   - cycleMode()  (:203-207)  and handleRuntimeKey()  (:209-268)
 //   - the main-loop mode-change detection condition  (:445-455)
 //
-// Behavior is preserved byte-for-byte: key mappings, mode cycling, MANUAL
-// adjust keys (w/s/a/d/m), the blocking startup picker, and the TDC/PID-only
-// mode-change reset condition are unchanged. Only "where the state lives"
-// changes (file-scope globals + free functions -> class members + methods).
+// Behavior preserved byte-for-byte for the runtime path: key mappings, mode
+// cycling, and the MANUAL adjust keys (w/s/a/d/m) are unchanged; only "where the
+// state lives" changes (file-scope globals + free functions -> class members).
 //
-// ⚠️ selectModeInteractive() stays blocking here (Task-7 replaces it with a
-// param-driven path; this task only relocates it).
+// ⚠️ Task-7 (D5): the blocking startup "press 1/2/3/4" picker is removed. The
+// initial mode now comes from the control_mode param (setMode() before
+// initInteractive()), so roslaunch works without an interactive stdin. Runtime
+// key-based switching is unchanged.
 //
 // ROS-free: depends only on termios/unistd (raw terminal) + albc_kinematics.h
 // for the MANUAL step constants and DEG/RAD helpers used by callers. No
@@ -60,7 +62,7 @@ public:
     // ---- Terminal keyboard (raw mode, former :26-46) -----------------------
 
     // Switch STDIN to non-blocking raw mode for runtime key polling.
-    // Uses initial_term_settings_ saved in selectModeInteractive().
+    // Uses initial_term_settings_ saved in initInteractive().
     void initKeyboard() {
         struct termios raw = initial_term_settings_;
         raw.c_lflag &= ~(ICANON | ECHO);
@@ -82,52 +84,29 @@ public:
         return -1;
     }
 
-    // ---- Startup mode selection (blocking, former :157-197) ----------------
+    // ---- Startup terminal init (non-blocking, Task-7 replaces the picker) ---
 
-    // Print the menu and block until the user presses 1/2/3/4, then switch to
-    // non-blocking raw mode. Sets control_mode_ and returns it.
-    // Byte-identical to the former selectModeInteractive().
-    ControlMode selectModeInteractive() {
+    // Save the original terminal settings and switch STDIN to non-blocking raw
+    // mode for runtime key polling. The former blocking "press 1/2/3/4" startup
+    // picker is removed (Task-7 / D5): the initial mode now comes from the
+    // control_mode param (set via setMode() before this call), so the node boots
+    // straight into that mode and roslaunch works without an interactive stdin.
+    // Runtime mode switching via keys (=, 1-4, w/s/a/d/m) is unchanged.
+    // Prints a one-line banner showing the active mode, then returns it.
+    ControlMode initInteractive() {
         // Save original terminal settings before any modification
         tcgetattr(STDIN_FILENO, &initial_term_settings_);
 
         printf("\033[2J\033[H");
         printf("═══════════════════════════════════════════════════\n");
-        printf("        ALBC Controller - Mode Selection\n");
+        printf("        ALBC Controller — starting [%s]\n", controlModeName(control_mode_));
+        printf("  Runtime keys: ==Cycle  1-4=Mode  (MANUAL: w/s/a/d/m)\n");
         printf("═══════════════════════════════════════════════════\n");
-        printf("  [1] TDC    - Time-Delay Control\n");
-        printf("  [2] PID    - PID Control\n");
-        printf("  [3] FIXED  - Fixed Position (test)\n");
-        printf("  [4] MANUAL - Manual Position\n");
-        printf("═══════════════════════════════════════════════════\n");
-        printf(" Select mode (1/2/3/4): ");
         fflush(stdout);
 
-        // Blocking read for mode selection
-        struct termios blocking = initial_term_settings_;
-        blocking.c_lflag &= ~(ICANON | ECHO);
-        blocking.c_cc[VMIN] = 1;   // block until 1 char
-        blocking.c_cc[VTIME] = 0;
-        tcsetattr(STDIN_FILENO, TCSANOW, &blocking);
-
-        ControlMode selected = ControlMode::TDC;
-        while (true) {
-            char ch;
-            if (read(STDIN_FILENO, &ch, 1) == 1) {
-                if (ch >= '1' && ch <= '4') {
-                    selected = static_cast<ControlMode>(ch - '0');
-                    printf("%c\n\n Starting [%s] mode...\n", ch, controlModeName(selected));
-                    fflush(stdout);
-                    usleep(500000);  // brief pause to show selection
-                    break;
-                }
-            }
-        }
-
-        // Switch to non-blocking for runtime
+        // Switch to non-blocking raw mode for runtime key polling
         initKeyboard();
-        control_mode_ = selected;
-        return selected;
+        return control_mode_;
     }
 
     // ---- Runtime key handling (former :203-268) ----------------------------

@@ -23,8 +23,8 @@ using namespace albc;
 // ==============================
 //
 // ControlMode / ManualSubMode enums, controlModeName(), the raw-terminal
-// keyboard helpers (initKeyboard/closeKeyboard/readKey), the blocking
-// selectModeInteractive(), cycleMode(), handleRuntimeKey() and the
+// keyboard helpers (initKeyboard/closeKeyboard/readKey), initInteractive()
+// (param-driven startup, Task-7), cycleMode(), handleRuntimeKey() and the
 // mode-change detection now live in ModeManager (mode_manager.h).
 
 // ==============================
@@ -83,7 +83,7 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
 
     attitude->setTargets(DEG2RAD(config.target_roll), DEG2RAD(config.target_pitch));
 
-    attitude->setGains(config.M_td, config.Kp_td, config.Kd_td,
+    attitude->setGains(config.M_td, config.Kp_td,
                        config.kp_roll, config.ki_roll, config.kd_roll,
                        config.kp_pitch, config.ki_pitch, config.kd_pitch,
                        config.gain_mult);
@@ -98,16 +98,16 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
     // Reset integrals on gain change (anti-windup)
     attitude->resetIntegrals();
 
-    ROS_INFO("Reconfigure: mode=%s mult=%.2f M=%.4f Kp=%.3f Kd=%.1f",
+    ROS_INFO("Reconfigure: mode=%s mult=%.2f M=%.4f Kp=%.3f",
              controlModeName(mode_mgr->mode()), attitude->gainMult(),
-             attitude->Mtd(), attitude->Kptd(), attitude->Kdtd());
+             attitude->Mtd(), attitude->Kptd());
 }
 
 // ==============================
 // Mode Selection / runtime keys / Control Law / Dashboard
 // ==============================
 //
-// selectModeInteractive(), cycleMode(), handleRuntimeKey() now live in
+// initInteractive(), cycleMode(), handleRuntimeKey() now live in
 // ModeManager (mode_manager.h). The 4-mode control-law switch (former
 // computeControlOutput) lives inside AttitudeController::update ->
 // computeControlOutputOracle (control_law.h). printDashboard() now lives in
@@ -148,14 +148,13 @@ int main(int argc, char **argv) {
 
     // Gain params (loaded into locals, then handed to AttitudeController::setGains).
     double gain_mult;
-    double M_td_base, Kp_td_base, Kd_td_base;
+    double M_td_base, Kp_td_base;
     double kp_roll_base, ki_roll_base, kd_roll_base;
     double kp_pitch_base, ki_pitch_base, kd_pitch_base;
-    nh.param<double>("gain_mult", gain_mult, 1.5);
+    nh.param<double>("gain_mult", gain_mult, 3.0);  // fallback matches yaml/cfg (D4 SSOT)
 
     nh.param<double>("td_control/M_td", M_td_base, 0.004);
     nh.param<double>("td_control/Kp_td", Kp_td_base, 0.04);
-    nh.param<double>("td_control/Kd_td", Kd_td_base, 0.55);
 
     nh.param<double>("pid_roll/kp", kp_roll_base, 0.05);
     nh.param<double>("pid_roll/ki", ki_roll_base, 0.001);
@@ -186,13 +185,22 @@ int main(int argc, char **argv) {
     nh.param<double>("manual/y", manual_y, 0.0);
     mode_mgr.setManualState(manual_theta1_deg, manual_theta2_deg, manual_x, manual_y);
 
-    attitude.setGains(M_td_base, Kp_td_base, Kd_td_base,
+    // Initial control mode from param (1=TDC,2=PID,3=FIXED,4=MANUAL; default TDC).
+    // Replaces the former blocking "press 1/2/3/4" startup picker (Task-7 / D5)
+    // so the node boots straight into the configured mode and roslaunch works
+    // without an interactive stdin. Runtime switching via keys is unchanged.
+    int control_mode_val;
+    nh.param<int>("control_mode", control_mode_val, 1);
+    mode_mgr.setMode(static_cast<ControlMode>(control_mode_val));
+
+    attitude.setGains(M_td_base, Kp_td_base,
                       kp_roll_base, ki_roll_base, kd_roll_base,
                       kp_pitch_base, ki_pitch_base, kd_pitch_base,
                       gain_mult);
 
-    // Interactive mode selection (blocks until user picks 1/2/3/4)
-    mode_mgr.selectModeInteractive();
+    // Start in the param-selected mode (control_mode); switch STDIN to raw
+    // non-blocking mode for runtime keys. No longer blocks on a startup keypress.
+    mode_mgr.initInteractive();
     atexit(restoreKeyboardAtExit);  // restore terminal on any exit path
 
     // Initial joint angles and end-effector position
@@ -214,7 +222,6 @@ int main(int argc, char **argv) {
         cfg.gain_mult        = gain_mult;
         cfg.M_td             = M_td_base;
         cfg.Kp_td            = Kp_td_base;
-        cfg.Kd_td            = Kd_td_base;
         cfg.kp_roll          = kp_roll_base;
         cfg.ki_roll          = ki_roll_base;
         cfg.kd_roll          = kd_roll_base;

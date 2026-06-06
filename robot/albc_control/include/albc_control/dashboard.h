@@ -57,8 +57,8 @@ public:
         printf(" Joints J1=%.1f  J2=%.1f deg   Len=%.4f/%.4f\n",
                RAD2DEG(theta1), RAD2DEG(theta2), target_length, SAFE_ARM_LENGTH);
         printf("───────────────────────────────────────────────────\n");
-        printf(" Gains  mult=%.2f  M=%.4f  Kp=%.3f  Kd=%.1f\n",
-               attitude.gainMult(), attitude.Mtd(), attitude.Kptd(), attitude.Kdtd());
+        printf(" Gains  mult=%.2f  M=%.4f  Kp=%.3f\n",
+               attitude.gainMult(), attitude.Mtd(), attitude.Kptd());
         printf(" Motor  J1=%+.0f mA  J2=%+.0f mA\n",
                joint_current1_mA, joint_current2_mA);
         printf("───────────────────────────────────────────────────\n");

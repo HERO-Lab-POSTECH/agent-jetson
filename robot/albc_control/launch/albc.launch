@@ -1,5 +1,9 @@
 <launch>
   <!-- ALBC Controller -->
+  <!-- Starts in the control_mode param (config/albc_controller.yaml, default 1=TDC);
+       no blocking startup prompt, so roslaunch works directly.
+       Runtime mode switching (=, 1-4, MANUAL w/s/a/d/m) needs an interactive
+       stdin — use scripts/launch_albc.sh to keep the controller in the foreground. -->
   <node pkg="albc_control" name="albc_controller" type="albc_controller" output="screen">
     <rosparam file="$(find albc_control)/config/albc_controller.yaml" command="load" />
   </node>
