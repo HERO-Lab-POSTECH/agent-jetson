@@ -10,8 +10,6 @@
 //   (Arduino original keys)      (Jetson original keys)
 //                                      ↓
 //                          agent_command processKey()
-//
-// FSM code backed up in agent_main_fsm_backup.cpp
 // ==============================
 
 #include <ros/ros.h>

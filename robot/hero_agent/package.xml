@@ -12,7 +12,6 @@
   <depend>roscpp</depend>
   <depend>rospy</depend>
   <depend>std_msgs</depend>
-  <depend>sensor_msgs</depend>
   <depend>hero_msgs</depend>
   <exec_depend>xterm</exec_depend>
 

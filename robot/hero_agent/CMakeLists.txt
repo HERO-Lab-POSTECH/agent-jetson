@@ -1,12 +1,12 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(hero_agent)
 
-find_package(catkin REQUIRED COMPONENTS std_msgs roscpp sensor_msgs hero_msgs)
+find_package(catkin REQUIRED COMPONENTS std_msgs roscpp hero_msgs)
 
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES hero_agent
-  CATKIN_DEPENDS std_msgs roscpp sensor_msgs hero_msgs
+  CATKIN_DEPENDS std_msgs roscpp hero_msgs
 )
 
 include_directories(
