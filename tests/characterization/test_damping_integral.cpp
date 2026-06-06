@@ -2,7 +2,7 @@
 //
 // Pins the CURRENT behavior of albc_controller.cpp:674-702 — the asymmetric
 // damping gate + integral anti-windup (freeze + clamp) + derivative LPF.
-// Source of truth: damping_integral_oracle.h (1:1 transcription of the source).
+// Source of truth: albc_control/feedback_filters.h (byte-identical to the source).
 //
 // Strategy (self-pin): the test calls the oracle functions and EXPECTs their
 // output. "Current implementation == correct". For the cleanest inputs an
@@ -12,7 +12,7 @@
 // Build & run (local, no ROS):
 //   c++ -std=c++11 -Wall -I. test_damping_integral.cpp -o /tmp/t && /tmp/t
 
-#include "damping_integral_oracle.h"
+#include "albc_control/feedback_filters.h"
 #include <cstdio>
 #include <cmath>
 

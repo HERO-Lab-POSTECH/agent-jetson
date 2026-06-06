@@ -4,7 +4,7 @@
 // (albc_controller.cpp:155-199) — one Damped-Least-Squares IK update. The
 // redesign must keep this byte-identical, because this is control math: any
 // drift in sign / constant / op-order changes how the arm moves.
-// Source: albc_controller.cpp:155-199, via dls_ik_oracle.h.
+// Source: albc_controller.cpp:155-199, via albc_control/dls_ik.h.
 //
 // Self-pin contract: golden values below were produced by RUNNING the oracle
 // (the current implementation IS the spec). They are NOT hand-derived. Two
@@ -22,7 +22,7 @@
 //   c++ -std=c++11 -Wall -I. -I../../robot/albc_control/include \
 //       tests/characterization/test_dls_ik.cpp -o /tmp/t && /tmp/t
 
-#include "dls_ik_oracle.h"
+#include "albc_control/dls_ik.h"
 #include <cmath>
 #include <cstdio>
 

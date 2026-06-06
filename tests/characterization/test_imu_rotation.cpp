@@ -20,7 +20,7 @@
 //     -I/Users/kimseungmin/ksm_Obsidian/0_Project/in_progress/albc/code/agent-jetson/robot/albc_control/include \
 //     test_imu_rotation.cpp -o /tmp/t && /tmp/t
 
-#include "imu_rotation_oracle.h"
+#include "albc_control/imu_rotation.h"
 #include "albc_control/albc_kinematics.h"   // DEG2RAD
 #include <cstdio>
 #include <cmath>

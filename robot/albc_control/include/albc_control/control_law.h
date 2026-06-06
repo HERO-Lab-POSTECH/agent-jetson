@@ -1,10 +1,10 @@
-// Golden oracle: albc_controller computeControlOutput (ROS-free extraction)
+// Production header: albc_controller computeControlOutput (ROS-free)
 //
-// 1:1 transcription of albc_controller.cpp:385-433 (the Control Law switch).
+// Byte-identical to albc_controller.cpp:385-433 (the Control Law switch).
 // The ROS plumbing is dropped; the global `state` / `gains` structs and the
 // `dt`/`derivative_*` parameters are flattened into an explicit CtrlIn struct.
 // Every variable name, sign, constant, and operation order is preserved
-// byte-for-byte so the redesign can be checked against THIS pin.
+// byte-for-byte from the source.
 //
 // Constants below are copied verbatim from albc_controller.cpp:72-78:
 //   COS_EPSILON       = 1e-6        (line 72)
@@ -19,8 +19,8 @@
 // Do NOT "fix" signs (e.g. dx = -common_factor*..., the (-1.0) on pitch PID,
 // the (-L2 - target_x) on FIXED) without intent — they are the pinned behavior.
 
-#ifndef CONTROL_LAW_ORACLE_H
-#define CONTROL_LAW_ORACLE_H
+#ifndef ALBC_CONTROL_CONTROL_LAW_H
+#define ALBC_CONTROL_CONTROL_LAW_H
 
 #include <cmath>
 #include <algorithm>   // std::min, std::max
@@ -111,4 +111,4 @@ inline CtrlOut computeControlOutputOracle(const CtrlIn& in) {
     return out;
 }
 
-#endif // CONTROL_LAW_ORACLE_H
+#endif // ALBC_CONTROL_CONTROL_LAW_H

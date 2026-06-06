@@ -1,11 +1,11 @@
-// Golden oracle: imuCallback IMU yaw-offset rotation (ROS-free extraction)
+// Production header: imuCallback IMU yaw-offset rotation (ROS-free)
 //
-// Byte-identical transcription of albc_controller.cpp:205-214 (imuCallback).
+// Byte-identical to albc_controller.cpp:205-214 (imuCallback).
 // The ROS plumbing (hero_msgs::hero_agent_sensor::ConstPtr& msg) is dropped:
 // the three sensor fields (ROLL/PITCH/YAW) are passed explicitly, and the
 // controller member imu_yaw_offset_rad is passed as offset_rad. State writes
-// (state.current_roll/pitch/yaw) become struct-return fields. The redesign
-// must keep this rotation byte-identical — it changes the robot's behavior.
+// (state.current_roll/pitch/yaw) become struct-return fields. This rotation
+// stays byte-identical to the source — it changes the robot's behavior.
 //
 // Sign/operation conventions pinned here (do NOT "fix" without intent):
 //   raw_roll  =  ROLL              (no sign change)
@@ -15,8 +15,8 @@
 //   out_pitch = -s*raw_roll + c*raw_pitch
 //   out_yaw   =  YAW              (passed through, no rotation)
 
-#ifndef IMU_ROTATION_ORACLE_H
-#define IMU_ROTATION_ORACLE_H
+#ifndef ALBC_CONTROL_IMU_ROTATION_H
+#define ALBC_CONTROL_IMU_ROTATION_H
 
 #include <cmath>   // cos, sin
 
@@ -43,4 +43,4 @@ inline ImuRpy rotateImu(double ROLL, double PITCH, double YAW, double offset_rad
     return out;
 }
 
-#endif // IMU_ROTATION_ORACLE_H
+#endif // ALBC_CONTROL_IMU_ROTATION_H

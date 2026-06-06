@@ -1,13 +1,13 @@
-// Golden oracle: albc_controller feedback pipeline math (ROS-free extraction)
+// Production header: albc_controller feedback pipeline math (ROS-free)
 //
-// 1:1 transcription of albc_controller.cpp:674-702 — the asymmetric-damping
+// Byte-identical to albc_controller.cpp:674-702 — the asymmetric-damping
 // gate + integral anti-windup (freeze + clamp) + derivative 1st-order LPF that
 // run inside the main feedback loop for the TDC / PID / FIXED modes.
 //
 // The ROS plumbing (state struct, loop_rate, dynamic_reconfigure) is dropped.
 // Every value the math reads is passed in explicitly. Operators, signs,
 // constants, and evaluation order are preserved CHARACTER-FOR-CHARACTER from
-// the source so the redesign can be checked for byte-identical behavior.
+// the source.
 //
 // Sign / freeze conventions pinned here (do NOT "fix" without intent):
 //   - integral ACCUMULATES only while |angle| >= LEVEL_THRESHOLD; below the
@@ -19,8 +19,8 @@
 //     error * raw_deriv > 0  =>  pass through    (growing / overshoot, keep D).
 //   - LPF: out = alpha*raw + (1-alpha)*prev_filtered.
 
-#ifndef DAMPING_INTEGRAL_ORACLE_H
-#define DAMPING_INTEGRAL_ORACLE_H
+#ifndef ALBC_CONTROL_FEEDBACK_FILTERS_H
+#define ALBC_CONTROL_FEEDBACK_FILTERS_H
 
 #include <algorithm>   // std::max, std::min
 #include <cmath>       // std::abs
@@ -77,4 +77,4 @@ inline double dampedDerivative(double error, double prev_error,
     return derivative;
 }
 
-#endif // DAMPING_INTEGRAL_ORACLE_H
+#endif // ALBC_CONTROL_FEEDBACK_FILTERS_H

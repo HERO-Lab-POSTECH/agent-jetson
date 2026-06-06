@@ -1,14 +1,13 @@
-// Golden oracle: albc_controller updateJointAngles (ROS-free extraction)
+// Production header: albc_controller updateJointAngles (ROS-free)
 //
-// 1:1 transcription of albc_controller.cpp:155-199 (the Damped-Least-Squares
+// Byte-identical to albc_controller.cpp:155-199 (the Damped-Least-Squares
 // inverse-kinematics single step). The ROS plumbing is dropped because it does
 // NOT affect the math:
 //   - the ROS_WARN_THROTTLE(...) call at .cpp:171 only logs; it mutates no state.
 // The two IK_cfg globals the original reads (ik_cfg.lambda_base at .cpp:156 and
 // ik_cfg.learning_rate at .cpp:186-187) are passed in explicitly as
 // `lambda_base` and `lr`. Everything else — variable names, signs, constants,
-// operation order — is byte-identical to the source. The redesign must keep
-// updateJointAngles() byte-identical to this.
+// operation order — is byte-identical to the source.
 //
 // Reuses albc::calculateJacobian from the (pure, ROS-free) kinematics header,
 // exactly as the controller does via `using namespace albc;` (.cpp:17, :162).
@@ -18,8 +17,8 @@
 //   DET_EPSILON          = 1e-6   (near-singular determinant floor)
 //   UPDATE_ANGLE_EPSILON = 1e-4   (clamped update magnitude when |Δθ| > π)
 
-#ifndef DLS_IK_ORACLE_H
-#define DLS_IK_ORACLE_H
+#ifndef ALBC_CONTROL_DLS_IK_H
+#define ALBC_CONTROL_DLS_IK_H
 
 #include <cmath>
 #include "albc_control/albc_kinematics.h"  // albc::L1, albc::L2, calculateJacobian
@@ -90,4 +89,4 @@ inline void updateJointAnglesOracle(double& theta1, double& theta2,
 
 }  // namespace dls_oracle
 
-#endif  // DLS_IK_ORACLE_H
+#endif  // ALBC_CONTROL_DLS_IK_H

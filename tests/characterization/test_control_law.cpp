@@ -22,7 +22,7 @@
 //   c++ -std=c++11 -Wall -I. -I../../robot/albc_control/include \
 //       test_control_law.cpp -o /tmp/t && /tmp/t
 
-#include "control_law_oracle.h"
+#include "albc_control/control_law.h"
 #include <cstdio>
 #include <cmath>
 
