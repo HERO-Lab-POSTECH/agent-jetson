@@ -43,4 +43,12 @@
     <arg name="sensor_timeout_s"   value="$(arg sensor_timeout_s)" />
     <arg name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
   </include>
+
+  <!-- ROSBAG: auto-record core topics for post-hoc field-test diagnosis.
+       Captures relay timing (/hero_agent/key_input), joint_states (the topic that
+       dropped out in run 1), thruster_cmd (safety), IMU, currents, and /rosout_agg
+       (every node log incl. read-fail reasons + STALE). Camera excluded (size).
+       Files land in ~/albc_bags/fieldtest_<timestamp>.bag (fixed dir, easy to find). -->
+  <node pkg="rosbag" type="record" name="albc_fieldtest_recorder" output="screen"
+        args="-o /home/nvidia/albc_bags/fieldtest /albc/joint_states /hero_agent/active_joint1_position_controller/command /hero_agent/active_joint2_position_controller/command /albc/thruster_cmd /hero_agent/key_input /hero_agent/sensors /joint_currents /rosout_agg" />
 </launch>

@@ -70,6 +70,9 @@ static dynamixel::PacketHandler* packet_handler = nullptr;
 
 static bool first_command_received = false;
 static int  startup_counter = 0;
+// RL-DEPLOY (2026-06-12 logging): consecutive joint read-fail counter to distinguish
+// a one-off serial glitch from a sustained motor-comms outage (power/relay/cable/HW).
+static int  consecutive_read_fail = 0;
 
 // ==============================
 // Dynamixel Helpers
@@ -319,6 +322,7 @@ int main(int argc, char **argv) {
         bool ok1 = updateMeasured(meas1, JOINT1_ID, dt);
         bool ok2 = updateMeasured(meas2, JOINT2_ID, dt);
         if (ok1 && ok2) {
+            consecutive_read_fail = 0;   // RL-DEPLOY: a good read clears the outage counter
             sensor_msgs::JointState js;
             js.header.stamp = now_t;
             js.name = {"albc_joint1", "albc_joint2"};
@@ -329,6 +333,13 @@ int main(int argc, char **argv) {
             // skip the publish: the RL node's staleness gate handles a long outage,
             // and a single glitch must not reach the observation as fake state.
             ROS_WARN_THROTTLE(1.0, "joint position read failed -- joint_states publish skipped");
+            // RL-DEPLOY (2026-06-12 logging): surface a SUSTAINED outage distinctly from a glitch.
+            ++consecutive_read_fail;
+            if (consecutive_read_fail >= 10) {  // ~1 s at 10 Hz loop
+                ROS_ERROR_THROTTLE(1.0,
+                    "joint read FAILED %d cycles in a row -- motor comms likely DOWN "
+                    "(power/relay off? serial cable? Dynamixel HW error?)", consecutive_read_fail);
+            }
         }
 
         // [BUG FIX T1] Throttled logging (was unthrottled at 10 Hz)
