@@ -4,8 +4,10 @@ Mirrors student_inference.py's torch modules exactly, but depends ONLY on numpy
 so it runs on the Jetson TX2 (Python 3.5, numpy 1.11.0, no torch). Every op here
 is checked against torch-produced golden vectors to atol=1e-5 (see test_npforward.py).
 
-numpy-1.11.0 compatibility: uses only @ matmul, np.maximum/np.expm1/np.tanh,
-np.abs, broadcasting, as_strided. No np.einsum-only paths, no newer kwargs.
+numpy-1.11.0 + Python-2.7 compatibility: uses np.dot for matmul (NOT the `@`
+operator, which is Python 3.5+ only -- ROS lunar rospy runs on py2.7), plus
+np.maximum/np.expm1/np.tanh, np.abs, broadcasting, as_strided. No np.einsum-only
+paths, no newer kwargs.
 """
 import numpy as np
 
@@ -13,7 +15,7 @@ import numpy as np
 # ---------------------------------------------------------------- primitives
 def linear(x, w, b):
     """torch nn.Linear: y = x @ w.T + b. w is (out, in), x is (..., in)."""
-    return x @ w.T + b
+    return np.dot(x, w.T) + b
 
 
 def elu(x, alpha=1.0):
@@ -71,8 +73,8 @@ def gru_cell(x_t, h, w_ih, w_hh, b_ih, b_hh):
     w_ih: (3*hidden, in)   w_hh: (3*hidden, hidden)   b_ih/b_hh: (3*hidden,)
     """
     hidden = h.shape[-1]
-    gi = x_t @ w_ih.T + b_ih          # (batch, 3*hidden)
-    gh = h @ w_hh.T + b_hh            # (batch, 3*hidden)
+    gi = np.dot(x_t, w_ih.T) + b_ih    # (batch, 3*hidden)
+    gh = np.dot(h, w_hh.T) + b_hh      # (batch, 3*hidden)
     i_r, i_z, i_n = gi[:, :hidden], gi[:, hidden:2 * hidden], gi[:, 2 * hidden:]
     h_r, h_z, h_n = gh[:, :hidden], gh[:, hidden:2 * hidden], gh[:, 2 * hidden:]
     r = _sigmoid(i_r + h_r)
