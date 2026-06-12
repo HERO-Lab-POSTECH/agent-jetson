@@ -8,7 +8,7 @@
   <!-- power relay with key 1).                                       -->
   <!--                                                                -->
   <!-- FIELD WORKFLOW:                                                -->
-  <!--   1) launch-agent   -> in the xterm teleop window press 1      -->
+  <!--   1) launch-agent   -> in the launch-agent terminal press 1      -->
   <!--      to turn the power RELAY ON (powers BOTH thrusters and the -->
   <!--      Dynamixel arm; the arm will NOT move until relay is ON).  -->
   <!--   2) launch-rl      -> this file (joint driver + RL node).     -->

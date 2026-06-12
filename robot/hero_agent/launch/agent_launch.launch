@@ -26,10 +26,10 @@
     <rosparam file="$(find hero_agent)/config/agent.yaml" command="load" />
   </node>
 
-  <!-- Teleop (needs terminal window for keyboard input) -->
+  <!-- Teleop (reads keys from the launch-agent terminal itself; no separate xterm) -->
   <group if="$(arg teleop)">
     <node pkg="hero_agent" name="key_teleop" type="key_teleop.py"
-          output="screen" launch-prefix="xterm -e" />
+          output="screen" />
   </group>
 
 </launch>
