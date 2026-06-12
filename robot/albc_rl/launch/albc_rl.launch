@@ -1,0 +1,13 @@
+<launch>
+  <!-- RL student-policy inference node (50 Hz), 69D attitude-only. -->
+  <!-- SURFACE TEST DEFAULT: thruster_scale=0.0 -> thrusters held at 0, joint-only.   -->
+  <!-- For a brief surface thrust burst instead: thruster_scale:=1.0 thruster_max_s:=2.0 -->
+  <node pkg="albc_rl" name="rl_inference_node" type="rl_inference_node.py" output="screen">
+    <param name="encoder_type"    value="tcn" />        <!-- tcn | gru -->
+    <param name="control_hz"      value="50.0" />
+    <param name="use_board_rates" value="false" />      <!-- true=trust /albc_status angvel -->
+    <param name="thruster_scale"  value="0.0" />        <!-- 0.0=joint-only surface test, 1.0=live -->
+    <param name="thruster_max_s"  value="0.0" />        <!-- >0 => thrusters off after N sec -->
+    <!-- weights_dir defaults to ../numpy_port relative to the node file -->
+  </node>
+</launch>

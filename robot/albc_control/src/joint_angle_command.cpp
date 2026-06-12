@@ -1,6 +1,30 @@
+// joint_angle_command.cpp  —  PATCHED for RL deployment
+// ------------------------------------------------------------------------------
+// Adds a /albc/joint_states publisher to the existing Dynamixel driver so the RL
+// inference node can read the arm state WITHOUT opening the serial port itself
+// (the port has a single owner -- this node). Two deliberate choices, both decided
+// against the sim contract (observations.py robot.data.joint_pos / joint_vel):
+//
+//   1. joint POSITION published = ACTUAL measured position (readPosition every loop,
+//      unwrapped+accumulated the same way absolute_angle is), NOT the commanded
+//      absolute_angle. The sim obs uses robot.data.joint_pos (true state), so the
+//      deployed obs must use the measured encoder value to match.
+//
+//   2. joint VELOCITY published = differentiated HERE at the true loop rate (10 Hz),
+//      shipped in JointState.velocity. The RL node runs at 50 Hz; if it re-diff'd a
+//      10 Hz position it would see a 4-tick-zero / 1-tick-spike staircase. The driver
+//      knows its real dt, so it owns the derivative.
+//
+// DIFF FROM ORIGINAL (search "RL-DEPLOY"):
+//   + #include <sensor_msgs/JointState.h>
+//   + readPositionRad() helper + per-joint measured-angle unwrap accumulator
+//   + joint_state_pub + publishJointStates() in the main loop
+// Everything else is byte-identical to the board original (verified @ 2026-06-07).
+// ------------------------------------------------------------------------------
 #include "ros/ros.h"
 #include "std_msgs/Float64.h"
 #include "std_msgs/Float32MultiArray.h"
+#include "sensor_msgs/JointState.h"          // RL-DEPLOY
 #include "dynamixel_sdk/dynamixel_sdk.h"
 
 #include "albc_control/dynamixel_config.h"
@@ -19,6 +43,18 @@ struct JointState {
 
 static JointState joint1 = {0.0, 0.0, JOINT1_ID};
 static JointState joint2 = {0.0, 0.0, JOINT2_ID};
+
+// RL-DEPLOY: measured-position accumulators (separate from commanded absolute_angle).
+// We unwrap the raw encoder angle into a cumulative value to match the sim's
+// raw-cumulative joint_pos, and differentiate it for velocity.
+struct MeasuredState {
+    double prev_meas_wrapped;   // last wrapped reading in [0,2pi)
+    double abs_meas;            // unwrapped cumulative measured angle (rad)
+    double vel;                 // differentiated velocity (rad/s)
+    bool   init;
+};
+static MeasuredState meas1 = {0.0, 0.0, 0.0, false};
+static MeasuredState meas2 = {0.0, 0.0, 0.0, false};
 
 static dynamixel::PortHandler*   port_handler   = nullptr;
 static dynamixel::PacketHandler* packet_handler = nullptr;
@@ -91,6 +127,28 @@ int32_t readPosition(uint8_t id) {
     return static_cast<int32_t>(raw);
 }
 
+// RL-DEPLOY: read measured position, unwrap-accumulate, and differentiate (dt = loop period).
+// Mirrors the sim's raw-cumulative joint_pos and gives a clean joint_vel at the true rate.
+void updateMeasured(MeasuredState& m, uint8_t id, double dt) {
+    double wrapped = DXL_TO_RAD(readPosition(id));      // raw reading, may wrap at +-pi/2pi
+    // normalize to [0, 2pi) for a stable wrap comparison
+    double w = fmod(wrapped, 2.0 * M_PI);
+    if (w < 0.0) w += 2.0 * M_PI;
+    if (!m.init) {
+        m.prev_meas_wrapped = w;
+        m.abs_meas = wrapped;     // seed cumulative with the raw reading
+        m.vel = 0.0;
+        m.init = true;
+        return;
+    }
+    double delta = w - m.prev_meas_wrapped;
+    if (delta > M_PI) delta -= 2.0 * M_PI;             // unwrap, same rule as updateJoint()
+    else if (delta <= -M_PI) delta += 2.0 * M_PI;
+    m.abs_meas += delta;
+    m.vel = delta / dt;
+    m.prev_meas_wrapped = w;
+}
+
 // ==============================
 // Callback (DRY: handles both joints)
 // ==============================
@@ -127,6 +185,8 @@ int main(int argc, char **argv) {
     ros::NodeHandle nh;
 
     ros::Publisher current_pub = nh.advertise<std_msgs::Float32MultiArray>("joint_currents", 10);
+    // RL-DEPLOY: arm state for the RL inference node (pos = measured, vel = differentiated here)
+    ros::Publisher joint_state_pub = nh.advertise<sensor_msgs::JointState>("/albc/joint_states", 10);
 
     ros::Subscriber joint1_sub = nh.subscribe<std_msgs::Float64>(
         "/hero_agent/active_joint1_position_controller/command", 10, joint1Callback);
@@ -175,9 +235,12 @@ int main(int argc, char **argv) {
     ROS_INFO("  J1 present: %.1f deg  J2 present: %.1f deg",
              angle1 * 180.0 / M_PI, angle2 * 180.0 / M_PI);
     ROS_INFO("  Startup: slow move for %.1f sec after first cmd", STARTUP_TICKS / 10.0);
+    ROS_INFO("  RL-DEPLOY: publishing /albc/joint_states (measured pos + vel)");
     ROS_INFO("===================================");
 
-    ros::Rate loop_rate(10);
+    const double LOOP_HZ = 10.0;             // RL-DEPLOY: dt for velocity differentiation
+    ros::Rate loop_rate(LOOP_HZ);
+    const double dt = 1.0 / LOOP_HZ;
 
     while (ros::ok()) {
         // Restore full speed after startup ramp completes (timer starts on first command)
@@ -198,6 +261,16 @@ int main(int argc, char **argv) {
         std_msgs::Float32MultiArray current_msg;
         current_msg.data = {current1_mA, current2_mA};
         current_pub.publish(current_msg);
+
+        // RL-DEPLOY: read measured positions, accumulate + differentiate, publish JointState.
+        updateMeasured(meas1, JOINT1_ID, dt);
+        updateMeasured(meas2, JOINT2_ID, dt);
+        sensor_msgs::JointState js;
+        js.header.stamp = ros::Time::now();
+        js.name = {"albc_joint1", "albc_joint2"};
+        js.position = {meas1.abs_meas, meas2.abs_meas};   // measured, raw-cumulative (matches sim)
+        js.velocity = {meas1.vel, meas2.vel};             // differentiated at true 10 Hz
+        joint_state_pub.publish(js);
 
         // [BUG FIX T1] Throttled logging (was unthrottled at 10 Hz)
         ROS_INFO_THROTTLE(2.0, "Joint Currents - J1: %.1f mA, J2: %.1f mA", current1_mA, current2_mA);

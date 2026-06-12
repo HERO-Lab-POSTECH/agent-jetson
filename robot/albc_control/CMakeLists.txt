@@ -6,6 +6,7 @@ add_compile_options(-std=c++11)
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
+  sensor_msgs
   dynamixel_sdk
   hero_msgs
   dynamic_reconfigure
@@ -20,6 +21,7 @@ catkin_package(
   CATKIN_DEPENDS
     roscpp
     std_msgs
+    sensor_msgs
     dynamixel_sdk
     hero_msgs
     dynamic_reconfigure
