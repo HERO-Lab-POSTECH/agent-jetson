@@ -1,0 +1,46 @@
+<launch>
+  <!-- ============================================================= -->
+  <!-- JOINT-ONLY SURFACE FIELD TEST                                  -->
+  <!-- Brings up the Dynamixel joint driver + RL inference node in    -->
+  <!-- one shot. Does NOT start albc_controller (would also command   -->
+  <!-- the joints -> conflict). Does NOT start the IMU bridge/teleop  -->
+  <!-- (that is launch-agent, which is also the path to toggle the    -->
+  <!-- power relay with key 1).                                       -->
+  <!--                                                                -->
+  <!-- FIELD WORKFLOW:                                                -->
+  <!--   1) launch-agent   -> in the xterm teleop window press 1      -->
+  <!--      to turn the power RELAY ON (powers BOTH thrusters and the -->
+  <!--      Dynamixel arm; the arm will NOT move until relay is ON).  -->
+  <!--   2) launch-rl      -> this file (joint driver + RL node).     -->
+  <!--                                                                -->
+  <!-- THRUSTER SAFETY: thruster_scale defaults to 0.0 so the RL node -->
+  <!-- publishes zero thrust even though the relay is powered. Verify -->
+  <!--   rostopic echo /albc/thruster_cmd  (all 6 channels == 0.0).   -->
+  <!-- ============================================================= -->
+
+  <!-- Pass-through args mirror albc_rl.launch so CLI override works:  -->
+  <!--   roslaunch albc_rl albc_rl_fieldtest.launch thruster_scale:=1.0 -->
+  <arg name="encoder_type"        default="tcn" />
+  <arg name="control_hz"          default="50.0" />
+  <arg name="use_board_rates"     default="false" />
+  <arg name="thruster_scale"      default="0.0" />
+  <arg name="thruster_max_s"      default="0.0" />
+  <arg name="imu_yaw_offset_deg"  default="45.0" />
+  <arg name="sensor_timeout_s"    default="0.2" />
+  <arg name="joint_timeout_s"     default="0.5" />
+
+  <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
+  <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen" />
+
+  <!-- 2) RL student-policy inference node (reuse albc_rl.launch node def via include) -->
+  <include file="$(find albc_rl)/launch/albc_rl.launch">
+    <arg name="encoder_type"       value="$(arg encoder_type)" />
+    <arg name="control_hz"         value="$(arg control_hz)" />
+    <arg name="use_board_rates"    value="$(arg use_board_rates)" />
+    <arg name="thruster_scale"     value="$(arg thruster_scale)" />
+    <arg name="thruster_max_s"     value="$(arg thruster_max_s)" />
+    <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
+    <arg name="sensor_timeout_s"   value="$(arg sensor_timeout_s)" />
+    <arg name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
+  </include>
+</launch>
