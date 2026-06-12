@@ -181,6 +181,88 @@ def test_no_linvel_in_proprio():
     np.testing.assert_allclose(out[9:11], [0.5, 0.7], atol=ATOL)
 
 
+# ----------------------------------------------- IMU board-frame correction
+# Oracle: albc_control/include/albc_control/imu_rotation.h (byte-identical
+# transcription of albc_controller.cpp imuCallback). The RL field test runs
+# WITHOUT albc_controller, and /hero_agent/sensors is the RAW IMU frame (both
+# C++ consumers correct it themselves on receive) -- so the RL node must apply
+# the same correction before building proprio, or the policy sees a frame it
+# was never trained on.
+def test_rotate_imu_zero_offset_negates_pitch():
+    from build_proprio import rotate_imu
+    # offset 0: roll passes, PITCH is NEGATED (pinned sign), yaw passes.
+    out = rotate_imu(0.1, 0.2, 0.3, 0.0)
+    np.testing.assert_allclose(out, [0.1, -0.2, 0.3], atol=ATOL)
+
+
+def test_rotate_imu_yaw_passthrough_any_offset():
+    from build_proprio import rotate_imu
+    out = rotate_imu(0.5, -0.4, 1.234, np.deg2rad(45.0))
+    assert out[2] == pytest.approx(1.234, abs=ATOL)
+
+
+def test_rotate_imu_45deg_pinned_golden():
+    from build_proprio import rotate_imu
+    # hand-computed against imu_rotation.h: raw=(0.1, -0.2), c=s=sqrt(2)/2
+    #   roll  = ( 0.1 - 0.2) * 0.70710678 = -0.0707106781
+    #   pitch = (-0.1 - 0.2) * 0.70710678 = -0.2121320344
+    out = rotate_imu(0.1, 0.2, 0.3, np.pi / 4.0)
+    np.testing.assert_allclose(
+        out, [-0.0707106781, -0.2121320344, 0.3], atol=1e-6)
+
+
+def test_rotate_imu_matches_cpp_reference_sweep():
+    from build_proprio import rotate_imu
+
+    def ref(ROLL, PITCH, YAW, off):
+        # independent transcription of imu_rotation.h rotateImu()
+        raw_roll = ROLL
+        raw_pitch = -(PITCH)
+        c, s = np.cos(off), np.sin(off)
+        return (c * raw_roll + s * raw_pitch,
+                -s * raw_roll + c * raw_pitch,
+                YAW)
+
+    rng = np.random.RandomState(7)
+    for _ in range(50):
+        r, p, y = rng.uniform(-np.pi, np.pi, 3)
+        off = rng.uniform(-np.pi, np.pi)
+        np.testing.assert_allclose(
+            rotate_imu(r, p, y, off), ref(r, p, y, off), atol=1e-6)
+
+
+# ----------------------------------------------- thruster echo: builder-owned
+# Contract (node docstring + set_last_action docstring): obs[14:20] = the 6
+# thruster channels of the LAST action. The node must not have to thread the
+# echo through the sensor dict every tick -- when 'thruster' is absent, the
+# builder echoes set_last_action() itself (closing the node<->builder seam
+# where the audit found obs[14:20] permanently stuck at zero).
+def test_thruster_echo_falls_back_to_last_action():
+    b = ProprioBuilder()
+    b.set_last_action([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
+    s = _sensors()
+    s.pop("thruster")
+    out = b.build(s)
+    np.testing.assert_allclose(out[14:20], [0.3, 0.4, 0.5, 0.6, 0.7, 0.8], atol=ATOL)
+
+
+def test_thruster_echo_zeros_before_first_action():
+    # cold start: no action published yet -> echo must be zeros (sim reset state)
+    b = ProprioBuilder()
+    s = _sensors()
+    s.pop("thruster")
+    out = b.build(s)
+    np.testing.assert_allclose(out[14:20], np.zeros(6), atol=ATOL)
+
+
+def test_explicit_thruster_key_overrides_echo():
+    # bench tests / golden replays inject thruster explicitly -- that path wins
+    b = ProprioBuilder()
+    b.set_last_action([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
+    out = b.build(_sensors(thruster=(9, 9, 9, 9, 9, 9)))
+    np.testing.assert_allclose(out[14:20], [9, 9, 9, 9, 9, 9], atol=ATOL)
+
+
 # ----------------------------------------------- reset clears estimator state
 def test_reset_clears_rate_estimators():
     b = ProprioBuilder()

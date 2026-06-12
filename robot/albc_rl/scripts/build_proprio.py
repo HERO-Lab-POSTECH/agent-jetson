@@ -62,6 +62,36 @@ def _wrap(a):
     return np.arctan2(np.sin(a), np.cos(a))
 
 
+def rotate_imu(ROLL, PITCH, YAW, offset_rad):
+    """Board-frame IMU correction. Transcription of imu_rotation.h rotateImu().
+
+    /hero_agent/sensors is the RAW IMU frame -- every consumer corrects it on
+    receive (albc_controller imuCallback, hero_agent StateMonitor::onSensor).
+    The RL node runs without albc_controller, so it applies the same correction
+    here before building proprio. Sign/operation conventions are PINNED to the
+    C++ oracle (do NOT "fix" without intent):
+
+        raw_roll  =  ROLL              (no sign change)
+        raw_pitch = -(PITCH)           (PITCH is NEGATED -- pinned)
+        c = cos(offset_rad), s = sin(offset_rad)
+        out_roll  =  c*raw_roll + s*raw_pitch
+        out_pitch = -s*raw_roll + c*raw_pitch
+        out_yaw   =  YAW               (passed through, no rotation)
+
+    offset_rad is the IMU mounting yaw offset in RADIANS (board default 45 deg,
+    albc_controller.yaml imu_yaw_offset).
+    """
+    raw_roll = ROLL
+    raw_pitch = -(PITCH)
+    c = np.cos(offset_rad)
+    s = np.sin(offset_rad)
+    return np.array([
+        c * raw_roll + s * raw_pitch,
+        -s * raw_roll + c * raw_pitch,
+        YAW,
+    ], dtype=np.float32)
+
+
 def manipulability(theta2):
     """Yoshikawa manipulability index, normalized to [0,1].
 
@@ -106,8 +136,10 @@ class ProprioBuilder:
     def build(self, s):
         """Map a sensor dict to the 20D proprio vector. See module docstring for keys.
 
-        Required keys: cmd_att(2), cmd_yawrate, euler(3), joint_pos(2), thruster(6).
+        Required keys: cmd_att(2), cmd_yawrate, euler(3), joint_pos(2).
         Optional: joint_vel(2) -- if present, used verbatim (driver-differentiated).
+        Optional: thruster(6) -- if absent, echoes set_last_action()[2:8] (the
+        runtime path; explicit injection is for bench tests / golden replays).
         """
         euler = np.asarray(s["euler"], dtype=np.float32).reshape(3)
         jpos = np.asarray(s["joint_pos"], dtype=np.float32).reshape(2)
@@ -126,7 +158,10 @@ class ProprioBuilder:
             self._prev_jpos = jpos
 
         manip = manipulability(jpos[1])
-        thr = np.asarray(s["thruster"], dtype=np.float32).reshape(6)
+        if "thruster" in s:
+            thr = np.asarray(s["thruster"], dtype=np.float32).reshape(6)
+        else:
+            thr = self._last_action[2:8].copy()   # echo of the last published action
 
         cmd_att = np.asarray(s["cmd_att"], dtype=np.float32).reshape(2)
         cmd_yawrate = np.float32(s["cmd_yawrate"])

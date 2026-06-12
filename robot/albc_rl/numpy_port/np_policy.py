@@ -88,6 +88,17 @@ class NumpyStudentPolicy:
         self._prev_action[:] = 0.0
         self._hist_step_counter = 0
 
+    @property
+    def joint_target(self):
+        """Accumulated absolute joint PD target (rad), copy of the internal buffer.
+
+        This is what the sim PD controller tracked (q_des). The ROS node publishes
+        THIS (absolute angle) to the Dynamixel driver -- NOT the raw delta action:
+        the driver's command topic contract is an absolute angle (updateJoint
+        unwrap-follows the received value).
+        """
+        return self._joint_target.copy()
+
     def act(self, proprio_20, cmd_3):
         obs69 = self._assemble_obs(proprio_20, cmd_3)
         obs_b = obs69.reshape(1, -1).astype(np.float32)

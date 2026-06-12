@@ -1,13 +1,26 @@
 <launch>
   <!-- RL student-policy inference node (50 Hz), 69D attitude-only. -->
-  <!-- SURFACE TEST DEFAULT: thruster_scale=0.0 -> thrusters held at 0, joint-only.   -->
-  <!-- For a brief surface thrust burst instead: thruster_scale:=1.0 thruster_max_s:=2.0 -->
+  <!-- SURFACE TEST DEFAULT: thruster_scale=0.0 -> thrusters held at 0, joint-only. -->
+  <!-- Brief surface thrust burst (args are declared, so CLI override WORKS):       -->
+  <!--   roslaunch albc_rl albc_rl.launch thruster_scale:=1.0 thruster_max_s:=2.0   -->
+  <arg name="encoder_type"        default="tcn" />    <!-- tcn | gru -->
+  <arg name="control_hz"          default="50.0" />
+  <arg name="use_board_rates"     default="false" />  <!-- true=trust /albc_status angvel -->
+  <arg name="thruster_scale"      default="0.0" />    <!-- 0.0=joint-only surface test, 1.0=live -->
+  <arg name="thruster_max_s"      default="0.0" />    <!-- >0 => thrusters latch to 0 after N sec -->
+  <arg name="imu_yaw_offset_deg"  default="45.0" />   <!-- IMU mounting yaw offset (albc_controller.yaml) -->
+  <arg name="sensor_timeout_s"    default="0.2" />    <!-- IMU staleness gate -->
+  <arg name="joint_timeout_s"     default="0.5" />    <!-- /albc/joint_states staleness gate -->
+
   <node pkg="albc_rl" name="rl_inference_node" type="rl_inference_node.py" output="screen">
-    <param name="encoder_type"    value="tcn" />        <!-- tcn | gru -->
-    <param name="control_hz"      value="50.0" />
-    <param name="use_board_rates" value="false" />      <!-- true=trust /albc_status angvel -->
-    <param name="thruster_scale"  value="0.0" />        <!-- 0.0=joint-only surface test, 1.0=live -->
-    <param name="thruster_max_s"  value="0.0" />        <!-- >0 => thrusters off after N sec -->
+    <param name="encoder_type"       value="$(arg encoder_type)" />
+    <param name="control_hz"         value="$(arg control_hz)" />
+    <param name="use_board_rates"    value="$(arg use_board_rates)" />
+    <param name="thruster_scale"     value="$(arg thruster_scale)" />
+    <param name="thruster_max_s"     value="$(arg thruster_max_s)" />
+    <param name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
+    <param name="sensor_timeout_s"   value="$(arg sensor_timeout_s)" />
+    <param name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
     <!-- weights_dir defaults to ../numpy_port relative to the node file -->
   </node>
 </launch>

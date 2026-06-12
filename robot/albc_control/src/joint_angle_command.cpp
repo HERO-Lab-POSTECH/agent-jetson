@@ -19,6 +19,15 @@
 //   + #include <sensor_msgs/JointState.h>
 //   + readPositionRad() helper + per-joint measured-angle unwrap accumulator
 //   + joint_state_pub + publishJointStates() in the main loop
+//   + (2026-06-12 field-test audit fixes)
+//     - command subscribers queue_size 10 -> 1 (50 Hz cmd vs 10 Hz loop: stale-burst
+//       of ~5 serial writes per joint per cycle -> exactly one, latest wins)
+//     - readPosition() returns success; a failed read no longer injects raw=0 as a
+//       real angle (+-pi fake delta, +-31 rad/s velocity spike into the RL obs).
+//       Failed cycles skip the JointState publish; failed INIT reads are fatal.
+//     - velocity differentiation uses the measured loop dt (ros::Time), not 1/LOOP_HZ
+//     - Dynamixel hardware error byte surfaced (WARN_THROTTLE) on read/write
+//     - one-shot "First command received" INFO so the operator sees cmd flow
 // Everything else is byte-identical to the board original (verified @ 2026-06-07).
 // ------------------------------------------------------------------------------
 #include "ros/ros.h"
@@ -96,6 +105,9 @@ void setPosition(uint8_t id, int32_t position) {
     int result = packet_handler->write4ByteTxRx(port_handler, id, ADDR_GOAL_POSITION, (unsigned int)position, &error);
     if (result != COMM_SUCCESS) {
         ROS_ERROR_THROTTLE(1.0, "Failed to set position %d for Dynamixel ID %d (err=%d)", position, id, result);
+    } else if (error != 0) {
+        // RL-DEPLOY: device-reported hardware error (overload/voltage/...) was silent
+        ROS_WARN_THROTTLE(1.0, "Dynamixel ID %d hardware error byte 0x%02X on goal write", id, error);
     }
 }
 
@@ -117,20 +129,32 @@ int16_t readCurrent(uint8_t id) {
     return current;
 }
 
-int32_t readPosition(uint8_t id) {
+// RL-DEPLOY: returns success instead of silently yielding raw=0 on a failed read.
+// A comm glitch used to inject 0 rad as a real measurement: up to +-pi of fake
+// delta and a +-31 rad/s velocity spike straight into the RL observation.
+bool readPosition(uint8_t id, int32_t* out) {
     uint8_t error = 0;
     uint32_t raw = 0;
     int result = packet_handler->read4ByteTxRx(port_handler, id, ADDR_PRESENT_POSITION, &raw, &error);
     if (result != COMM_SUCCESS) {
         ROS_ERROR_THROTTLE(1.0, "Failed to read position for Dynamixel ID %d (err=%d)", id, result);
+        return false;
     }
-    return static_cast<int32_t>(raw);
+    if (error != 0) {
+        ROS_WARN_THROTTLE(1.0, "Dynamixel ID %d hardware error byte 0x%02X on position read", id, error);
+    }
+    *out = static_cast<int32_t>(raw);
+    return true;
 }
 
-// RL-DEPLOY: read measured position, unwrap-accumulate, and differentiate (dt = loop period).
-// Mirrors the sim's raw-cumulative joint_pos and gives a clean joint_vel at the true rate.
-void updateMeasured(MeasuredState& m, uint8_t id, double dt) {
-    double wrapped = DXL_TO_RAD(readPosition(id));      // raw reading, may wrap at +-pi/2pi
+// RL-DEPLOY: read measured position, unwrap-accumulate, and differentiate (dt = TRUE
+// loop period, measured by the caller). Mirrors the sim's raw-cumulative joint_pos.
+// Returns false when the serial read failed -- the caller must skip publishing this
+// cycle so a glitch never corrupts the RL observation.
+bool updateMeasured(MeasuredState& m, uint8_t id, double dt) {
+    int32_t raw_pos = 0;
+    if (!readPosition(id, &raw_pos)) return false;
+    double wrapped = DXL_TO_RAD(raw_pos);               // raw reading, may wrap at +-pi/2pi
     // normalize to [0, 2pi) for a stable wrap comparison
     double w = fmod(wrapped, 2.0 * M_PI);
     if (w < 0.0) w += 2.0 * M_PI;
@@ -139,7 +163,7 @@ void updateMeasured(MeasuredState& m, uint8_t id, double dt) {
         m.abs_meas = wrapped;     // seed cumulative with the raw reading
         m.vel = 0.0;
         m.init = true;
-        return;
+        return true;
     }
     double delta = w - m.prev_meas_wrapped;
     if (delta > M_PI) delta -= 2.0 * M_PI;             // unwrap, same rule as updateJoint()
@@ -147,6 +171,7 @@ void updateMeasured(MeasuredState& m, uint8_t id, double dt) {
     m.abs_meas += delta;
     m.vel = delta / dt;
     m.prev_meas_wrapped = w;
+    return true;
 }
 
 // ==============================
@@ -166,13 +191,23 @@ void updateJoint(JointState& joint, double commanded_angle) {
     setPosition(joint.dxl_id, static_cast<int32_t>(RAD_TO_DXL(joint.absolute_angle)));
 }
 
+// RL-DEPLOY: one-shot INFO so the operator can SEE the first command arrive
+// (previously nothing was printed until the ramp-complete message ~5 s later).
+void noteFirstCommand(int joint_no, double angle) {
+    if (!first_command_received) {
+        first_command_received = true;
+        ROS_INFO("First command received (joint%d = %.3f rad) -- startup ramp begins (%.1f s)",
+                 joint_no, angle, STARTUP_TICKS / 10.0);
+    }
+}
+
 void joint1Callback(const std_msgs::Float64::ConstPtr& msg) {
-    if (!first_command_received) first_command_received = true;
+    noteFirstCommand(1, msg->data);
     updateJoint(joint1, msg->data);
 }
 
 void joint2Callback(const std_msgs::Float64::ConstPtr& msg) {
-    if (!first_command_received) first_command_received = true;
+    noteFirstCommand(2, msg->data);
     updateJoint(joint2, msg->data);
 }
 
@@ -188,10 +223,14 @@ int main(int argc, char **argv) {
     // RL-DEPLOY: arm state for the RL inference node (pos = measured, vel = differentiated here)
     ros::Publisher joint_state_pub = nh.advertise<sensor_msgs::JointState>("/albc/joint_states", 10);
 
+    // RL-DEPLOY: queue_size 1 -- the RL node publishes at 50 Hz but this loop drains
+    // callbacks at 10 Hz; with queue 10 every cycle replayed ~5 stale commands per
+    // joint, each one a serial goal write. Keeping only the LATEST command caps the
+    // serial traffic at one goal write per joint per cycle.
     ros::Subscriber joint1_sub = nh.subscribe<std_msgs::Float64>(
-        "/hero_agent/active_joint1_position_controller/command", 10, joint1Callback);
+        "/hero_agent/active_joint1_position_controller/command", 1, joint1Callback);
     ros::Subscriber joint2_sub = nh.subscribe<std_msgs::Float64>(
-        "/hero_agent/active_joint2_position_controller/command", 10, joint2Callback);
+        "/hero_agent/active_joint2_position_controller/command", 1, joint2Callback);
 
     port_handler   = dynamixel::PortHandler::getPortHandler(SERIAL_PORT);
     packet_handler = dynamixel::PacketHandler::getPacketHandler(PROTOCOL);
@@ -209,9 +248,15 @@ int main(int argc, char **argv) {
     enableTorque(JOINT1_ID);
     enableTorque(JOINT2_ID);
 
-    // Read current motor positions to initialize joint states (shortest-path rotation)
-    int32_t pos1 = readPosition(JOINT1_ID);
-    int32_t pos2 = readPosition(JOINT2_ID);
+    // Read current motor positions to initialize joint states (shortest-path rotation).
+    // RL-DEPLOY: a failed init read used to seed prev_commanded/absolute_angle with 0,
+    // silently corrupting the command baseline -- refuse to start instead.
+    int32_t pos1 = 0, pos2 = 0;
+    if (!readPosition(JOINT1_ID, &pos1) || !readPosition(JOINT2_ID, &pos2)) {
+        ROS_ERROR("Initial position read failed -- refusing to start with a corrupt baseline");
+        port_handler->closePort();
+        return -1;
+    }
     double angle1 = DXL_TO_RAD(pos1);
     double angle2 = DXL_TO_RAD(pos2);
 
@@ -238,9 +283,12 @@ int main(int argc, char **argv) {
     ROS_INFO("  RL-DEPLOY: publishing /albc/joint_states (measured pos + vel)");
     ROS_INFO("===================================");
 
-    const double LOOP_HZ = 10.0;             // RL-DEPLOY: dt for velocity differentiation
+    const double LOOP_HZ = 10.0;
     ros::Rate loop_rate(LOOP_HZ);
-    const double dt = 1.0 / LOOP_HZ;
+    // RL-DEPLOY: differentiate with the MEASURED loop period, not 1/LOOP_HZ -- when
+    // the loop runs long (serial latency) a fixed dt systematically overestimates
+    // the published joint velocity, which feeds the RL observation.
+    ros::Time prev_loop_t = ros::Time::now();
 
     while (ros::ok()) {
         // Restore full speed after startup ramp completes (timer starts on first command)
@@ -263,14 +311,25 @@ int main(int argc, char **argv) {
         current_pub.publish(current_msg);
 
         // RL-DEPLOY: read measured positions, accumulate + differentiate, publish JointState.
-        updateMeasured(meas1, JOINT1_ID, dt);
-        updateMeasured(meas2, JOINT2_ID, dt);
-        sensor_msgs::JointState js;
-        js.header.stamp = ros::Time::now();
-        js.name = {"albc_joint1", "albc_joint2"};
-        js.position = {meas1.abs_meas, meas2.abs_meas};   // measured, raw-cumulative (matches sim)
-        js.velocity = {meas1.vel, meas2.vel};             // differentiated at true 10 Hz
-        joint_state_pub.publish(js);
+        ros::Time now_t = ros::Time::now();
+        double dt = (now_t - prev_loop_t).toSec();
+        prev_loop_t = now_t;
+        if (dt < 0.005) dt = 0.005;          // clamp against timer glitches; the init
+        if (dt > 1.0)   dt = 1.0;            // path ignores dt entirely
+        bool ok1 = updateMeasured(meas1, JOINT1_ID, dt);
+        bool ok2 = updateMeasured(meas2, JOINT2_ID, dt);
+        if (ok1 && ok2) {
+            sensor_msgs::JointState js;
+            js.header.stamp = now_t;
+            js.name = {"albc_joint1", "albc_joint2"};
+            js.position = {meas1.abs_meas, meas2.abs_meas};   // measured, raw-cumulative (matches sim)
+            js.velocity = {meas1.vel, meas2.vel};             // differentiated at the true rate
+            joint_state_pub.publish(js);
+        } else {
+            // skip the publish: the RL node's staleness gate handles a long outage,
+            // and a single glitch must not reach the observation as fake state.
+            ROS_WARN_THROTTLE(1.0, "joint position read failed -- joint_states publish skipped");
+        }
 
         // [BUG FIX T1] Throttled logging (was unthrottled at 10 Hz)
         ROS_INFO_THROTTLE(2.0, "Joint Currents - J1: %.1f mA, J2: %.1f mA", current1_mA, current2_mA);
