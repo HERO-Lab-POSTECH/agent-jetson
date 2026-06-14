@@ -25,6 +25,7 @@
 #define F_CPU 16000000UL
 
 #include "config.h"
+#include "ahrs.h"
 //--------------------------------------
 
 // for ROS serial libaray for PUBLISH---------------------
@@ -54,11 +55,7 @@ volatile boolean stringComplete = false; // whether the string is complete
 
 volatile uint8_t imu_check = 0;
 
-volatile union
-{
-  float real;
-  uint32_t base;
-} u_data;
+// u_data union 정의는 ahrs.cpp로 이동 (파싱 전용, ISR은 미사용).
 
 volatile float roll, pitch, yaw;
 volatile float yaw_temp;
@@ -563,98 +560,7 @@ ISR(USART1_RX_vect)
   // inputString[19] == 1 &&
   if (serial_count == MIP_PACKET_LEN && inputString[35] == 1) //수신이 완료
   {
-    stringComplete = true;
-    serial_count = 0;
-    imu_check = 0;
-    check_hz++;
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[9]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[8]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[7]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[6]) << (8 * 3);
-    roll = u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[13]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[12]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[11]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[10]) << (8 * 3);
-    pitch = u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[17]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[16]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[15]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[14]) << (8 * 3);
-    yaw = u_data.real;
-    yaw_temp = u_data.real;
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[25]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[24]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[23]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[22]) << (8 * 3);
-    acc_roll = u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[29]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[28]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[27]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[26]) << (8 * 3);
-    acc_pitch = u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[33]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[32]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[31]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[30]) << (8 * 3);
-    acc_yaw = u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[41]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[40]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[39]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[38]) << (8 * 3);
-    // if (u_data.real > -0.01 && u_data.real < 0.01)
-    acc_x += u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[45]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[44]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[43]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[42]) << (8 * 3);
-    if (u_data.real > -0.01 && u_data.real < 0.01)
-      acc_y += u_data.real;
-
-    u_data.base = 0;
-    u_data.base |= ((uint32_t)inputString[49]) << (8 * 0);
-    u_data.base |= ((uint32_t)inputString[48]) << (8 * 1);
-    u_data.base |= ((uint32_t)inputString[47]) << (8 * 2);
-    u_data.base |= ((uint32_t)inputString[46]) << (8 * 3);
-    if (u_data.real > -0.01 && u_data.real < 0.01)
-      acc_z += u_data.real;
-    acc_count++;
-
-    ahrs_valid1 = inputString[19];
-    ahrs_valid2 = inputString[35];
-    ahrs_valid3 = inputString[51];
-
-    yaw -= yaw_calib2;
-
-    if (yaw_calid_command == 1)
-    {
-      yaw_calid_command = 0;
-      yaw_calib2 = yaw_temp;
-      pre_yaw = 0;
-      yaw = 0;
-      yaw_calib = 0;
-    }
-
-    if (yaw - pre_yaw > YAW_WRAP_THRESH)
-      yaw_calib--;
-    else if (yaw - pre_yaw < -YAW_WRAP_THRESH)
-      yaw_calib++;
-    pre_yaw = yaw;
-    yaw += YAW_PI * yaw_calib * 2;
+    ahrs_parse_packet(); // 패킷 완성 파싱 본문(u_data 추출·yaw unwrap) → ahrs.cpp로 이동
   }
   else if (serial_count > MIP_PACKET_LEN) //데이터가 10개 넘게 들어옴 (데inputString[19]이터 수신 실패)
   {
@@ -665,14 +571,7 @@ ISR(USART1_RX_vect)
   }
 }
 
-void UART1_write(char ch)
-{
-
-  while (!(UCSR1A & 0x20))
-    ;
-
-  UDR1 = ch;
-}
+// UART1_write() 정의는 ahrs.cpp로 이동 (선언은 ahrs.h).
 void UART2_write(char ch)
 {
 
@@ -816,19 +715,7 @@ void Initialization(void)
 
   // Init AHRS
 
-  delay(100);
-  UART1_write(0x75);
-  UART1_write(0x65);
-  UART1_write(0x0C);
-  UART1_write(0x05);
-  UART1_write(0x05);
-  UART1_write(0x11);
-  UART1_write(0x01);
-  UART1_write(0x03);
-  UART1_write(0x01);
-  UART1_write(0x06);
-  UART1_write(0x1E);
-  delay(1000);
+  ahrs_init(); // AHRS MIP init 시퀀스(delay 포함) → ahrs.cpp로 이동
 
   // init gripper by servo
   // GRIPPER_SERVO.attach(GRIPPER_SIG);
