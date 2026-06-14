@@ -1,10 +1,11 @@
 # 펌웨어 빌드·flash 방식 (agent-jetson ATmega2560)
 
-> 이 펌웨어를 빌드·flash하려면 **반드시 이 문서를 먼저 읽어라.** 보드에 Arduino IDE가 2개 설치돼 있고, 틀린 쪽으로 빌드하면 링커 에러로 막힌다(아래 §함정). 2026-06-14 보드 SSH 실측·ELF 링크 검증으로 확정한 내용이다.
+> 이 펌웨어를 빌드·flash하려면 **반드시 이 문서를 먼저 읽어라.** 보드에 Arduino IDE가 2개 설치돼 있고, 틀린 쪽으로 빌드하면 링커 에러로 막힌다(아래 §함정). 2026-06-14 보드 SSH 실측으로 확정: 빌드는 ELF 링크 검증(MegaCore exit 0 / 표준코어 exit 1), flash 경로는 avrdude 시그니처 read sync 성공(`0x1e9801`). 둘 다 칩 미접촉 read-only로 검증.
 
 ## 한 줄 결론
 
-**빌드·flash = MegaCore 보드패키지 + `board=2560` (ATmega2560), Arduino IDE의 "Verify/Upload".** 표준 Arduino AVR 코어(`board=mega`=ATmega1280)로 빌드하면 `multiple definition of '__vector_36'` 링커 에러로 실패한다 — 이건 펌웨어 결함이 아니라 코어 선택 오류다.
+- **빌드 = MegaCore 코어(`board=2560`, ATmega2560).** 표준 Arduino AVR 코어(`board=mega`=ATmega1280)로 빌드하면 `multiple definition of '__vector_36'` 링커 에러로 실패한다 — 펌웨어 결함이 아니라 코어 선택 오류다.
+- **flash = avrdude CLI 직접** (`-c arduino -b 115200 -P /dev/ttyUSB1`). **보드엔 MegaCore를 구동할 IDE가 없다**(IDE 1.0.5만 있고 그건 표준코어=충돌). avrdude 6.2 + MegaCore avrdude.conf는 보드에 있으므로 IDE 없이 보드에서 flash가 완결된다. 2026-06-14 시그니처 read로 이 protocol/speed가 칩과 sync됨을 실측 확인(`0x1e9801`).
 
 ## 정확한 설정 (보드 `~/.arduino15/preferences.txt` 실측값)
 
@@ -16,8 +17,9 @@
 | Pinout | AVR pinout (`custom_pinout=2560_avr_pinout`, variant `100-pin-avr`) |
 | BOD | 2.7V (`custom_BOD=2560_2v7`) |
 | Sketchbook | `/home/nvidia/Arduino` (ros_lib·MS5837 라이브러리가 여기 있음) |
-| Upload 포트 | `/dev/ttyUSB1` (FT232RL = Arduino 표준, 자동리셋 DTR 지원) — ttyUSB0 아님 |
-| Upload protocol | `arduino` (STK500, IDE가 DTR로 자동리셋) |
+| Upload 포트 | `/dev/ttyUSB1` (FT232R, ID `0403:6001`, DTR 자동리셋 지원) — ttyUSB0 아님 |
+| Upload protocol | **`arduino`** (STK500v1) — ⚠️ 표준 Mega2560의 `wiring`(STK500v2) 아님. 칩에 MegaCore optiboot_flash 부트로더가 깔려 있어서다 |
+| Upload speed | **115200** (`2560.menu.clock.16MHz_external.upload.speed`) |
 
 ## 왜 표준 코어로는 안 되나 (링커 충돌의 진짜 원인)
 
@@ -49,15 +51,33 @@ ros_lib 3복사본(`~/Arduino/libraries`, `~/sketchbook/libraries`, `catkin_ws/.
 
 `~/.arduino`(1.0.5)로 빌드하려 하면 위 링커 충돌에 막힌다. firmware 디렉토리에 한때 있던 `~/fw_gate.sh`는 **구조화 검증용 헬퍼**(`avr-g++ -c` 오브젝트 컴파일만, 링크·flash 없음)지 빌드/flash 도구가 아니다.
 
-## MCU = ATmega2560 (확정)
+## MCU = ATmega2560 (칩이 직접 확인 — 2026-06-14)
 
-코어 `ISR(USART1_RX_vect)`는 2560의 vector 36에 해당하고, MegaCore `board=2560`·이 README 헤더와 일치한다. `~/.arduino`의 `board=mega`(1280)는 stale 오설정이다. avrdude CLI 수동 호출은 자동리셋(DTR)이 안 걸려 sync 실패하므로, flash는 IDE Upload(DTR 자동리셋) 경로를 쓴다.
+avrdude 시그니처 read로 칩이 직접 답함: **`Device signature = 0x1e9801` (= atmega2560)**. 1280이면 `0x1e9703`이다. MegaCore `board=2560`·README 헤더·코어 `ISR(USART1_RX_vect)`(2560 vector 36)와 100% 일치. `~/.arduino`의 `board=mega`(1280)는 stale 오설정이다.
 
 ## flash 절차 (비가역 — 신중히)
 
-펌웨어 flash는 UUV 유일 컨트롤러를 덮어쓰는 비가역 작업이다. 순서:
+펌웨어 flash는 UUV 유일 컨트롤러를 덮어쓰는 비가역 작업이다. 아래는 보드에서 IDE 없이 avrdude CLI로 완결하는 절차다. `CONF=~/.arduino15/packages/MegaCore/hardware/avr/2.0.1/avrdude.conf` 로 두고 진행한다.
 
-- **사전**: ROS가 ttyUSB1을 점유하면 flash 불가 → `pkill -f rosserial; pkill -f roslaunch`로 포트 해제.
-- **롤백 자산**: 보드 `~/chip_known_good_2024_agent_tdc_20260614.ino` (md5 `751df1cc`, 칩에 깔린 직전 펌웨어 소스). read-back .hex는 avrdude CLI sync 실패로 못 뜨므로 이 소스 재flash가 유일 롤백 경로다.
-- **빌드/Upload**: 위 §설정대로 MegaCore `board=2560`·16 MHz external·port ttyUSB1로 IDE Verify → Upload.
-- **flash 후 검증**: ① `rostopic echo /hero_agent/sensors`가 발행되는지(checksum 일치 = 통신 두절 해소) ② GYRO 필드에 자이로 진값이 흐르는지(축·부호·단위 rad/s vs deg/s) ③ 보드 `catkin_make`(dynamic_reconfigure cfg 헤더 생성).
+**0. 사전 — 포트 해제**: ROS rosserial이 ttyUSB1을 점유하면 flash 불가 → `pkill -f rosserial; pkill -f roslaunch` 후 `fuser /dev/ttyUSB1`로 free 확인.
+
+**1. 롤백 백업 (필수, read-only)**: 이제 sync가 되므로 현재 칩 펌웨어를 .hex로 떠둔다 — 소스 재flash보다 정확한 바이너리 복원이다.
+
+    avrdude -C "$CONF" -p atmega2560 -c arduino -P /dev/ttyUSB1 -b 115200 -U flash:r:chip_backup_$(date +%Y%m%d).hex:i
+
+추가 소스 롤백 자산: 보드 `~/chip_known_good_2024_agent_tdc_20260614.ino` (md5 `751df1cc`, 직전 펌웨어 소스).
+
+**2. .hex 빌드**: MegaCore 코어로 ELF 링크(§검증 증거의 그 경로) → objcopy. `avr-objcopy`는 `/usr/share/arduino/hardware/tools/avr/bin/`에 있다.
+
+    avr-objcopy -O ihex -R .eeprom agent.elf agent.hex
+
+**3. flash (비가역)**:
+
+    avrdude -C "$CONF" -p atmega2560 -c arduino -P /dev/ttyUSB1 -b 115200 -D -U flash:w:agent.hex:i
+
+(`-D`=칩 자동 erase 생략; optiboot가 페이지 단위로 처리. 부트로더 보존.)
+
+**4. flash 후 검증**: ① `rostopic echo /hero_agent/sensors`가 발행되는지(checksum 일치 = 통신 두절 해소) ② GYRO 필드에 자이로 진값이 흐르는지(축·부호·단위 rad/s vs deg/s) ③ 보드 `catkin_make`(dynamic_reconfigure cfg 헤더 생성).
+
+### avrdude sync 실측 (2026-06-14, RESUME가 못 푼 sync 실패 종결)
+정답 조합 `-c arduino -b 115200`로 시그니처 read 성공(`0x1e9801`, exit 0). RESUME 2차 세션의 sync 실패(4종 전부 `not in sync`)는 **틀린 프로토콜**이 원인이었다 — 시도한 `wiring`(STK500v2)·`arduino/57600`은 칩의 optiboot_flash(STK500v1/115200)와 불일치. `arduino/115200`은 안 시도했었다. DTR 자동리셋도 정상(FT232R) — 자동리셋 문제가 아니라 프로토콜 미스매치였다.
