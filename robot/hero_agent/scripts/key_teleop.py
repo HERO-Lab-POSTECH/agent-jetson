@@ -17,30 +17,30 @@ import termios
 import os
 import signal
 
-HELP_TEXT = """
-═══════════════════════════════════════════════════
-           HERO Key Teleop (V3)
-═══════════════════════════════════════════════════
- STARTUP: 1=Relay 3=Yaw 4=Depth z=Spd wasd
-═══════════════════════════════════════════════════
- Toggle  1=Relay  3=Yaw  4=Depth  5=Laser
- Init    2=PWM  N=YawReset
- Move    w/s/a/d  r/f=Heave
- Speed   z/x=+/-10  u/j=Throttle+/-10
- Yaw     i/k=+/-0.1
- Depth   o/l=+/-0.1
- Grip    c=Open  v=Stop  b=Close
-──────────────── Jetson Only ──────────────────────
- Target  e=Send  q=Reset
- TDC     ,=Toggle  y/h=Mb  u=KKp  i=KKv
- Winch   6=Cal  7/8=Meter  9/0=Step
- Recov   z/x/c/v/b  /=ExpHold  ]=ExpClose
- Auto    t=Start  g=Stop
- Mosaic  p=Toggle   Dknet  n=Toggle
- Rec     [=Experiment  R=Rosbag
-═══════════════════════════════════════════════════
- Ctrl+C to exit
-"""
+# keymap.h KEYMAP[]와 lock-step (사용자키, 동작). 변경 시 양쪽 동시 수정.
+# 'R'(CSV log)은 keymap 범위 밖 agent 내부 플래그(csv_logger.toggle) — 광고만 여기.
+KEY_TABLE = [
+    ("System",   [("1","Relay(toggle)"),("2","PWM Neutral"),("N","Yaw Reset"),("R","CSV log(toggle)")]),
+    ("Control",  [("3","Yaw Ctrl(toggle)"),("4","Depth Ctrl(toggle)"),("5","Laser(toggle)")]),
+    ("Jog",      [("w/s","Fwd/Back"),("a/d","Left/Right"),("q","STOP")]),
+    ("Speed",    [("y/h","Speed +/-")]),
+    ("Throttle", [("u/j","Throttle +/-")]),
+    ("Setpoint", [("i/k","Yaw +/-0.1"),("o/l","Depth +/-0.1")]),
+    ("Gripper",  [("c/v/b","Open/Stop/Close")]),
+    ("Heave",    [("r/f","Up/Down")]),
+]
+
+def build_help():
+    lines = ["", "="*51, "        HERO Key Teleop (V4 allow-list)", "="*51]
+    for grp, keys in KEY_TABLE:
+        body = "  ".join("%s=%s" % (k, d) for k, d in keys)
+        lines.append(" %-9s %s" % (grp, body))
+    lines.append("-"*51)
+    lines.append(" Unlisted keys are ignored.  Ctrl+C to exit")
+    lines.append("="*51)
+    return "\n".join(lines)
+
+HELP_TEXT = build_help()
 
 running = True
 
