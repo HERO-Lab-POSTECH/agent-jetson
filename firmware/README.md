@@ -39,9 +39,13 @@ ros_lib는 generated라 git에 vendor하지 않는다. 메시지 스키마 변�
 - `libraries/BlueRobotics_MS5837/` — 압력센서 (verbatim vendor)
 - ros_lib — regen_ros_lib.sh로 생성 (커밋 안 함)
 
-## ⚠️ GYRO 필드
-hero_agent_sensor.msg에 GYRO_X/Y/Z가 있으나 이 펌웨어는 아직 publish하지 않는다.
-실제 publish(.ino depth_count==3 블록 3줄 추가)는 별도 조각(atomic imu+gyro flash, 비가역)에서.
+## GYRO 필드 (2026-06-14 publish 활성화)
+
+hero_agent_sensor.msg의 GYRO_X/Y/Z를 펌웨어가 publish한다 — `acc_roll/acc_pitch/acc_yaw`(MIP 파싱된 자이로 진값 p,q,r, raw sensor frame). receive-side(`albc_rl/scripts/build_proprio.py`의 `rotate_gyro`)가 sensor→base frame 변환(rotate_imu와 동일 z회전; r=yaw rate는 z축 불변이라 진값 통과). 정책 obs[6:9]를 euler 미분 대신 진값으로 채워 sim↔실기 angular velocity frame 정합(2차 실기동 근본결함 해결).
+
+- **offset 실시간 튜닝**: `albc_rl`의 dynamic_reconfigure `imu_yaw_offset_deg`(default 45). euler·gyro 변환이 공유. ⚠️ launch의 `imu_yaw_offset_deg` rosparam보다 dynamic_reconfigure가 이긴다(Server가 시작 시 cfg default로 덮음) — 다른 default를 쓰려면 cfg default도 같이 바꿔야.
+- **flash 필요**: GYRO publish는 .ino 변경이라 보드 flash 전엔 효과 없다. flash 전 보드는 GYRO=0.0 → RL이 euler 미분 fallback 자동 사용(`_on_sensor`의 all-zero=no-gyro 판정).
+- **use_board_rates 후순위**: 옛 `/albc_status` euler-rate 경로(`use_board_rates=true`)는 gyro 진값을 덮어쓴다 — launch 두 곳 다 `default="false"`. gyro flash 후엔 false 유지(켜면 진값 무효화 경고 로그).
 
 ## non-flash 원칙
 이 repo의 .ino 변경은 보드 flash와 분리. flash는 명시적·별도 작업.
