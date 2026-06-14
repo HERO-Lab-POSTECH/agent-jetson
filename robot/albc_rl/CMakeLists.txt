@@ -6,6 +6,11 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   sensor_msgs
   hero_msgs
+  dynamic_reconfigure
+)
+
+generate_dynamic_reconfigure_options(
+  cfg/GyroOffset.cfg
 )
 
 catkin_package(
@@ -14,6 +19,7 @@ catkin_package(
     std_msgs
     sensor_msgs
     hero_msgs
+    dynamic_reconfigure
 )
 
 # Python-only package: install the node + helper scripts.

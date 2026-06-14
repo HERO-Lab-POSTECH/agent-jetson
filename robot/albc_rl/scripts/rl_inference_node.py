@@ -85,6 +85,8 @@ sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforwa
 
 from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
 from np_policy import NumpyStudentPolicy              # noqa: E402
+from dynamic_reconfigure.server import Server  # noqa: E402
+from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
 
 
 def _md5_8(path):
@@ -106,6 +108,7 @@ class RLInferenceNode(object):
         self.use_board_rates = rospy.get_param("~use_board_rates", False)
         self.imu_yaw_offset = float(np.deg2rad(
             float(rospy.get_param("~imu_yaw_offset_deg", 45.0))))
+        self._dyn_srv = Server(GyroOffsetConfig, self._on_reconfigure)
         self.sensor_timeout = float(rospy.get_param("~sensor_timeout_s", 0.2))
         self.joint_timeout = float(rospy.get_param("~joint_timeout_s", 0.5))
         # surface-test safety on the 6 thruster channels (arm action never scaled).
@@ -193,6 +196,13 @@ class RLInferenceNode(object):
                       "HOLDS the last target (torque stays on).")
 
     # ------------------------------------------------------------- callbacks
+    def _on_reconfigure(self, config, level):
+        # live-tune the IMU mounting yaw offset (euler + gyro share this).
+        self.imu_yaw_offset = float(np.deg2rad(config.imu_yaw_offset_deg))
+        rospy.loginfo("reconfigure: imu_yaw_offset = %.2f deg",
+                      config.imu_yaw_offset_deg)
+        return config
+
     def _on_sensor(self, msg):
         # hero_agent_sensor: ROLL,PITCH,YAW,DEPTH + GYRO_X/Y/Z -- RAW imu frame. Apply
         # the board-frame correction here (oracle: imu_rotation.h; albc_controller,
