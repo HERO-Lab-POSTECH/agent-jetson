@@ -213,9 +213,11 @@ class RLInferenceNode(object):
                 1.0, "IMU sample dropped: non-finite values %s" % (raw,))
             return  # keep previous sample; staleness gate trips if this persists
         self._euler = rotate_imu(raw[0], raw[1], raw[2], self.imu_yaw_offset)
-        # raw firmware gyro (sim root_ang_vel_b truth). Pre-gyro firmware publishes
-        # 0.0 defaults -> treat all-zero as "no gyro" so the euler-diff fallback stays
-        # active until a gyro-capable firmware is flashed.
+        # raw firmware gyro (sim root_ang_vel_b truth). A gyro-capable firmware is
+        # flashed and publishes live GYRO_X/Y/Z, so this path is normally active.
+        # The all-zero guard below stays only as a fallback: a pre-gyro firmware
+        # would publish 0.0 defaults, and treating all-zero as "no gyro" keeps the
+        # euler-diff path available if such a firmware is ever re-flashed.
         gyro_raw = (msg.GYRO_X, msg.GYRO_Y, msg.GYRO_Z)
         if np.all(np.isfinite(gyro_raw)) and any(g != 0.0 for g in gyro_raw):
             self._gyro = rotate_gyro(gyro_raw[0], gyro_raw[1], gyro_raw[2],
