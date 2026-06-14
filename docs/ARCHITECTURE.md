@@ -179,7 +179,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 - 파라미터 외부화: agent.yaml SSOT
 
 **우려사항**:
-- 테스트 스위트 부재: 0개 단위 테스트
+- characterization 테스트는 존재(`tests/characterization/`, keymap·key_translation·control_law 등 박제)하나 catkin 빌드 미통합 — `catkin_make run_tests`로 안 돌고 CI 없음 (6.2 우선순위 2 참조)
 - 'R' (CSV 토글) 키가 KEYMAP 외부에서 특수 처리됨 (agent.cpp:113-117), 대칭성 위반
 - 로깅 디렉토리 레이스 조건: 같은 results_dir의 두 agent가 동일 인덱스 계산 (파일 잠금 없음)
 - Rosbag fork 실패 경로: execlp 실패 시 errno 손실
@@ -344,7 +344,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 - 훈련 시간 동결 상수 (20D layout, stride, integral, NOMINAL_JOINT_POS)에 로드-타임 assert 부재
 - 입력 검증 부재 (가중치 dict 키, NaN/inf 액션)
 - 상태 머신 없음 relay/power precondition (relay OFF이면 조용히 실패)
-- GRU 가중치 누락: test_npforward.py::test_gru FAILS (FileNotFoundError weights_gru.npz)
+- GRU 가중치 누락: 69D GRU 골든/체크포인트 부재 → `test_npforward.py::test_gru`는 `_gru_golden_is_current()` 가드로 `[SKIP]`(FAIL 아님, suite green). GRU init 경로는 load-time 가드로 명시적 reject 필요 (6.2 우선순위 5)
 - 공동 축 coupling 부재 manipulability (매니풀레이터 특이점 무시)
 
 ---
@@ -731,7 +731,7 @@ graph LR
 | 차원 | 현재 상태 | 표준 | 격차 | 심각도 |
 |:---|:---|:---|:---|:---|
 | **모듈성** | 6개 SRP 클래스, 290→아키텍처 분해, 오라클 분리 | 단일-책임 유닛, 기업 구조 | 터미널-I/O coupling (ModeManager) | 낮음 |
-| **테스트** | 33/33 PASS (numpy_port), C++는 0 단위 테스트, test_npforward RED (gru.npz 누락) | green suite, CI, 제어 회귀 게이트 | RED 테스트 + C++ 무커버리지 + no CI | **높음** |
+| **테스트** | numpy_port suite green (test_npforward는 69D GRU 골든 부재 시 `[SKIP]` 가드 → RED 아님), C++ characterization 8종 존재 (standalone golden, gtest 아님) | green suite, CI, 제어 회귀 게이트 | 테스트는 있음 — catkin 통합·CI만 부재 | 중간 |
 | **설정** | hero_agent/albc_control: yaml SSOT, albc_rl: launch-only; no runtime contract validation | 레이어 config, load-time assert | albc_rl 일관성 + training constant assert 부재 | 중간 |
 | **문서화** | NAMING_CONVENTION.md 우수, 3/4 패키지 README 부재, 매니페스트 stale | per-package README, accuracy | 교차-패키지 계약은 소스 주석에만 | 중간 |
 | **에러 처리** | RL은 exemplary (gate+reset), C++는 조용한 실패 (rosbag fork, NaN 로깅) | 명시적 실패, 입력 검증, bounded accumulators | rosbag fork loss, ALBC NaN, unbounded targets | 중간 |
@@ -743,26 +743,29 @@ graph LR
 
 ### 6.2 최상위 격차 및 우선 순위
 
-#### 우선순위 1: RED 테스트 + CI 추가 (최대 영향)
+#### 우선순위 1: CI 추가 (RED 테스트 항목은 실측 결과 stale)
 
-**현상**: test_npforward.py::test_gru는 FileNotFoundError (weights_gru.npz 부재). 커밋된 suite가 green이 아님. GRU encoder 경로 (~encoder_type='gru' 파라미터)는 노드 시작 시 crash 함.
+> **2026-06-15 실측 교정**: 원래 이 항목은 "test_npforward.py::test_gru가 FileNotFoundError로 suite가 green이 아니다(RED)"였으나 **stale 오판**이다. `test_npforward.py:103-122`에 `_gru_golden_is_current()` 가드가 있어, 69D GRU 골든/가중치가 없으면 `test_gru()`를 호출하지 않고 `[SKIP]`로 명시 출력한 뒤 통과한다. suite는 **이미 green**이다. 남은 진짜 격차는 RED가 아니라 **CI 부재**뿐.
 
-**해결**:
-- GRU 가중치 commit하거나, GRU 경로를 명시적으로 unsupported 표시 (테스트 skip + init에서 reject)
-- 최소 CI: 각 commit에서 Python suite 실행 (test_build_proprio.py, test_npforward.py)
-
-**영향**: 현재 코드 상태를 명확히 하고 회귀 차단.
-
-#### 우선순위 2: C++ 제어 수학 회귀 게이트 추가
-
-**현상**: ~2000 LOC 제어 법칙, IK, FSM, 4개 "byte-identical" 오라클은 0개 단위 테스트. hero_agent CHANGELOG v2.1.0에 "characterization tests" 언급되지만 repo에 없음 (keymap 57 check, translation 16 check).
+**현상**: numpy_port suite는 green이나, 각 commit에서 자동 실행하는 CI가 없다. GRU encoder 경로(`encoder_type='gru'`)는 69D 체크포인트가 없어 init 시 불명확하게 실패할 수 있다(우선순위 5의 load-time 가드로 명시적 reject 대상).
 
 **해결**:
-- catkin_add_gtest on control_law.h, dls_ik.h, feedback_filters.h, imu_rotation.h (golden vectors)
-- keymap / key_translator 회귀 테스트
-- 각 oracle이 byte-identical을 증명하도록 golden-vector parity 확인
+- 최소 CI: 각 commit에서 Python suite 실행 (test_build_proprio.py, test_npforward.py).
+- GRU 경로를 init에서 명시적 unsupported 처리 (우선순위 5와 연계 — 현재는 KeyError로 불명확).
 
-**영향**: 향후 편집이 behavior preserve를 깨뜨릴 수 없음.
+**영향**: 회귀 차단을 자동화. (RED 차단은 이미 skip 가드로 달성됨.)
+
+#### 우선순위 2: C++ characterization 테스트 catkin 통합 (테스트 부재 주장은 stale)
+
+> **2026-06-15 실측 교정**: 원래 이 항목은 "4개 오라클이 0개 단위 테스트, characterization tests가 repo에 없음"이었으나 **stale 오판**이다. `tests/characterization/`에 **8종이 이미 존재**한다: test_control_law·test_damping_integral·test_dls_ik·test_imu_rotation·test_kinematics·test_processkey·test_keymap_table·test_key_translation. 단 이들은 **gtest가 아니라** `int main()`+`EXPECT` 매크로로 작성된 standalone C++11 golden 프로그램으로, `run.sh`가 ROS·catkin 없이 로컬 컴파일러로 빌드·실행한다(README 명시). 즉 **커버리지는 있고, 빌드 통합만 없다**.
+
+**현상**: ~2000 LOC 제어 법칙·IK·FSM·4개 byte-identical 오라클의 golden 테스트가 `tests/characterization/`에 standalone으로 존재하나 catkin 빌드에 통합돼 있지 않다(루트 `tests/`, 독립 `run.sh`). 따라서 `catkin_make run_tests`로 일괄 실행되지 않고 CI도 없다.
+
+**해결**:
+- `tests/characterization/` 8종을 catkin에 통합. 단 standalone(`int main`) 구조라 `catkin_add_gtest`에 바로 넣으려면 **gtest 형식 재작성이 필요** — 또는 `add_test`로 기존 run.sh/standalone 바이너리를 래핑(재작성 회피). 어느 쪽이든 거동 불변(golden 출력 동일) 유지.
+- CI에서 characterization suite + Python suite 함께 실행.
+
+**영향**: 회귀 게이트를 빌드 파이프라인에 편입. (golden parity 검증 자체는 이미 8종이 수행 중.)
 
 #### 우선순위 3: /albc_status ABI 강화
 
@@ -874,7 +877,7 @@ robot/
 │   │   ├── np_policy.py                (172 LOC, 69D obs + history + integral)
 │   │   ├── npforward.py                (176 LOC, torch-free forward)
 │   │   ├── test_np_policy_api.py       (57 LOC, 3 tests PASS)
-│   │   ├── test_npforward.py           (123 LOC, test_gru FAILS, gru.npz 누락)
+│   │   ├── test_npforward.py           (123 LOC, test_gru는 69D 골든 부재 시 [SKIP] 가드)
 │   │   ├── golden/
 │   │   │   ├── golden_teacher.npz      (TeacherActor)
 │   │   │   ├── golden_tcn.npz          (StudentTCN weights)
