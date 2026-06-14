@@ -493,6 +493,9 @@ void loop()
     sensors_msg.PITCH = pitch;
     sensors_msg.YAW = yaw;
     sensors_msg.DEPTH = loop_speed;
+    sensors_msg.GYRO_X = acc_roll;    // 이미 파싱된 자이로 진값 p (sensor frame)
+    sensors_msg.GYRO_Y = acc_pitch;   // q
+    sensors_msg.GYRO_Z = acc_yaw;     // r
 
     pub_sensors.publish(&sensors_msg);
 
