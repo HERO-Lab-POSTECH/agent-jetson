@@ -1,6 +1,6 @@
 # firmware — agent-jetson UUV 펌웨어 (ATmega2560)
 
-정본: `agent_tdc/2024_agent_tdc.ino` (보드에 플래시된 바이너리, 2026-06-14 echo로 confirmed).
+정본: `agent/agent.ino` (보드에 플래시된 바이너리, 2026-06-14 echo로 confirmed).
 
 ## 빌드체인
 hero_msgs (.msg) → make_libraries.py → ros_lib → arduino 빌드
