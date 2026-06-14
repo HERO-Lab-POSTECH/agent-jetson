@@ -733,12 +733,12 @@ graph LR
 | **모듈성** | 6개 SRP 클래스, 290→아키텍처 분해, 오라클 분리 | 단일-책임 유닛, 기업 구조 | 터미널-I/O coupling (ModeManager) | 낮음 |
 | **테스트** | numpy_port suite green (test_npforward는 69D GRU 골든 부재 시 `[SKIP]` 가드 → RED 아님), C++ characterization 8종 존재 (standalone golden, gtest 아님) | green suite, CI, 제어 회귀 게이트 | 테스트는 있음 — catkin 통합·CI만 부재 | 중간 |
 | **설정** | hero_agent/albc_control: yaml SSOT, albc_rl: launch-only; no runtime contract validation | 레이어 config, load-time assert | albc_rl 일관성 + training constant assert 부재 | 중간 |
-| **문서화** | NAMING_CONVENTION.md 우수, 3/4 패키지 README 부재, 매니페스트 stale | per-package README, accuracy | 교차-패키지 계약은 소스 주석에만 | 중간 |
+| **문서화** | NAMING_CONVENTION.md 우수, 매니페스트 정정 완료(2026-06-15), 3/4 패키지 README 부재 | per-package README, accuracy | README 부재 (매니페스트 stale은 해소) | 중간 |
 | **에러 처리** | RL은 exemplary (gate+reset), C++는 조용한 실패 (rosbag fork, NaN 로깅) | 명시적 실패, 입력 검증, bounded accumulators | rosbag fork loss, ALBC NaN, unbounded targets | 중간 |
 | **로깅** | 1 Hz 운영자 상태, rosbag 5 토픽, no obs/action 덤프 | 구조화 로깅, 운영자 가시성, 재구성 가능 | ephemeral monitor UI, no 69D trace | 낮음 |
 | **이름/ABI** | NAMING_CONVENTION SSOT, /albc_status는 Float64Array (schema 검증 없음) | typed messages, 1 schema, field-rename plan | /albc_status 위험 (3 place comment-only), UPPER_CASE legacy | 중간 |
 | **빌드** | catkin + C++11, pinned-but-fragile runtime (py2.7, numpy 1.11 bug) | reproducible, version assert | no numpy __version__ check, tested ≠ deployed | 중간 |
-| **버전 관리** | hero_agent manifest 1.0.0 vs CHANGELOG 2.1.0, albc_rl no CHANGELOG | SemVer sync, per-package CHANGELOG | 명시적 모순 + 빌더/메니페스트 drift | 중간 |
+| **버전 관리** | 4개 manifest ↔ CHANGELOG 동기화 완료(hero_agent 2.1.0, hero_msgs 1.0.0, albc_rl CHANGELOG 신설), license·maintainer 통일 (2026-06-15 Task 1) | SemVer sync, per-package CHANGELOG | 해소됨 | 낮음 |
 | **Sim-to-Real** | 69D obs contract exceptionally well-documented (provenance dates, byte-identical oracle) | versioned contract, runtime validation | 계약은 문서화됨 but no load-time assert | 낮음 |
 
 ### 6.2 최상위 격차 및 우선 순위
@@ -778,19 +778,20 @@ graph LR
 
 **영향**: 가장 위험한 cross-cutting 계약 굳건화.
 
-#### 우선순위 4: 모든 4개 패키지 버전 정렬
+#### 우선순위 4: 모든 4개 패키지 버전 정렬 ✅ 해소 (2026-06-15, enterprise-cleanup Task 1)
 
-**현상**:
+**현상 (해소 전)**:
 - hero_agent: package.xml 1.0.0, CHANGELOG 2.1.0/2.0.0 (직접 모순)
 - albc_rl: CHANGELOG 부재 (가장 critical인 추론 패키지)
 - hero_msgs: 0.0.0 placeholder (curated convention 논홈)
 
-**해결**:
-- manifest를 CHANGELOG와 일치시키기
-- albc_rl에 CHANGELOG 추가
-- placeholder metadata 수정 (maintainer nvidia@todo.todo → real; license TODO → Apache-2.0; stale hero_agent description 제거)
+**적용 (2026-06-15)**:
+- hero_agent version 1.0.0 → **2.1.0** (CHANGELOG 동기화). hero_msgs 0.0.0 → **1.0.0** (안정 ABI).
+- albc_rl **CHANGELOG.md 신설** (1.0.0, 69D 전환·numpy_port·보드 1e-5 검증·frozen contract 명문화).
+- 4개 메타데이터 통일: maintainer → Seungmin Kim &lt;luckkim123@gmail.com&gt;, license → 전부 **Apache 2.0** (hero_agent BSD·hero_msgs TODO 교체), hero_agent description 정정(visual servoing stale 제거 → teleop·state monitor·logging), hero_msgs description 정정(템플릿 기본값 제거).
+- 검증: 4개 package.xml XML well-formed 파싱 통과. (보드 `catkin_make`/`rospack` 검증은 빌드 시 별도.)
 
-**영향**: 배포 아티팩트 버저닝 규율 이동.
+**영향**: 배포 아티팩트 버저닝 규율 확립.
 
 #### 우선순위 5: 동결된 계약 runtime validation 추가
 

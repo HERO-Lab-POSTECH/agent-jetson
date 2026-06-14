@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <package format="2">
   <name>hero_agent</name>
-  <version>1.0.0</version>
-  <description>HERO underwater robot agent: visual servoing and teleop</description>
+  <version>2.1.0</version>
+  <description>HERO underwater robot agent: teleop, state monitor, CSV + rosbag logging</description>
 
-  <maintainer email="nvidia@todo.todo">nvidia</maintainer>
-  <license>BSD</license>
+  <maintainer email="luckkim123@gmail.com">Seungmin Kim</maintainer>
+  <license>Apache 2.0</license>
 
   <buildtool_depend>catkin</buildtool_depend>
 
