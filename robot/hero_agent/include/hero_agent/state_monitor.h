@@ -126,12 +126,12 @@ public:
                relay_enabled ? "ON" : "OFF", laser_enabled ? "ON" : "OFF",
                move_speed, record_flag ? "REC" : "---");
         printf("═══════════════════════════════════════════════════\n");
-        printf(" STARTUP: 1=Relay 2=Yaw 3=Depth\n");
+        printf(" STARTUP: 1=Relay 3=Yaw 4=Depth\n");
         printf("═══════════════════════════════════════════════════\n");
-        printf(" Toggle  1=Relay  2=Yaw  3=Depth  5=Laser\n");
-        printf(" Init    4=PWM  N=YawReset\n");
-        printf(" Move    w/s/a/d  r/f=Heave\n");
-        printf(" Speed   z/x=+/-10  u/j=Throttle+/-10\n");
+        printf(" Toggle  1=Relay  3=Yaw  4=Depth  5=Laser\n");
+        printf(" Init    2=PWM  N=YawReset\n");
+        printf(" Move    w/s/a/d/q  r/f=Heave\n");
+        printf(" Speed   y/h=+/-10  u/j=Throttle+/-10\n");
         printf(" Yaw     i/k=+/-0.1\n");
         printf(" Depth   o/l=+/-0.1\n");
         printf(" Grip    c=Open  v=Stop  b=Close\n");
@@ -149,7 +149,8 @@ public:
     float sensorPitch() const { return sensor_pitch; }
     float sensorYaw() const { return sensor_yaw; }
 
-    // 모니터 상태 게터 (현재 unused — self-toggle 전환으로 callback에서 더 이상 읽지 않음)
+    // 모니터 상태 게터. 칩(2f6725d)이 토글 ON/OFF를 별도 char로 받으므로(self-toggle X)
+    // key_input_callback이 키1/3/4/5 토글 시 이 게터로 현재 상태를 읽어 ON/OFF char를 가른다.
     int relayEnabled() const { return relay_enabled; }
     int controlYawEnabled() const { return control_yaw_enabled; }
     int controlDepthEnabled() const { return control_depth_enabled; }

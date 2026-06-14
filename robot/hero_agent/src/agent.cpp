@@ -126,6 +126,30 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         return;
     }
 
+    // Yaw Ctrl 키3: 칩 2f6725d는 'y'=cont_yaw_on=1 / 'h'=cont_yaw_on=0 분리식.
+    // 현재 yaw-ctrl 상태(State_addit bit0 미러)를 보고 OFF면 'y'(ON), ON이면 'h'(OFF).
+    if (ch == '3') {
+        if (!debounce_ok('3')) return;
+        send_command(state_monitor.controlYawEnabled() ? 'h' : 'y');
+        return;
+    }
+
+    // Depth Ctrl 키4: 칩 2f6725d는 'p'=cont_depth_on=1 / ';'=cont_depth_on=0 분리식.
+    // 현재 depth-ctrl 상태(State_addit bit1 미러)를 보고 OFF면 'p'(ON), ON이면 ';'(OFF).
+    if (ch == '4') {
+        if (!debounce_ok('4')) return;
+        send_command(state_monitor.controlDepthEnabled() ? ';' : 'p');
+        return;
+    }
+
+    // Laser 키5: 칩 2f6725d는 'r'=laser_on / 'f'=laser_off 분리식.
+    // 현재 laser 상태(State_addit bit3 미러)를 보고 OFF면 'r'(ON), ON이면 'f'(OFF).
+    if (ch == '5') {
+        if (!debounce_ok('5')) return;
+        send_command(state_monitor.laserEnabled() ? 'f' : 'r');
+        return;
+    }
+
     const KeyDef* kd = lookup_key(ch);
     if (!kd) {                               // allow-list: 미등록 키는 조용히 drop
         ROS_WARN_THROTTLE(1.0, "[teleop] unknown key %d (ignored)", ch);

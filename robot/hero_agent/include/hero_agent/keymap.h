@@ -21,12 +21,14 @@ static const KeyDef KEYMAP[] = {
     // (칩 2f6725d는 self-toggle 안 함). 따라서 fw_char는 KEYMAP을 통해 발행되지 않는
     // 죽은 값 → 0으로 표기(heave 행과 동일 컨벤션). 행은 HELP 라벨/그룹 보존용으로 유지.
     {'1', 0,   0, true,  true,  GRP_SYSTEM,  "Relay"},
-    {'2', 'P', 0, false, true,  GRP_SYSTEM,  "PWM Neutral"},
-    {'N', 'Z', 0, false, false, GRP_SYSTEM,  "Yaw Reset"},
-    // Control toggles
-    {'3', 'Y', 0, true,  true,  GRP_CONTROL, "Yaw Ctrl"},
-    {'4', 'D', 0, true,  true,  GRP_CONTROL, "Depth Ctrl"},
-    {'5', 'L', 0, true,  true,  GRP_CONTROL, "Laser"},
+    {'2', 'g', 0, false, true,  GRP_SYSTEM,  "PWM Neutral"},
+    {'N', 'n', 0, false, false, GRP_SYSTEM,  "Yaw Reset"},
+    // Control toggles — 칩(2f6725d)이 ON/OFF 별도 char라 key_input_callback이 가로채
+    // 현재 상태 보고 발행한다(yaw 'y'/'h', depth 'p'/';', laser 'r'/'f'). fw_char는
+    // KEYMAP 경유 발행 안 되는 죽은값 → 0(키1 relay 컨벤션 동일). 행은 HELP/그룹 보존용.
+    {'3', 0,   0, true,  true,  GRP_CONTROL, "Yaw Ctrl"},
+    {'4', 0,   0, true,  true,  GRP_CONTROL, "Depth Ctrl"},
+    {'5', 0,   0, true,  true,  GRP_CONTROL, "Laser"},
     // Thruster jog
     {'w', 'w', 0, false, false, GRP_JOG,     "Forward"},
     {'s', 's', 0, false, false, GRP_JOG,     "Backward"},
@@ -34,8 +36,8 @@ static const KeyDef KEYMAP[] = {
     {'d', 'd', 0, false, false, GRP_JOG,     "Right"},
     {'q', 'q', 0, false, false, GRP_JOG,     "Stop"},
     // Speed (user y/h -> fw +/-)
-    {'y', '+', 0, false, false, GRP_SPEED,   "Speed+"},
-    {'h', '-', 0, false, false, GRP_SPEED,   "Speed-"},
+    {'y', 'z', 0, false, false, GRP_SPEED,   "Speed+"},
+    {'h', 'x', 0, false, false, GRP_SPEED,   "Speed-"},
     // Throttle
     {'u', 'u', 0, false, false, GRP_THROTTLE,"Throttle+"},
     {'j', 'j', 0, false, false, GRP_THROTTLE,"Throttle-"},
