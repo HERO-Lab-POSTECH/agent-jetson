@@ -273,6 +273,40 @@ def test_reset_clears_rate_estimators():
     np.testing.assert_allclose(out[6:9], [0.0, 0.0, 0.0], atol=ATOL)  # cold again
 
 
+# ----------------------------------------------- gyro board-frame correction
+# Same z-rotation as rotate_imu, applied to the raw gyro vector (p,q,r).
+# Key invariant: r (=GYRO_Z, yaw rate) is the rotation-axis component of the
+# z-axis yaw offset and is therefore INVARIANT -- passed through verbatim.
+# This is the policy's only yaw-tracking signal (obs[8]).
+from build_proprio import rotate_gyro
+
+
+def test_rotate_gyro_zero_offset_only_pitch_negated():
+    # offset=0: c=1,s=0 -> out=(p, -q, r). PITCH(=q) negated, r passthrough.
+    out = rotate_gyro(1.0, 2.0, 3.0, 0.0)
+    np.testing.assert_allclose(out, [1.0, -2.0, 3.0], atol=1e-6)
+
+
+def test_rotate_gyro_yaw_rate_invariant_to_offset():
+    # r(=GYRO_Z) is invariant to any yaw offset (z-axis rotation-axis component).
+    for off in [0.0, np.pi / 4, np.pi / 2, 1.234]:
+        out = rotate_gyro(0.3, -0.7, 0.55, off)
+        np.testing.assert_allclose(out[2], 0.55, atol=1e-6)
+
+
+def test_rotate_gyro_45deg_matches_formula():
+    # offset=45deg: raw_p=p, raw_q=-q; out_p=c*raw_p+s*raw_q, out_q=-s*raw_p+c*raw_q
+    p, q, r, off = 1.0, 1.0, 0.2, np.pi / 4
+    c, s = np.cos(off), np.sin(off)
+    raw_p, raw_q = p, -q
+    exp = [c * raw_p + s * raw_q, -s * raw_p + c * raw_q, r]
+    np.testing.assert_allclose(rotate_gyro(p, q, r, off), exp, atol=1e-6)
+
+
+def test_rotate_gyro_returns_float32():
+    assert rotate_gyro(1.0, 2.0, 3.0, 0.5).dtype == np.float32
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

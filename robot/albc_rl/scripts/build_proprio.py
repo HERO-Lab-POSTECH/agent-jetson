@@ -92,6 +92,35 @@ def rotate_imu(ROLL, PITCH, YAW, offset_rad):
     ], dtype=np.float32)
 
 
+def rotate_gyro(GYRO_X, GYRO_Y, GYRO_Z, offset_rad):
+    """Board-frame correction for the raw gyro vector (p,q,r), sensor frame.
+
+    Applies the SAME z-rotation as rotate_imu() does to euler roll/pitch, so the
+    angular-rate frame matches the corrected attitude frame and sim root_ang_vel_b:
+
+        raw_p =  GYRO_X
+        raw_q = -(GYRO_Y)          # negated, identical to rotate_imu's raw_pitch
+        c = cos(offset_rad), s = sin(offset_rad)
+        out_p =  c*raw_p + s*raw_q
+        out_q = -s*raw_p + c*raw_q
+        out_r =  GYRO_Z            # yaw rate: rotation-axis component, INVARIANT to
+                                   #   the z-axis yaw offset -> passed through verbatim.
+
+    out_r is the policy's only yaw-tracking signal (obs[8]); keeping it the raw gyro
+    truth is the whole point of this change. Pinned to the rotate_imu oracle -- do NOT
+    "fix" signs without intent.
+    """
+    raw_p = GYRO_X
+    raw_q = -(GYRO_Y)
+    c = np.cos(offset_rad)
+    s = np.sin(offset_rad)
+    return np.array([
+        c * raw_p + s * raw_q,
+        -s * raw_p + c * raw_q,
+        GYRO_Z,
+    ], dtype=np.float32)
+
+
 def manipulability(theta2):
     """Yoshikawa manipulability index, normalized to [0,1].
 
