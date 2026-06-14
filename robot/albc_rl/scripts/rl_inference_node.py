@@ -83,7 +83,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)                                   # build_proprio
 sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforward
 
-from build_proprio import ProprioBuilder, rotate_imu  # noqa: E402
+from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
 from np_policy import NumpyStudentPolicy              # noqa: E402
 
 
@@ -123,6 +123,7 @@ class RLInferenceNode(object):
 
         # latest sensor snapshot (filled by callbacks, read by the timer thread)
         self._euler = np.zeros(3, dtype=np.float32)     # board-frame corrected
+        self._gyro = None        # board-frame corrected raw gyro (p,q,r); None until first GYRO sample
         self._joint_pos = np.zeros(2, dtype=np.float32)
         self._joint_vel = None            # driver-differentiated, None until seen
         self._board_rates = None          # set if use_board_rates and /albc_status seen
@@ -193,8 +194,8 @@ class RLInferenceNode(object):
 
     # ------------------------------------------------------------- callbacks
     def _on_sensor(self, msg):
-        # hero_agent_sensor: ROLL, PITCH, YAW, DEPTH -- RAW imu frame. Apply the
-        # board-frame correction here (oracle: imu_rotation.h; albc_controller,
+        # hero_agent_sensor: ROLL,PITCH,YAW,DEPTH + GYRO_X/Y/Z -- RAW imu frame. Apply
+        # the board-frame correction here (oracle: imu_rotation.h; albc_controller,
         # which normally does it, is NOT running in the RL configuration).
         raw = (msg.ROLL, msg.PITCH, msg.YAW)
         if not np.all(np.isfinite(raw)):
@@ -202,6 +203,13 @@ class RLInferenceNode(object):
                 1.0, "IMU sample dropped: non-finite values %s" % (raw,))
             return  # keep previous sample; staleness gate trips if this persists
         self._euler = rotate_imu(raw[0], raw[1], raw[2], self.imu_yaw_offset)
+        # raw firmware gyro (sim root_ang_vel_b truth). Pre-gyro firmware publishes
+        # 0.0 defaults -> treat all-zero as "no gyro" so the euler-diff fallback stays
+        # active until a gyro-capable firmware is flashed.
+        gyro_raw = (msg.GYRO_X, msg.GYRO_Y, msg.GYRO_Z)
+        if np.all(np.isfinite(gyro_raw)) and any(g != 0.0 for g in gyro_raw):
+            self._gyro = rotate_gyro(gyro_raw[0], gyro_raw[1], gyro_raw[2],
+                                     self.imu_yaw_offset)
         self._last_sensor_t = rospy.get_time()
 
     def _on_joints(self, msg):
@@ -286,11 +294,17 @@ class RLInferenceNode(object):
             "joint_pos": self._joint_pos,
             # no "thruster" key: builder echoes set_last_action()[2:8] itself
         }
+        if self._gyro is not None:
+            sensors["gyro"] = self._gyro             # firmware raw gyro (rotate_gyro'd)
         if self._joint_vel is not None:
             sensors["joint_vel"] = self._joint_vel   # driver value, verbatim
         proprio = self.builder.build(sensors)
         if self.use_board_rates and self._board_rates is not None:
             # overwrite the differentiated angvel (6:9) with the board estimate
+            if self._gyro is not None:
+                rospy.logwarn_throttle(
+                    10.0, "use_board_rates=true overrides firmware gyro -- "
+                          "gyro passthrough ignored (set use_board_rates=false)")
             proprio[6:9] = self._board_rates
 
         # 69D attitude-only: command [roll_att, pitch_att, yaw_rate] passes straight
