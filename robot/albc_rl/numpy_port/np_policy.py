@@ -22,6 +22,37 @@ import numpy as np
 
 import npforward as npf
 
+
+# ---- numpy version floor (board deploy = 1.11; dev = 2.x) ----------------------------
+# numpy < 1.11.0 silently ignores the `keepdims` kwarg on reductions (a real bug that bit
+# this port: a code-reviewer caught it). The board runs 1.11.0 exactly; anything older
+# would compute wrong reductions WITHOUT raising. Fail loudly at import instead.
+_NUMPY_MIN = (1, 11, 0)
+
+
+def _numpy_version_tuple():
+    parts = []
+    for tok in np.__version__.split(".")[:3]:
+        num = ""
+        for ch in tok:
+            if ch.isdigit():
+                num += ch
+            else:
+                break
+        parts.append(int(num) if num else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+if _numpy_version_tuple() < _NUMPY_MIN:
+    raise RuntimeError(
+        "numpy %s < %s: reductions silently ignore keepdims below 1.11.0 "
+        "(wrong results, no error). Upgrade numpy on this host."
+        % (np.__version__, ".".join(map(str, _NUMPY_MIN)))
+    )
+
+
 # ---- frozen contract constants (must match student_inference.py / attitude_only sim) ----
 POLICY_OBS_DIM = 69
 PROPRIO_DIM = 20
@@ -59,9 +90,27 @@ class NumpyStudentPolicy:
     """
 
     def __init__(self, student_npz, teacher_npz, encoder_type="tcn"):
+        if encoder_type not in ("tcn", "gru"):
+            raise ValueError(
+                "encoder_type must be 'tcn' or 'gru', got %r" % (encoder_type,))
         self.encoder_type = encoder_type
-        sw = np.load(student_npz)
+
+        try:
+            sw = np.load(student_npz)
+        except (IOError, OSError) as e:
+            # weights_gru.npz is not shipped for the TCN-only deploy. Make the
+            # GRU path fail with an explicit message instead of a bare load error.
+            raise RuntimeError(
+                "failed to load student weights %r for encoder_type=%r: %s"
+                % (student_npz, encoder_type, e))
         tw = np.load(teacher_npz)
+
+        # fail-fast BEFORE building the encoder/actor: the frozen 69D/8D contract
+        # must match the loaded weights. A stale npz (e.g. the old 87D policy)
+        # would otherwise blow up inside npforward's constructor with an opaque
+        # KeyError, or pass __init__ and fail later in act() with a shape mismatch.
+        self._assert_contract(tw, sw, encoder_type)
+
         self.actor = npf.TeacherActor(tw)
         if encoder_type == "tcn":
             self.encoder = npf.StudentTCN(sw)
@@ -76,6 +125,52 @@ class NumpyStudentPolicy:
         self._prev_action = np.zeros(ACTION_DIM, dtype=np.float32)
         self._hist_step_counter = 0
         self.reset()
+
+    @staticmethod
+    def _assert_contract(tw, sw, encoder_type):
+        """Validate the loaded .npz against the frozen 69D/8D/9D contract.
+
+        Raises ValueError with a precise message if any key is missing or any
+        dimension diverges from POLICY_OBS_DIM / ACTION_DIM / LATENT_DIM. This is
+        the load-time half of the contract that the module constants freeze; the
+        normal (correct-weights) path is unaffected.
+        """
+        def need(npz, key, name):
+            if key not in npz.files:
+                raise ValueError("%s weights missing key %r (keys=%s)"
+                                 % (name, key, list(npz.files)))
+            return npz[key]
+
+        # teacher actor: normalizer is per-obs (1, 69); actor.0 takes obs+latent (78);
+        # actor.6 emits the 8D action.
+        mean = need(tw, "normalizer._mean", "teacher")
+        if mean.shape[-1] != POLICY_OBS_DIM:
+            raise ValueError("teacher normalizer obs dim %d != POLICY_OBS_DIM %d"
+                             % (mean.shape[-1], POLICY_OBS_DIM))
+        a0 = need(tw, "actor.0.weight", "teacher")
+        if a0.shape[1] != POLICY_OBS_DIM + LATENT_DIM:
+            raise ValueError(
+                "teacher actor.0 input dim %d != obs+latent %d (obs %d + latent %d)"
+                % (a0.shape[1], POLICY_OBS_DIM + LATENT_DIM, POLICY_OBS_DIM, LATENT_DIM))
+        a6 = need(tw, "actor.6.weight", "teacher")
+        if a6.shape[0] != ACTION_DIM:
+            raise ValueError("teacher actor.6 output dim %d != ACTION_DIM %d"
+                             % (a6.shape[0], ACTION_DIM))
+
+        # student encoder: input width must be POLICY_OBS_DIM, latent head emits LATENT_DIM.
+        if encoder_type == "tcn":
+            ct = need(sw, "channel_transform.0.weight", "student TCN")
+            in_dim = ct.shape[1]
+        else:
+            ih = need(sw, "gru.weight_ih_l0", "student GRU")
+            in_dim = ih.shape[1]
+        if in_dim != POLICY_OBS_DIM:
+            raise ValueError("student %s input dim %d != POLICY_OBS_DIM %d"
+                             % (encoder_type, in_dim, POLICY_OBS_DIM))
+        h3 = need(sw, "head.3.weight", "student %s" % encoder_type)
+        if h3.shape[0] != LATENT_DIM:
+            raise ValueError("student %s latent dim %d != LATENT_DIM %d"
+                             % (encoder_type, h3.shape[0], LATENT_DIM))
 
     def reset(self):
         self._hist_buf.clear()

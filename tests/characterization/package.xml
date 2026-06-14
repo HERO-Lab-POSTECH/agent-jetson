@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>characterization_tests</name>
+  <version>1.0.0</version>
+  <description>Golden/characterization tests for hero_agent + albc_control control-math oracles (ROS-free, byte-identical pin). Standalone C++ programs also runnable via run.sh without catkin.</description>
+
+  <maintainer email="luckkim123@gmail.com">Seungmin Kim</maintainer>
+  <license>Apache 2.0</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- header-only test deps: inherit the exported include/ of the targets under test -->
+  <build_depend>hero_agent</build_depend>
+  <build_depend>albc_control</build_depend>
+  <test_depend>hero_agent</test_depend>
+  <test_depend>albc_control</test_depend>
+</package>

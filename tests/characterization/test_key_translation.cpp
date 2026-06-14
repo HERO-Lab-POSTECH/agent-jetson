@@ -1,5 +1,5 @@
 // 안전 속성 고정: 미등록 키는 firmware에 안 감(drop), 등록키만 allow-list 번역. self-toggle이라 state 불요.
-#include "../../robot/hero_agent/include/hero_agent/key_translator.h"
+#include "hero_agent/key_translator.h"
 #include <cstdio>
 using namespace hero;
 static int failures=0,checks=0;

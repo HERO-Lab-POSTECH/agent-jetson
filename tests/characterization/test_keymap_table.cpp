@@ -1,4 +1,4 @@
-#include "../../robot/hero_agent/include/hero_agent/keymap.h"
+#include "hero_agent/keymap.h"
 #include <cstdio>
 using namespace hero;
 static int failures=0, checks=0;

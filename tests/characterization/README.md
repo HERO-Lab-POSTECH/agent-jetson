@@ -10,11 +10,25 @@
 
 ## 실행
 
-ROS·catkin 불필요. 로컬 C++ 컴파일러만 있으면 된다:
+두 가지 경로가 있다. 둘 다 같은 standalone `.cpp`를 빌드한다 (gtest 아님).
+
+**로컬/보드 (ROS·catkin 불필요)** — 로컬 C++ 컴파일러만:
 
 ```bash
 tests/characterization/run.sh        # 전부 빌드+실행, 하나라도 실패 시 non-zero
 ```
+
+**catkin (보드 워크스페이스)** — `characterization_tests` 패키지로 통합됨:
+
+```bash
+catkin_make run_tests                 # 8종 일괄 실행 (CTest 요약에 표시)
+# 빠지면 fallback: catkin_make tests && (cd build/characterization_tests && ctest)
+```
+
+`package.xml`이 `hero_agent`·`albc_control`을 build/test depend로 가져와 두 패키지의
+exported include를 상속한다. 테스트 `.cpp`는 package-style include(`hero_agent/...`,
+`albc_control/...`)를 써서 run.sh(`-I` 플래그)와 catkin(`include_directories`) 양쪽에서
+같은 헤더를 찾는다.
 
 재설계 **전후로 둘 다** 돌려 출력이 동일해야 한다.
 
