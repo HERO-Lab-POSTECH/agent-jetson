@@ -2,27 +2,33 @@
 
 Custom ROS message definitions for the HERO underwater robot agent.
 
-## Message Naming Convention
+## Naming Convention
+
+토픽·필드 명명 규칙은 [NAMING_CONVENTION.md](NAMING_CONVENTION.md)가 단일 진실(SSOT)이다
+(ROS REP-103/135/145 기반). 요약:
 
 - Prefix: `hero_agent_` for agent-related messages
 - Format: `hero_agent_<subsystem>.msg`
-- Field names: `UPPER_CASE` (legacy convention)
+- 필드명 표준은 `lower_snake_case`. 현재 메시지는 legacy `UPPER_CASE`/`Mixed_Case`이며,
+  NAMING_CONVENTION.md에 **RULE-ONLY**로 기록됨(필드 rename은 펌웨어 현대화/re-flash와 묶음).
 
 ## Messages
 
-legacy 메시지는 현재 repo 코드에서 직접 쓰이지 않으나, Arduino 펌웨어가 rosserial로 발행/구독할 수 있어 물리 삭제하지 않고 보존한다(.ino 부재로 검증 불가).
+메시지 생애주기 분류는 NAMING_CONVENTION.md 참조. DEPRECATED 메시지는 펌웨어(.ino)에
+subscriber/publisher stub은 있으나 live ROS 그래프에 짝이 없다(QR/DVL 미션 dormant).
+완전 제거는 펌웨어 stub 제거(re-flash)와 함께.
 
 | Message | Purpose | 상태 |
 |:--------|:--------|:-----|
-| `hero_agent_state.msg` | Full robot state (yaw, depth, throttle, etc.) | active |
-| `hero_agent_sensor.msg` | IMU sensor data (roll, pitch) | active |
-| `hero_agent_dvl.msg` | DVL target commands | active |
-| `hero_agent_dvl_velocity.msg` | DVL velocity measurements | legacy (firmware-only, 코드 미사용·보존) |
-| `hero_agent_cont_xy.msg` | XY thruster control commands (T0-T3) | legacy (firmware-only, 코드 미사용·보존) |
-| `hero_agent_cont_para.msg` | QR controller parameters (Kp, Ki, Kd, etc.) | legacy (firmware-only, 코드 미사용·보존) |
-| `hero_agent_position_result.msg` | Position result (X, Y, Z) | legacy (firmware-only, 코드 미사용·보존) |
-| `hero_agent_vision.msg` | Vision detection results | active (perception) |
-| `hero_xy_cont.msg` | XY control data | active (perception) |
+| `hero_agent_state.msg` | Full robot state (yaw, depth, throttle, etc.) | ACTIVE |
+| `hero_agent_sensor.msg` | IMU sensor data (roll, pitch, yaw, depth, gyro) | ACTIVE |
+| `hero_agent_dvl.msg` | DVL target commands | ACTIVE |
+| `hero_agent_vision.msg` | Vision detection results | ACTIVE (perception) |
+| `hero_xy_cont.msg` | XY control data | ACTIVE (perception) |
+| `hero_agent_dvl_velocity.msg` | DVL velocity measurements | DEPRECATED (firmware stub only) |
+| `hero_agent_cont_xy.msg` | XY thruster control commands (T0-T3) | DEPRECATED (firmware stub only) |
+| `hero_agent_cont_para.msg` | QR controller parameters (Kp, Ki, Kd, etc.) | DEPRECATED (firmware stub only) |
+| `hero_agent_position_result.msg` | Position result (X, Y, Z) | DEPRECATED (firmware stub only) |
 
 ## Services
 
