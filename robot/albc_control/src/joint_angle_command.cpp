@@ -222,7 +222,7 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "joint_angle_command");
     ros::NodeHandle nh;
 
-    ros::Publisher current_pub = nh.advertise<std_msgs::Float32MultiArray>("joint_currents", 10);
+    ros::Publisher current_pub = nh.advertise<std_msgs::Float32MultiArray>("/joint_currents", 10);
     // RL-DEPLOY: arm state for the RL inference node (pos = measured, vel = differentiated here)
     ros::Publisher joint_state_pub = nh.advertise<sensor_msgs::JointState>("/albc/joint_states", 10);
 

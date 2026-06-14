@@ -11,7 +11,7 @@ constexpr char KEY_INPUT[]   = "/hero_agent/key_input";
 constexpr char DVL[]         = "/hero_agent/dvl";
 constexpr char STATE[]        = "/hero_agent/state";
 constexpr char SENSORS[]     = "/hero_agent/sensors";
-constexpr char ALBC_STATUS[] = "/albc_status";
+constexpr char ALBC_STATUS[] = "/albc/status";
 
 }  // namespace topics
 }  // namespace hero
