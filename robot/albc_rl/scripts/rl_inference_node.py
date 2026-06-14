@@ -84,6 +84,7 @@ sys.path.insert(0, _HERE)                                   # build_proprio
 sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforward
 
 from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
+from homing import should_finish_homing, homing_timed_out         # noqa: E402
 from np_policy import NumpyStudentPolicy              # noqa: E402
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
@@ -115,6 +116,17 @@ class RLInferenceNode(object):
         # FAIL-SAFE: code default is 0.0 -- live thrusters are an explicit opt-in.
         self.thruster_scale = float(rospy.get_param("~thruster_scale", 0.0))
         self.thruster_max_s = float(rospy.get_param("~thruster_max_s", 0.0))
+        # joint homing startup: move the arm to sim nominal BEFORE the policy runs,
+        # so measured joint_pos is in-distribution (board DIAG: jpos started at
+        # (-0.778, 3.643) vs nominal (0, pi/2) -> first-tick OOD blowup of
+        # joint_target). Default OFF: the legacy boot path is unchanged.
+        self.enable_homing = bool(rospy.get_param("~enable_homing", False))
+        ht = rospy.get_param("~homing_target", [0.0, 1.5708])
+        self.homing_target = np.array(ht, dtype=np.float32)
+        self.homing_tol = float(rospy.get_param("~homing_tol", 0.05))
+        self.homing_timeout_s = float(rospy.get_param("~homing_timeout_s", 8.0))
+        self._homing_start_t = None   # rospy time the HOMING phase began (set on first homing tick)
+        self._phase = "HOMING" if self.enable_homing else "RUNNING"
         self._first_tick_t = None   # set on the first published tick (thruster_max_s)
 
         student_npz = os.path.join(weights_dir, "weights_%s.npz" % self.encoder_type)
