@@ -67,9 +67,27 @@ avrdude 시그니처 read로 칩이 직접 답함: **`Device signature = 0x1e980
 
 추가 소스 롤백 자산: 보드 `~/chip_known_good_2024_agent_tdc_20260614.ino` (md5 `751df1cc`, 직전 펌웨어 소스).
 
-**2. .hex 빌드**: MegaCore 코어로 ELF 링크(§검증 증거의 그 경로) → objcopy. `avr-objcopy`는 `/usr/share/arduino/hardware/tools/avr/bin/`에 있다.
+**2. .hex 빌드**: 보드엔 MegaCore 구동 IDE가 없으므로, `platform.txt` recipe를 그대로 재현한 수동 빌드 스크립트 `firmware/build_firmware.sh`로 `.ino`+모듈을 `.hex`까지 빌드한다(이 한 줄이 5세션 미문서화였던 ".ino→.hex" 절차 — 2026-06-15 복원·검증).
 
-    avr-objcopy -O ihex -R .eeprom agent.elf agent.hex
+    bash ~/catkin_ws/src/firmware/build_firmware.sh ~/catkin_ws/src/firmware/agent agent
+    # 결과: ~/fw_full_agent/agent.hex
+
+스크립트가 자동으로 하는 일(직접 빌드 시 똑같이 해야 함): `.ino` 맨 앞에 `#include <Arduino.h>` 삽입(Arduino 변환 모방) → 모듈·라이브러리·MegaCore core 컴파일 → 링크 → objcopy. **빌드 결정사항(복원 과정에서 확정한 함정)**:
+
+| 항목 | 값 / 주의 |
+|:---|:---|
+| 툴체인 | `/usr/bin/avr-g++` = **GCC 4.9.2** (시스템 설치. MegaCore 패키지엔 avr-gcc 번들 없음) |
+| 최적화 | **`-Os`** (recipe 정본). `-O0`로 빌드하면 hex가 **1.94배** 비대해진다(73KB vs 37KB) — 함정 |
+| 컴파일 플래그 | `-c -g -Os -w -std=gnu++11 -fno-exceptions -ffunction-sections -fdata-sections -fno-threadsafe-statics` |
+| defines | `-mmcu=atmega2560 -DF_CPU=16000000L -DARDUINO=10809 -DARDUINO_AVR_ATmega2560 -DARDUINO_ARCH_AVR` (IDE 1.8.9=10809) |
+| include (-I) | core·variant(`100-pin-arduino-mega`)·`~/Arduino/libraries/ros_lib`·Servo·Wire·Wire/utility·MS5837 (7개) |
+| ros_lib | 헤더(-I)뿐 아니라 **`time.cpp`·`duration.cpp`도 컴파일**해야 함 — 안 하면 link에서 `undefined reference to ros::normalizeSecNSec` |
+| 라이브러리 | `Servo.cpp`·`Wire.cpp`·`Wire/utility/twi.c`·`MS5837.cpp` |
+| core.a | MegaCore `MCUdude_corefiles` 전체 → `avr-ar rcs` (표준 core면 `__vector_36` 충돌, §위 참조) |
+| 링크 | `avr-gcc -w -Os -Wl,--gc-sections -mmcu=atmega2560 -o .elf {objs} core.a -lm` |
+| objcopy | `avr-objcopy -O ihex -R .eeprom agent.elf agent.hex` (`avr-objcopy`는 `/usr/bin/` 또는 `/usr/share/arduino/hardware/tools/avr/bin/`) |
+
+**빌드 검증**(byte-identical은 컴파일러 함수배치 비결정성으로 불가 — 기능적 동등으로 판정): 직전 정상 flash본과 hex *크기*가 ±수십 바이트(0.13%) 이내인지, `avr-objdump -d`로 새 로직이 기계어에 있는지 확인. 추측 hex는 flash 금지.
 
 **3. flash (비가역)**:
 
