@@ -24,11 +24,7 @@
 // for PIN SETTING---------------------
 #define F_CPU 16000000UL
 
-#define RELAY 15
-#define GRIPPER_SIG 20
-#define LED_SIG 21
-
-#define RTS 10
+#include "config.h"
 //--------------------------------------
 
 // for ROS serial libaray for PUBLISH---------------------
@@ -78,12 +74,12 @@ volatile float yaw_calib2 = 0;
 //--------------------------------------
 
 // for Trusters-------------------------
-volatile int pwm_m0 = 1500, pid_pwm_m0;
-volatile int pwm_m1 = 1500, pid_pwm_m1;
-volatile int pwm_m2 = 1500, pid_pwm_m2;
-volatile int pwm_m3 = 1500, pid_pwm_m3;
-volatile int pwm_m4 = 1500, pid_pwm_m4;
-volatile int pwm_m5 = 1500, pid_pwm_m5;
+volatile int pwm_m0 = ESC_NEUTRAL, pid_pwm_m0;
+volatile int pwm_m1 = ESC_NEUTRAL, pid_pwm_m1;
+volatile int pwm_m2 = ESC_NEUTRAL, pid_pwm_m2;
+volatile int pwm_m3 = ESC_NEUTRAL, pid_pwm_m3;
+volatile int pwm_m4 = ESC_NEUTRAL, pid_pwm_m4;
+volatile int pwm_m5 = ESC_NEUTRAL, pid_pwm_m5;
 //--------------------------------------
 
 // for Control yaw and depth---------------------
@@ -417,45 +413,45 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   else if (Command == 'e')
   {
     state_Relay = 1;
-    digitalWrite(RELAY, HIGH);
+    digitalWrite(PIN_RELAY, HIGH);
     delay(5000);
   }
   else if (Command == 't')
   {
     state_Relay = 0;
-    digitalWrite(RELAY, LOW);
+    digitalWrite(PIN_RELAY, LOW);
   }
   else if (Command == 'r')
   {
     state_Laser = 1;
-    digitalWrite(LED_SIG, HIGH);
+    digitalWrite(PIN_LED_SIG, HIGH);
   }
   else if (Command == 'f')
   {
     state_Laser = 0;
-    digitalWrite(LED_SIG, LOW);
+    digitalWrite(PIN_LED_SIG, LOW);
   }
   else if (Command == 'c')
   {
-    OCR1A = 450; // open gripper
+    OCR1A = GRIPPER_OPEN; // open gripper
   }
   else if (Command == 'v')
   {
-    OCR1A = 350; // stop gripper
+    OCR1A = GRIPPER_STOP; // stop gripper
   }
   else if (Command == 'b')
   {
-    OCR1A = 300; // close gripper
+    OCR1A = GRIPPER_CLOSE; // close gripper
   }
   else if (Command == 'g')
   {
 
-    pwm_m0 = 1500;
-    pwm_m1 = 1500;
-    pwm_m2 = 1500;
-    pwm_m3 = 1500;
-    pwm_m4 = 1500;
-    pwm_m5 = 1500;
+    pwm_m0 = ESC_NEUTRAL;
+    pwm_m1 = ESC_NEUTRAL;
+    pwm_m2 = ESC_NEUTRAL;
+    pwm_m3 = ESC_NEUTRAL;
+    pwm_m4 = ESC_NEUTRAL;
+    pwm_m5 = ESC_NEUTRAL;
 
     esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
     esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
@@ -558,17 +554,17 @@ ISR(USART1_RX_vect)
 
   char inChar = (char)UDR1;
 
-  if (imu_check == 0 && inChar == (char)0x75)
+  if (imu_check == 0 && inChar == (char)MIP_SYNC1)
   {
     imu_check = 1;
     inputString[0] = inChar;
   }
-  else if (imu_check == 1 && inChar == (char)0x65)
+  else if (imu_check == 1 && inChar == (char)MIP_SYNC2)
   {
     imu_check = 2;
     inputString[1] = inChar;
   }
-  else if (imu_check == 2 && inChar == (char)0x82)
+  else if (imu_check == 2 && inChar == (char)MIP_DESC)
   {
     imu_check = 3;
     inputString[2] = inChar;
@@ -582,7 +578,7 @@ ISR(USART1_RX_vect)
   // if the incoming character is a newline, set a flag so the main loop can
   // do something about it:
   // inputString[19] == 1 &&
-  if (serial_count == 48 && inputString[35] == 1) //수신이 완료
+  if (serial_count == MIP_PACKET_LEN && inputString[35] == 1) //수신이 완료
   {
     stringComplete = true;
     serial_count = 0;
@@ -670,12 +666,12 @@ ISR(USART1_RX_vect)
       yaw_calib = 0;
     }
 
-    if (yaw - pre_yaw > 4.712388)
+    if (yaw - pre_yaw > YAW_WRAP_THRESH)
       yaw_calib--;
-    else if (yaw - pre_yaw < -4.712388)
+    else if (yaw - pre_yaw < -YAW_WRAP_THRESH)
       yaw_calib++;
     pre_yaw = yaw;
-    yaw += 3.141592 * yaw_calib * 2;
+    yaw += YAW_PI * yaw_calib * 2;
 
     //
     // yaw control loop
@@ -683,7 +679,7 @@ ISR(USART1_RX_vect)
     // esc_input(0x01, pwm_m0, pwm_m1, pwm_m2);
     // esc_input(0x02, pwm_m3, pwm_m4, pwm_m5);
   }
-  else if (serial_count > 48) //데이터가 10개 넘게 들어옴 (데inputString[19]이터 수신 실패)
+  else if (serial_count > MIP_PACKET_LEN) //데이터가 10개 넘게 들어옴 (데inputString[19]이터 수신 실패)
   {
     inputString[0] = '\0';
     serial_count = 0;
@@ -869,9 +865,9 @@ void Initialization(void)
   TCCR1A = 0x82;
   TCCR1B = 0x1B;
   TCCR1C = 0;
-  ICR1 = 4999;
+  ICR1 = GRIPPER_ICR1;
 
-  OCR1A = 350;
+  OCR1A = GRIPPER_STOP;
 
   // depth sensor init
   while (!DEPTH_Sensor.init())
@@ -882,12 +878,12 @@ void Initialization(void)
   DEPTH_Sensor.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
 
   // basic io init
-  pinMode(RELAY, OUTPUT);
-  pinMode(LED_SIG, OUTPUT);
-  pinMode(RTS, OUTPUT);
+  pinMode(PIN_RELAY, OUTPUT);
+  pinMode(PIN_LED_SIG, OUTPUT);
+  pinMode(PIN_RTS, OUTPUT);
 
   // RTS on (rs485 send)
-  digitalWrite(RTS, HIGH);
+  digitalWrite(PIN_RTS, HIGH);
 }
 
 void PID_control_yaw()
@@ -906,52 +902,52 @@ void PID_control_yaw()
 
   if (cont_direc == 0) // stop
   {
-    pwm_m1 = PID_yaw + throttle + 1500;
-    pwm_m2 = -PID_yaw + throttle + 1500;
-    pwm_m4 = -PID_yaw - throttle + 1500;
-    pwm_m5 = -PID_yaw + throttle + 1500;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL;
   }
   else if (cont_direc == 1) // backward
   {
-    pwm_m1 = PID_yaw + throttle + 1500 - move_speed;
-    pwm_m2 = -PID_yaw + throttle + 1500 + move_speed;
-    pwm_m4 = -PID_yaw - throttle + 1500 - move_speed;
-    pwm_m5 = -PID_yaw + throttle + 1500 - move_speed;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL - move_speed;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL + move_speed;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL - move_speed;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL - move_speed;
   }
   else if (cont_direc == 2) // forward
   {
-    pwm_m1 = PID_yaw + throttle + 1500 + move_speed;
-    pwm_m2 = -PID_yaw + throttle + 1500 - move_speed;
-    pwm_m4 = -PID_yaw - throttle + 1500 + move_speed;
-    pwm_m5 = -PID_yaw + throttle + 1500 + move_speed;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL + move_speed;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL - move_speed;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + move_speed;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + move_speed;
   }
   else if (cont_direc == 3) // right
   {
-    pwm_m1 = PID_yaw + throttle + 1500 - move_speed;
-    pwm_m2 = -PID_yaw + throttle + 1500 - move_speed;
-    pwm_m4 = -PID_yaw - throttle + 1500 - move_speed;
-    pwm_m5 = -PID_yaw + throttle + 1500 + move_speed;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL - move_speed;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL - move_speed;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL - move_speed;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + move_speed;
   }
   else if (cont_direc == 4) // left
   {
-    pwm_m1 = PID_yaw + throttle + 1500 + move_speed;
-    pwm_m2 = -PID_yaw + throttle + 1500 + move_speed;
-    pwm_m4 = -PID_yaw - throttle + 1500 + move_speed;
-    pwm_m5 = -PID_yaw + throttle + 1500 - move_speed;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL + move_speed;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL + move_speed;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + move_speed;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL - move_speed;
   }
   else if (cont_direc == 7) // concon of position
   {
-    pwm_m1 = PID_yaw + throttle + 1500 - Th_0;
-    pwm_m2 = -PID_yaw + throttle + 1500 + Th_1;
-    pwm_m4 = -PID_yaw - throttle + 1500 + Th_2;
-    pwm_m5 = -PID_yaw + throttle + 1500 + Th_3;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL - Th_0;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL + Th_1;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + Th_2;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + Th_3;
   }
   else if (cont_direc == 8) // concon of position
   {
-    pwm_m1 = PID_yaw + throttle + 1500 - darknet_Th_0;
-    pwm_m2 = -PID_yaw + throttle + 1500 + darknet_Th_1;
-    pwm_m4 = -PID_yaw - throttle + 1500 + darknet_Th_2;
-    pwm_m5 = -PID_yaw + throttle + 1500 + darknet_Th_3;
+    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL - darknet_Th_0;
+    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL + darknet_Th_1;
+    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + darknet_Th_2;
+    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + darknet_Th_3;
   }
 
   // pwm_m1 = constrain(pwm_m1, 1100, 1500);
@@ -959,10 +955,10 @@ void PID_control_yaw()
   // pwm_m4 = constrain(pwm_m4, 1100, 1500);
   // pwm_m5 = constrain(pwm_m5, 1500, 1900);
 
-  pwm_m1 = constrain(pwm_m1, 1200, 1800);
-  pwm_m2 = constrain(pwm_m2, 1200, 1800);
-  pwm_m4 = constrain(pwm_m4, 1200, 1800);
-  pwm_m5 = constrain(pwm_m5, 1200, 1800);
+  pwm_m1 = constrain(pwm_m1, ESC_MIN, ESC_MAX);
+  pwm_m2 = constrain(pwm_m2, ESC_MIN, ESC_MAX);
+  pwm_m4 = constrain(pwm_m4, ESC_MIN, ESC_MAX);
+  pwm_m5 = constrain(pwm_m5, ESC_MIN, ESC_MAX);
 
   esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
   esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
@@ -983,11 +979,11 @@ void PID_control_depth()
 
   PID_depth = P_depth + D_depth + I_depth;
 
-  pwm_m0 = -PID_depth + 1500 - 30;
-  pwm_m3 = -PID_depth + 1500 - 30;
+  pwm_m0 = -PID_depth + ESC_NEUTRAL - DEPTH_BIAS;
+  pwm_m3 = -PID_depth + ESC_NEUTRAL - DEPTH_BIAS;
 
-  pwm_m0 = constrain(pwm_m0, 1350, 1650);
-  pwm_m3 = constrain(pwm_m3, 1350, 1650);
+  pwm_m0 = constrain(pwm_m0, DEPTH_PWM_MIN, DEPTH_PWM_MAX);
+  pwm_m3 = constrain(pwm_m3, DEPTH_PWM_MIN, DEPTH_PWM_MAX);
 
   // esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
   // esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
