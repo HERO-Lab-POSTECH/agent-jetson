@@ -104,13 +104,13 @@ void handle_signal(int sig);
 // (self-toggle: firmware holds toggle state, so no ToggleState is read here).
 // Unregistered keys are dropped (logwarn). debounce stays a callback-layer
 // concern: only keys flagged debounce in KEYMAP are 500ms gated.
-// 'R' (rosbag) is agent-internal, handled before lookup (not in KEYMAP).
+// 'R' (CSV logging) is agent-internal, handled before lookup (not in KEYMAP).
 // ==============================
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
     int ch = msg->data;
 
-    // Rosbag toggle (KEYMAP 범위 밖, agent 내부 플래그)
+    // CSV 로깅 토글 (KEYMAP 범위 밖, agent 내부 플래그)
     if (ch == 'R') {
         csv_logger.toggle();
         return;
