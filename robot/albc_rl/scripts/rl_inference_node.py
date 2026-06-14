@@ -146,7 +146,7 @@ class RLInferenceNode(object):
                          self._on_joints, queue_size=1)
         if self.use_board_rates:
             # /albc_status is advertised as Float64MultiArray (status_publisher.h)
-            rospy.Subscriber("/albc_status", Float64MultiArray,
+            rospy.Subscriber("/albc/status", Float64MultiArray,
                              self._on_albc_status, queue_size=1)
         # optional external setpoint: [roll_att, pitch_att, yaw_rate]
         rospy.Subscriber("/rl/command", Float32MultiArray,

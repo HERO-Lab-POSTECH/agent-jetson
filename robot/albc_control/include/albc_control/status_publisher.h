@@ -40,7 +40,7 @@ public:
         angle_pub_2_ = nh.advertise<std_msgs::Float64>(
             "/hero_agent/active_joint2_position_controller/command", 1000);
         status_pub_ = nh.advertise<std_msgs::Float64MultiArray>(
-            "/albc_status", 10);
+            "/albc/status", 10);
     }
 
     // Publish the two joint angles. Byte-identical to the former block:
