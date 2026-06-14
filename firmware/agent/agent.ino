@@ -26,6 +26,7 @@
 
 #include "config.h"
 #include "ahrs.h"
+#include "thrusters.h"
 //--------------------------------------
 
 // for ROS serial libaray for PUBLISH---------------------
@@ -572,14 +573,7 @@ ISR(USART1_RX_vect)
 }
 
 // UART1_write() 정의는 ahrs.cpp로 이동 (선언은 ahrs.h).
-void UART2_write(char ch)
-{
-
-  while (!(UCSR2A & 0x20))
-    ;
-
-  UDR2 = ch;
-}
+// UART2_write() 정의는 thrusters.cpp로 이동 (선언은 thrusters.h).
 //----------------------------------------------------------
 unsigned long start_time = 0;
 unsigned long current_time = 0;
@@ -680,19 +674,7 @@ void loop()
   }
 }
 
-void esc_input(uint8_t ID, uint16_t pwm0, uint16_t pwm1, uint16_t pwm2)
-{
-  UART2_write(0xff);
-  UART2_write(0xff);
-  UART2_write(ID);
-  UART2_write(pwm0 / 256);
-  UART2_write(pwm0 % 256);
-  UART2_write(pwm1 / 256);
-  UART2_write(pwm1 % 256);
-  UART2_write(pwm2 / 256);
-  UART2_write(pwm2 % 256);
-  UART2_write(0xfe);
-}
+// esc_input() 정의는 thrusters.cpp로 이동 (선언은 thrusters.h).
 
 void Initialization(void)
 {
