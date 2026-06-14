@@ -11,6 +11,8 @@
   <arg name="imu_yaw_offset_deg"  default="45.0" />   <!-- IMU mounting yaw offset (albc_controller.yaml) -->
   <arg name="sensor_timeout_s"    default="0.2" />    <!-- IMU staleness gate -->
   <arg name="joint_timeout_s"     default="0.5" />    <!-- /albc/joint_states staleness gate -->
+  <arg name="enable_homing"       default="false" />  <!-- true=drive joints to homing_target before live -->
+
 
   <node pkg="albc_rl" name="rl_inference_node" type="rl_inference_node.py" output="screen">
     <param name="encoder_type"       value="$(arg encoder_type)" />
@@ -21,6 +23,10 @@
     <param name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
     <param name="sensor_timeout_s"   value="$(arg sensor_timeout_s)" />
     <param name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
+    <param name="enable_homing"      value="$(arg enable_homing)" />
+    <param name="homing_tol"         value="0.05" />
+    <param name="homing_timeout_s"   value="8.0" />
+    <rosparam param="homing_target">[0.0, 1.5708]</rosparam>
     <!-- weights_dir defaults to ../numpy_port relative to the node file -->
   </node>
 </launch>

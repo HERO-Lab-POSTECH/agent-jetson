@@ -28,6 +28,7 @@
   <arg name="imu_yaw_offset_deg"  default="45.0" />
   <arg name="sensor_timeout_s"    default="0.2" />
   <arg name="joint_timeout_s"     default="0.5" />
+  <arg name="enable_homing"       default="false" />
 
   <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
   <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen" />
@@ -42,6 +43,7 @@
     <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
     <arg name="sensor_timeout_s"   value="$(arg sensor_timeout_s)" />
     <arg name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
+    <arg name="enable_homing"      value="$(arg enable_homing)" />
   </include>
 
   <!-- ROSBAG: auto-record core topics for post-hoc field-test diagnosis.
