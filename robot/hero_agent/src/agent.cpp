@@ -98,39 +98,34 @@ int get_next_log_index(const std::string& base_path);
 void handle_signal(int sig);
 
 // ==============================
-// V3 Key Translation Layer (single-node: translate then dispatch in-process)
+// Key dispatch (single-node: allow-list translate then dispatch in-process)
 //
-// translate_key (key_translator.h) is the byte-identical oracle for V3 keys.
-// debounce stays a callback-layer concern (KeyTranslator is a pure function):
-// only toggle keys with debounce flag are 500ms gated — '1'/'2'/'3'/'5'.
-// '4' (PWM) is toggle=false so it is NOT gated, preserving prior behavior.
+// keymap.h KEYMAP[] is the allow-list SSOT; translate_key is a pure function
+// (self-toggle: firmware holds toggle state, so no ToggleState is read here).
+// Unregistered keys are dropped (logwarn). debounce stays a callback-layer
+// concern: only keys flagged debounce in KEYMAP are 500ms gated.
+// 'R' (rosbag) is agent-internal, handled before lookup (not in KEYMAP).
 // ==============================
 void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
     int ch = msg->data;
 
-    // Rosbag toggle (KeyTranslator 범위 밖, agent 내부 플래그)
+    // Rosbag toggle (KEYMAP 범위 밖, agent 내부 플래그)
     if (ch == 'R') {
         csv_logger.toggle();
         return;
     }
 
-    // Current toggle state (built from state-callback cache)
-    ToggleState st;
-    st.relay_enabled         = state_monitor.relayEnabled();
-    st.control_yaw_enabled   = state_monitor.controlYawEnabled();
-    st.control_depth_enabled = state_monitor.controlDepthEnabled();
-    st.laser_enabled         = state_monitor.laserEnabled();
-
-    // Debounce: only toggle keys carrying the debounce flag are gated.
-    // '1'/'2'/'3'/'5' are toggle=true+debounce=true → gated.
-    // '4' is toggle=false → excluded, preserving the prior gated key set.
     const KeyDef* kd = lookup_key(ch);
-    if (kd && kd->toggle && kd->debounce) {
-        if (!debounce_ok(ch)) return;
+    if (!kd) {                               // allow-list: 미등록 키는 조용히 drop
+        ROS_WARN_THROTTLE(1.0, "[teleop] unknown key %d (ignored)", ch);
+        return;
     }
 
-    KeyXlate out = translate_key(ch, st);
+    // Debounce: keys flagged debounce in KEYMAP are 500ms gated.
+    if (kd->debounce && !debounce_ok(ch)) return;
+
+    KeyXlate out = translate_key(ch);
     if (out.cmd != 0)
         send_command(out.cmd);
     if (out.translated != 0) {

@@ -130,7 +130,7 @@ public:
     float sensorPitch() const { return sensor_pitch; }
     float sensorYaw() const { return sensor_yaw; }
 
-    // key_input_callback이 ToggleState 구성용으로 읽는 게터
+    // 모니터 상태 게터 (현재 unused — self-toggle 전환으로 callback에서 더 이상 읽지 않음)
     int relayEnabled() const { return relay_enabled; }
     int controlYawEnabled() const { return control_yaw_enabled; }
     int controlDepthEnabled() const { return control_depth_enabled; }
