@@ -1,69 +1,59 @@
 #ifndef HERO_AGENT_KEYMAP_H
 #define HERO_AGENT_KEYMAP_H
-
 namespace hero {
 
-// 어느 ToggleState 비트를 보는지
-enum class ToggleBit { NONE, RELAY, YAW, DEPTH, LASER };
-
-// Arduino가 /hero_agent/state control_flags로 보고한 하드웨어 토글 상태
-struct ToggleState {
-    int relay_enabled;          // bit 2
-    int control_yaw_enabled;    // bit 0
-    int control_depth_enabled;  // bit 1
-    int laser_enabled;          // bit 3
-};
+enum KeyGroup { GRP_SYSTEM, GRP_CONTROL, GRP_JOG, GRP_SPEED, GRP_THROTTLE, GRP_SETPOINT, GRP_GRIPPER, GRP_HEAVE };
 
 struct KeyDef {
-    int         key;          // 입력 키
-    bool        toggle;       // true=토글키(cmd_off/cmd_on+toggle_bit 사용)
-    char        cmd_off;      // toggle=false면 고정 cmd; toggle=true면 OFF 상태 cmd
-    char        cmd_on;       // toggle=true일 때 ON 상태 cmd (아니면 0)
-    char        translated;   // jetson 액션 char (0=없음)
+    int         key;          // 사용자 입력 키
+    char        fw_char;      // 펌웨어로 보낼 char (0=펌웨어 안 감: heave 등)
+    char        translated;   // teleop 액션 char (0=없음). heave 'r'/'f'만.
+    bool        is_toggle;    // self-toggle 키(debounce 권장). 펌웨어가 state=!state.
     bool        debounce;     // 500ms 게이트
-    ToggleBit   toggle_bit;   // toggle=true일 때 볼 비트
-    const char* label;        // 모니터/HELP 자동생성용
+    KeyGroup    group;        // HELP 자동생성 분류
+    const char* label;        // HELP 라벨
 };
 
-// 명시 키만 테이블에. 차단키/pass-through는 테이블에 없음(lookup_key가 nullptr 반환).
-constexpr KeyDef KEYMAP[] = {
-    // 토글키
-    {'1', true,  'e', 't', 0,   true,  ToggleBit::RELAY, "Relay"},
-    {'2', true,  'y', 'h', 0,   true,  ToggleBit::YAW,   "Yaw"},
-    {'3', true,  'p', ';', 0,   true,  ToggleBit::DEPTH, "Depth"},
-    {'5', true,  'r', 'f', 0,   true,  ToggleBit::LASER, "Laser"},
-    // 고정 cmd키
-    {'4', false, 'g',  0,  0,   true,  ToggleBit::NONE,  "PWM Init"},
-    {'N', false, 'n',  0,  0,   false, ToggleBit::NONE,  "Yaw Reset"},
-    {'o', false, 'o',  0,  0,   false, ToggleBit::NONE,  "Depth-0.1"},
-    // 고정 translated키
-    {'r', false,  0,   0, 'r',  false, ToggleBit::NONE,  "Heave Up"},
-    {'f', false,  0,   0, 'f',  false, ToggleBit::NONE,  "Heave Down"},
+// SSOT. allow-list: 여기 있는 키만 처리. 없으면 translator가 drop.
+static const KeyDef KEYMAP[] = {
+    // System
+    {'1', 'R', 0, true,  true,  GRP_SYSTEM,  "Relay"},
+    {'2', 'P', 0, false, true,  GRP_SYSTEM,  "PWM Neutral"},
+    {'N', 'Z', 0, false, false, GRP_SYSTEM,  "Yaw Reset"},
+    // Control toggles
+    {'3', 'Y', 0, true,  true,  GRP_CONTROL, "Yaw Ctrl"},
+    {'4', 'D', 0, true,  true,  GRP_CONTROL, "Depth Ctrl"},
+    {'5', 'L', 0, true,  true,  GRP_CONTROL, "Laser"},
+    // Thruster jog
+    {'w', 'w', 0, false, false, GRP_JOG,     "Forward"},
+    {'s', 's', 0, false, false, GRP_JOG,     "Backward"},
+    {'a', 'a', 0, false, false, GRP_JOG,     "Left"},
+    {'d', 'd', 0, false, false, GRP_JOG,     "Right"},
+    {'q', 'q', 0, false, false, GRP_JOG,     "Stop"},
+    // Speed (user y/h -> fw +/-)
+    {'y', '+', 0, false, false, GRP_SPEED,   "Speed+"},
+    {'h', '-', 0, false, false, GRP_SPEED,   "Speed-"},
+    // Throttle
+    {'u', 'u', 0, false, false, GRP_THROTTLE,"Throttle+"},
+    {'j', 'j', 0, false, false, GRP_THROTTLE,"Throttle-"},
+    // Setpoint
+    {'i', 'i', 0, false, false, GRP_SETPOINT,"Yaw+0.1"},
+    {'k', 'k', 0, false, false, GRP_SETPOINT,"Yaw-0.1"},
+    {'o', 'o', 0, false, false, GRP_SETPOINT,"Depth+0.1"},
+    {'l', 'l', 0, false, false, GRP_SETPOINT,"Depth-0.1"},
+    // Gripper
+    {'c', 'c', 0, false, false, GRP_GRIPPER, "Grip Open"},
+    {'v', 'v', 0, false, false, GRP_GRIPPER, "Grip Stop"},
+    {'b', 'b', 0, false, false, GRP_GRIPPER, "Grip Close"},
+    // Heave (teleop only, no firmware)
+    {'r', 0, 'r', false, false, GRP_HEAVE,   "Heave Up"},
+    {'f', 0, 'f', false, false, GRP_HEAVE,   "Heave Down"},
 };
+static const int KEYMAP_SIZE = sizeof(KEYMAP)/sizeof(KEYMAP[0]);
 
-constexpr int KEYMAP_SIZE = sizeof(KEYMAP) / sizeof(KEYMAP[0]);
-
-// 테이블 룩업: 명시 키면 그 KeyDef*, 아니면 nullptr(=차단 또는 pass-through는 호출자 판단)
 inline const KeyDef* lookup_key(int ch) {
-    for (int i = 0; i < KEYMAP_SIZE; ++i)
-        if (KEYMAP[i].key == ch) return &KEYMAP[i];
-    return nullptr;
+    for (int i=0;i<KEYMAP_SIZE;++i) if (KEYMAP[i].key==ch) return &KEYMAP[i];
+    return 0;
 }
-
-// 차단키 집합(테이블엔 없지만 pass-through도 아닌, 명시적 no-op 키)
-inline bool is_blocked_key(int ch) {
-    switch (ch) {
-    case 'p':
-    case ';': case 'n': case 'm': case '.': case ',':
-    case 't': case 'g': case 'y': case 'h': case 'e': case 'q':
-    case '6': case '7': case '8': case '9': case '0':
-    case 'R':
-        return true;
-    default:
-        return false;
-    }
-}
-
 }  // namespace hero
-
-#endif  // HERO_AGENT_KEYMAP_H
+#endif
