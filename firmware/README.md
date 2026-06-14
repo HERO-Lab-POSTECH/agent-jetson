@@ -35,6 +35,9 @@ ros_lib는 generated라 git에 vendor하지 않는다. 메시지 스키마 변�
 
     bash regen_ros_lib.sh
 
+### ⚠️ 빌드·flash 방식은 [`BUILD_AND_FLASH.md`](BUILD_AND_FLASH.md) 필독
+보드에 Arduino IDE가 2개 설치돼 있고, **MegaCore `board=2560`(ATmega2560)으로만** 빌드된다. 표준 코어(`board=mega`=1280)는 `multiple definition of '__vector_36'` 링커 에러로 실패한다(펌웨어 결함 아니라 코어 선택 오류, 2026-06-14 ELF 링크 실측 확정). 정확한 IDE 설정·링커 충돌 원인·flash 절차·롤백 자산은 전부 그 문서에 있다.
+
 ## 외부 라이브러리
 - `libraries/BlueRobotics_MS5837/` — 압력센서 (verbatim vendor)
 - ros_lib — regen_ros_lib.sh로 생성 (커밋 안 함)
