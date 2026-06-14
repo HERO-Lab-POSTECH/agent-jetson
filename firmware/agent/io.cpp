@@ -29,8 +29,11 @@ void relay_on()
 {
   state_Relay = 1;
   digitalWrite(PIN_RELAY, HIGH);
-  // 원본의 delay(5000) 제거: relay-ON 후 후속 동작이 없는 단순 5초 블로킹이었음.
-  // 이 5초 동안 nh.spinOnce()/PID 루프 전체가 freeze되어 거동을 해쳤으므로 비블로킹화(=제거).
+  // ESC arming 대기 (필수): relay HIGH로 스러스터 ESC에 전원이 인가되면 ESC가
+  // 부팅·초기화("띠리리띠띠" 기동음)에 시간이 필요하다. 이 5초간 loop를 멈춰
+  // ESC가 끼어듦 없이 arming을 완료하게 한다. 구조화 때 "단순 블로킹"으로 오판해
+  // 제거했다가 실기에서 ESC 미기동(monitor relay ON·기동음 없음)으로 발견·복원함.
+  delay(5000);
 }
 
 void relay_off()
