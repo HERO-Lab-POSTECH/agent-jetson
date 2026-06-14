@@ -29,6 +29,7 @@
 #include "thrusters.h"
 #include "pid.h"
 #include "dvl_position.h"
+#include "io.h"
 //--------------------------------------
 
 // for ROS serial libaray for PUBLISH---------------------
@@ -238,37 +239,31 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   }
   else if (Command == 'e')
   {
-    state_Relay = 1;
-    digitalWrite(PIN_RELAY, HIGH);
-    // 원본의 delay(5000) 제거: relay-ON 후 후속 동작이 없는 단순 5초 블로킹이었음.
-    // 이 5초 동안 nh.spinOnce()/PID 루프 전체가 freeze되어 거동을 해쳤으므로 비블로킹화(=제거).
+    relay_on();
   }
   else if (Command == 't')
   {
-    state_Relay = 0;
-    digitalWrite(PIN_RELAY, LOW);
+    relay_off();
   }
   else if (Command == 'r')
   {
-    state_Laser = 1;
-    digitalWrite(PIN_LED_SIG, HIGH);
+    laser_on();
   }
   else if (Command == 'f')
   {
-    state_Laser = 0;
-    digitalWrite(PIN_LED_SIG, LOW);
+    laser_off();
   }
   else if (Command == 'c')
   {
-    OCR1A = GRIPPER_OPEN; // open gripper
+    gripper_set(GRIPPER_OPEN); // open gripper
   }
   else if (Command == 'v')
   {
-    OCR1A = GRIPPER_STOP; // stop gripper
+    gripper_set(GRIPPER_STOP); // stop gripper
   }
   else if (Command == 'b')
   {
-    OCR1A = GRIPPER_CLOSE; // close gripper
+    gripper_set(GRIPPER_CLOSE); // close gripper
   }
   else if (Command == 'g')
   {
@@ -545,15 +540,7 @@ void Initialization(void)
 
   ahrs_init(); // AHRS MIP init 시퀀스(delay 포함) → ahrs.cpp로 이동
 
-  // init gripper by servo
-  // GRIPPER_SERVO.attach(GRIPPER_SIG);
-  DDRB |= 0x20;
-  TCCR1A = 0x82;
-  TCCR1B = 0x1B;
-  TCCR1C = 0;
-  ICR1 = GRIPPER_ICR1;
-
-  OCR1A = GRIPPER_STOP;
+  gripper_init();
 
   // depth sensor init
   while (!DEPTH_Sensor.init())
@@ -563,13 +550,7 @@ void Initialization(void)
   DEPTH_Sensor.setModel(MS5837::MS5837_30BA);
   DEPTH_Sensor.setFluidDensity(997); // kg/m^3 (freshwater, 1029 for seawater)
 
-  // basic io init
-  pinMode(PIN_RELAY, OUTPUT);
-  pinMode(PIN_LED_SIG, OUTPUT);
-  pinMode(PIN_RTS, OUTPUT);
-
-  // RTS on (rs485 send)
-  digitalWrite(PIN_RTS, HIGH);
+  io_init();
 }
 
 // PID_control_yaw() / PID_control_depth() 정의는 pid.cpp로 이동 (선언은 pid.h).
