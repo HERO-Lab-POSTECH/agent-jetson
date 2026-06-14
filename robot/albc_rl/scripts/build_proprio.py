@@ -12,7 +12,7 @@ against the sim in marinegym-isaaclab @ ksm-ubuntu, 2026-06-08):
 
     [0:3]   ang_cmd [roll_att, pitch_att, yaw_rate]   <- setpoint (RL node owns)
     [3:6]   euler roll,pitch,yaw (rad)                <- /hero_agent/sensors (board-frame corrected)
-    [6:9]   body angular velocity p,q,r (rad/s)       <- ESTIMATED: d(euler)/dt + LPF
+    [6:9]   body angular velocity p,q,r (rad/s)       <- firmware gyro (rotate_gyro'd by node); d(euler)/dt+LPF fallback if no gyro key
     [9:11]  arm joint positions (rad, cumulative)     <- /albc/joint_states
     [11:13] arm joint velocities (rad/s)              <- driver value, or ESTIMATED d(joint)/dt + LPF
     [13]    manipulability index [0,1]                <- Yoshikawa from joint2
@@ -173,8 +173,16 @@ class ProprioBuilder:
         euler = np.asarray(s["euler"], dtype=np.float32).reshape(3)
         jpos = np.asarray(s["joint_pos"], dtype=np.float32).reshape(2)
 
-        angvel = self._estimate_rate(euler, self._prev_euler, self._angvel_lpf, wrap=True)
-        self._prev_euler = euler
+        # angular velocity (obs 6:9): prefer the firmware raw gyro (sim root_ang_vel_b
+        # truth, already rotate_gyro'd by the node). Fall back to euler-differentiation
+        # only when no gyro is published (pre-gyro firmware / bench tests).
+        if "gyro" in s:
+            angvel = np.asarray(s["gyro"], dtype=np.float32).reshape(3)
+            # keep euler-diff state continuous so a later fallback isn't discontinuous
+            self._prev_euler = euler
+        else:
+            angvel = self._estimate_rate(euler, self._prev_euler, self._angvel_lpf, wrap=True)
+            self._prev_euler = euler
 
         # joint velocity: prefer the driver-supplied value (differentiated at the true
         # 10 Hz read rate, no 10->50 Hz staircase). Fall back to self-differentiation

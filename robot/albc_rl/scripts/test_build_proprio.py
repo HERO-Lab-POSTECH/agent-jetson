@@ -307,6 +307,39 @@ def test_rotate_gyro_returns_float32():
     assert rotate_gyro(1.0, 2.0, 3.0, 0.5).dtype == np.float32
 
 
+# ----------------------------------------------- gyro key in build(): verbatim path
+def _min_sensors():
+    return {
+        "cmd_att": [0.0, 0.0], "cmd_yawrate": 0.0,
+        "euler": [0.0, 0.0, 0.0], "joint_pos": [0.0, 1.57],
+        "joint_vel": [0.0, 0.0],
+    }
+
+
+def test_build_uses_gyro_key_verbatim_for_obs_6_9():
+    b = ProprioBuilder()
+    s = _min_sensors()
+    s["gyro"] = [0.11, 0.22, 0.33]   # already rotate_gyro'd by the node
+    out = b.build(s)
+    np.testing.assert_allclose(out[6:9], [0.11, 0.22, 0.33], atol=1e-6)
+
+
+def test_build_falls_back_to_estimate_when_no_gyro_key():
+    # no "gyro" key -> first call euler-diff yields zeros (prev is None)
+    b = ProprioBuilder()
+    out = b.build(_min_sensors())
+    np.testing.assert_allclose(out[6:9], [0.0, 0.0, 0.0], atol=1e-6)
+
+
+def test_build_gyro_path_does_not_advance_euler_diff_state():
+    # gyro path present: 6:9 from gyro, euler(3:6) still set
+    b = ProprioBuilder()
+    s = _min_sensors(); s["euler"] = [0.1, 0.2, 0.3]; s["gyro"] = [1.0, 2.0, 3.0]
+    out = b.build(s)
+    np.testing.assert_allclose(out[3:6], [0.1, 0.2, 0.3], atol=1e-6)
+    np.testing.assert_allclose(out[6:9], [1.0, 2.0, 3.0], atol=1e-6)
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
