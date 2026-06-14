@@ -310,6 +310,36 @@ class RLInferenceNode(object):
                 % (joints_age, self.joint_timeout))
             return False
 
+        # --- phase: HOMING -> RUNNING ------------------------------------------
+        # In HOMING we do NOT run the policy. We publish the nominal joint target
+        # only, let the driver's startup ramp move the arm there slowly, and flip
+        # to RUNNING once measured joint_pos converges. On timeout we HOLD (no
+        # policy start) -- starting un-converged re-enters the OOD blowup.
+        if self._phase == "HOMING":
+            if self._homing_start_t is None:
+                self._homing_start_t = now
+                rospy.loginfo(
+                    "HOMING: moving arm to nominal %s (tol %.3f rad, timeout %.1fs)"
+                    % (np.array2string(self.homing_target, precision=3),
+                       self.homing_tol, self.homing_timeout_s))
+            self._pub_j1.publish(Float64(float(self.homing_target[0])))
+            self._pub_j2.publish(Float64(float(self.homing_target[1])))
+            if should_finish_homing(self._joint_pos, self.homing_target, self.homing_tol):
+                rospy.loginfo("HOMING complete: jpos=%s converged -> RUNNING"
+                              % np.array2string(self._joint_pos, precision=3))
+                self.policy.reset()
+                self.builder.reset()
+                self._phase = "RUNNING"
+            elif homing_timed_out(now - self._homing_start_t, self.homing_timeout_s):
+                rospy.logwarn_throttle(
+                    2.0, "HOMING timed out (%.1fs) without convergence: jpos=%s "
+                         "target=%s -- HOLDING (policy NOT started; check arm / "
+                         "set enable_homing:=false)"
+                    % (now - self._homing_start_t,
+                       np.array2string(self._joint_pos, precision=3),
+                       np.array2string(self.homing_target, precision=3)))
+            return False  # never fall through to the policy while in/after-failed HOMING
+
         # --- assemble obs and run the policy ------------------------------------
         sensors = {
             "cmd_att": self._command[0:2],           # roll_att, pitch_att
