@@ -187,15 +187,48 @@ void messageCommand(const std_msgs::Int8 &command_msg)
 {
   int Command = command_msg.data;
 
-  if (Command == 'n')
+  // --- Toggles (self-toggle: 한 번 누르면 켜지고 또 누르면 꺼짐) ---
+  if (Command == 'R') // Relay
+  {
+    if (state_Relay) relay_off(); else relay_on();
+  }
+  else if (Command == 'Y') // Yaw control
+  {
+    cont_yaw_on = !cont_yaw_on;
+    cont_Yaw = cont_yaw_on;
+  }
+  else if (Command == 'D') // Depth control
+  {
+    cont_depth_on = !cont_depth_on;
+    cont_Depth = cont_depth_on;
+  }
+  else if (Command == 'L') // Laser
+  {
+    if (state_Laser) laser_off(); else laser_on();
+  }
+  // --- One-shot ---
+  else if (Command == 'Z') // Yaw reset
   {
     desired_angle_yaw = 0;
     yaw_calid_command = 1;
 
     test_cont_set = 0;
   }
+  else if (Command == 'P') // PWM neutral (all ESC)
+  {
 
-  else if (Command == 'q')
+    pwm_m0 = ESC_NEUTRAL;
+    pwm_m1 = ESC_NEUTRAL;
+    pwm_m2 = ESC_NEUTRAL;
+    pwm_m3 = ESC_NEUTRAL;
+    pwm_m4 = ESC_NEUTRAL;
+    pwm_m5 = ESC_NEUTRAL;
+
+    esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
+    esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+  }
+  // --- Thruster jog ---
+  else if (Command == 'q') // stop
   {
     cont_direc = 0;
     save_acc_x = 0;
@@ -216,46 +249,41 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   {
     cont_direc = 4;
   }
-  else if (Command == '1') // concon
-  {
-    cont_direc = 8;
-  }
-  else if (Command == '4') // dvl cont
-  {
-    cont_direc = 7;
-  }
-  else if (Command == '2') // concon
-  {
-    print_i++;
-  }
-  else if (Command == '3') // concon
-  {
-    print_i--;
-  }
-  else if (Command == 'z') // left
+  // --- Speed / throttle ---
+  else if (Command == '+') // move_speed +
   {
     move_speed += 10;
   }
-  else if (Command == 'x') // right
+  else if (Command == '-') // move_speed -
   {
     move_speed -= 10;
   }
-  else if (Command == 'e')
+  else if (Command == 'u') // throttle +
   {
-    relay_on();
+    throttle += 10;
   }
-  else if (Command == 't')
+  else if (Command == 'j') // throttle -
   {
-    relay_off();
+    throttle -= 10;
   }
-  else if (Command == 'r')
+  // --- Setpoint ---
+  else if (Command == 'i') // yaw +0.1
   {
-    laser_on();
+    desired_angle_yaw += 0.1;
   }
-  else if (Command == 'f')
+  else if (Command == 'k') // yaw -0.1
   {
-    laser_off();
+    desired_angle_yaw -= 0.1;
   }
+  else if (Command == 'o') // depth +0.1
+  {
+    desired_angle_depth += 0.1;
+  }
+  else if (Command == 'l') // depth -0.1
+  {
+    desired_angle_depth -= 0.1;
+  }
+  // --- Gripper ---
   else if (Command == 'c')
   {
     gripper_set(GRIPPER_OPEN); // open gripper
@@ -268,79 +296,7 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   {
     gripper_set(GRIPPER_CLOSE); // close gripper
   }
-  else if (Command == 'g')
-  {
 
-    pwm_m0 = ESC_NEUTRAL;
-    pwm_m1 = ESC_NEUTRAL;
-    pwm_m2 = ESC_NEUTRAL;
-    pwm_m3 = ESC_NEUTRAL;
-    pwm_m4 = ESC_NEUTRAL;
-    pwm_m5 = ESC_NEUTRAL;
-
-    esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
-    esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
-  }
-  else if (Command == 'y')
-  {
-    cont_yaw_on = 1;
-    cont_Yaw = 1;
-  }
-  else if (Command == 'h')
-  {
-    cont_yaw_on = 0;
-    cont_Yaw = 0;
-  }
-  else if (Command == 'u')
-  {
-    throttle += 10;
-  }
-  else if (Command == 'j')
-  {
-    throttle -= 10;
-  }
-  else if (Command == 'i')
-  {
-    desired_angle_yaw += 0.1;
-  }
-  else if (Command == 'k')
-  {
-    desired_angle_yaw -= 0.1;
-  }
-  else if (Command == '6')
-  {
-    desired_angle_yaw += 0.0002;
-  }
-  else if (Command == '5')
-  {
-    desired_angle_yaw -= 0.0002;
-  }
-  else if (Command == '8')
-  {
-    desired_angle_yaw += 0.01;
-  }
-  else if (Command == '7')
-  {
-    desired_angle_yaw -= 0.01;
-  }
-  else if (Command == 'o')
-  {
-    desired_angle_depth += 0.1;
-  }
-  else if (Command == 'l')
-  {
-    desired_angle_depth -= 0.1;
-  }
-  else if (Command == 'p')
-  {
-    cont_depth_on = 1;
-    cont_Depth = 1;
-  }
-  else if (Command == ';')
-  {
-    cont_depth_on = 0;
-    cont_Depth = 0;
-  }
   State_all = 0;
   if (cont_Yaw == 1)
   {

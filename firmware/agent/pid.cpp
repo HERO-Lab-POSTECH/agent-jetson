@@ -52,20 +52,6 @@ void PID_control_yaw()
     pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + move_speed;
     pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL - move_speed;
   }
-  else if (cont_direc == 7) // concon of position
-  {
-    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL - Th_0;
-    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL + Th_1;
-    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + Th_2;
-    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + Th_3;
-  }
-  else if (cont_direc == 8) // concon of position
-  {
-    pwm_m1 = PID_yaw + throttle + ESC_NEUTRAL - darknet_Th_0;
-    pwm_m2 = -PID_yaw + throttle + ESC_NEUTRAL + darknet_Th_1;
-    pwm_m4 = -PID_yaw - throttle + ESC_NEUTRAL + darknet_Th_2;
-    pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + darknet_Th_3;
-  }
 
   pwm_m1 = constrain(pwm_m1, ESC_MIN, ESC_MAX);
   pwm_m2 = constrain(pwm_m2, ESC_MIN, ESC_MAX);
