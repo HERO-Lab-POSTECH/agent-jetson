@@ -32,6 +32,9 @@
 #include "io.h"
 //--------------------------------------
 
+// 메인 스케치 자체 함수 forward 선언 (정의가 호출보다 뒤 — Arduino auto-prototype 대체)
+void Initialization(void);
+
 // for ROS serial libaray for PUBLISH---------------------
 ros::NodeHandle nh; // main handle
 
