@@ -22,7 +22,6 @@ legacy 메시지는 현재 repo 코드에서 직접 쓰이지 않으나, Arduino
 | `hero_agent_cont_para.msg` | QR controller parameters (Kp, Ki, Kd, etc.) | legacy (firmware-only, 코드 미사용·보존) |
 | `hero_agent_position_result.msg` | Position result (X, Y, Z) | legacy (firmware-only, 코드 미사용·보존) |
 | `hero_agent_vision.msg` | Vision detection results | active (perception) |
-| `hero_usbl_cont.msg` | USBL control data | legacy (firmware-only, 코드 미사용·보존) |
 | `hero_xy_cont.msg` | XY control data | active (perception) |
 
 ## Services

@@ -19,7 +19,6 @@ add_message_files(
    FILES
    hero_agent_state.msg
    hero_agent_sensor.msg
-   hero_usbl_cont.msg
    hero_xy_cont.msg
    hero_agent_vision.msg
    hero_agent_dvl.msg
