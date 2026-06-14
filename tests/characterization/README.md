@@ -23,7 +23,7 @@ tests/characterization/run.sh        # 전부 빌드+실행, 하나라도 실패
 | 테스트 | 대상 (원본) | 박제 내용 |
 |:---|:---|:---|
 | `test_key_translation.cpp` | `agent_main.cpp:207-298` (V3 키 번역 switch) | 입력키 → `/hero_agent/command` char + `/hero_agent/key_translated` char. 토글 ON/OFF 양분기, blocked 키, pass-through 25종 |
-| `test_keymap_table.cpp` | `keymap.h` (선언형 KEYMAP 테이블) | 토글/고정/translated 키 정의 + `is_blocked_key`/`lookup_key` 분기 |
+| `test_keymap_table.cpp` | `keymap.h` (선언형 KEYMAP 테이블) | self-toggle/one-shot/translated 키 정의 + allow-list `lookup_key` (미등록 키 → nullptr) |
 | `test_processkey.cpp` | `teleop.cpp` (processKey) | 키 → target.x/y/z 변위 + 부호 규약(r=z−, f=z+) |
 
 ### chain 2 (albc_control — 제어 수학)
