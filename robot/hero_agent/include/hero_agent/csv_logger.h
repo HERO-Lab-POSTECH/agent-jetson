@@ -26,6 +26,14 @@ public:
     int flag() const { return record_flag.load(); }
 
     // 레코딩 시작: fout_csv 열고 헤더 라인 쓰기.
+    //
+    // CSV 17컬럼 = ros_time(1) + /albc/status data[0:11](11) + StateMonitor 게터(5).
+    // 헤더 라벨과 writeLine()의 write 인덱스는 lock-step으로 정합해야 한다
+    // (/albc/status 필드 순서가 바뀌면 둘 다 같이 고칠 것 — 안 그러면 침묵 어긋남):
+    //   col  1      : ros_time
+    //   col  2.. 9  : data[0..7]  target/current roll·pitch, target/current x·y
+    //   col 10..12  : data[8..10] angular_vel_roll/pitch/yaw
+    //   col 13..17  : targetDepth, currentDepth, sensorRoll, sensorPitch, sensorYaw
     void open(const std::string& path, StateMonitor& /*mon*/)
     {
         albc_csv_path = path;
@@ -65,6 +73,8 @@ public:
 
         std::lock_guard<std::mutex> lock(csv_mutex);
         if (fout_csv.is_open()) {
+            // write order MUST match the header in open() column-for-column
+            // (ros_time, data[0..10], then the 5 StateMonitor getters).
             fout_csv << std::fixed << std::setprecision(6)
                 << current_time << ","
                 << data[0] << "," << data[1] << ","

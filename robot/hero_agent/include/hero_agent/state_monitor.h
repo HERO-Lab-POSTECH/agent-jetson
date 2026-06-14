@@ -55,14 +55,33 @@ public:
     // ==============================
     // ALBC status callback - cache data only
     // ==============================
+    // /albc/status ABI = unnamed Float64MultiArray[11] (frozen-by-convention; see
+    // csv_logger.h header<->index map). Minimal guards added (size + finiteness):
+    // they only REJECT malformed/garbage messages so they aren't silently cached and
+    // mirrored into CSV / RL obs. A well-formed 11-field finite message is cached
+    // byte-identically to before -- the normal path is unchanged.
     void onAlbc(const std_msgs::Float64MultiArray::ConstPtr& msg)
     {
-        if (msg->data.size() >= 11)
+        if (msg->data.size() != 11)
         {
-            std::lock_guard<std::mutex> lock(albc_mutex);
-            for (int i = 0; i < 11; i++) albc_data[i] = msg->data[i];
-            albc_active = true;
+            ROS_WARN_THROTTLE(5.0,
+                "/albc/status size %d != 11 (frozen ABI); message dropped",
+                static_cast<int>(msg->data.size()));
+            return;
         }
+        for (int i = 0; i < 11; i++)
+        {
+            if (!std::isfinite(msg->data[i]))
+            {
+                ROS_WARN_THROTTLE(5.0,
+                    "/albc/status field %d not finite (%f); message dropped",
+                    i, msg->data[i]);
+                return;
+            }
+        }
+        std::lock_guard<std::mutex> lock(albc_mutex);
+        for (int i = 0; i < 11; i++) albc_data[i] = msg->data[i];
+        albc_active = true;
     }
 
     // main의 imu_yaw_offset 파라미터 로딩용
