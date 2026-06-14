@@ -86,6 +86,9 @@ volatile int pwm_m5 = ESC_NEUTRAL, pid_pwm_m5;
 volatile uint8_t cont_yaw_on = 0;
 volatile uint8_t cont_depth_on = 0;
 
+// TODO(4번 flash 조각): T/T_depth를 측정 loop_speed 기반 동적 dt로.
+//   현재는 고정 명목값(T=0.004는 실제 루프주기 ~9ms와도 불일치).
+//   변경 시 D/I 게인 재튜닝 필수(거동 변경) → flash 검증과 함께 opt-in.
 volatile double T = 0.004;      // Loop time.
 volatile double T_depth = 0.04; // Loop time.
 
@@ -344,27 +347,6 @@ void messageCommand(const std_msgs::Int8 &command_msg)
     test_cont_set = 0;
   }
 
-  else if (Command == '.') // cont test  yaw
-  {
-  }
-  else if (Command == ',') // cont test depth
-  {
-  }
-  else if (Command == '/') // cont test depth
-  {
-  }
-  else if (Command == '-')
-  {
-  }
-  else if (Command == '0')
-  {
-  }
-  else if (Command == '9')
-  {
-  }
-  else if (Command == '=')
-  {
-  }
   else if (Command == 'q')
   {
     cont_direc = 0;
@@ -414,7 +396,8 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   {
     state_Relay = 1;
     digitalWrite(PIN_RELAY, HIGH);
-    delay(5000);
+    // 원본의 delay(5000) 제거: relay-ON 후 후속 동작이 없는 단순 5초 블로킹이었음.
+    // 이 5초 동안 nh.spinOnce()/PID 루프 전체가 freeze되어 거동을 해쳤으므로 비블로킹화(=제거).
   }
   else if (Command == 't')
   {
@@ -672,12 +655,6 @@ ISR(USART1_RX_vect)
       yaw_calib++;
     pre_yaw = yaw;
     yaw += YAW_PI * yaw_calib * 2;
-
-    //
-    // yaw control loop
-
-    // esc_input(0x01, pwm_m0, pwm_m1, pwm_m2);
-    // esc_input(0x02, pwm_m3, pwm_m4, pwm_m5);
   }
   else if (serial_count > MIP_PACKET_LEN) //데이터가 10개 넘게 들어옴 (데inputString[19]이터 수신 실패)
   {
@@ -777,12 +754,6 @@ void loop()
 
     sensors_msg.ROLL = roll;
     sensors_msg.PITCH = pitch;
-    // sensors_msg.ROLL = Tx;
-    // sensors_msg.PITCH = Ty;
-    // sensors_msg.ROLL = save_acc_x;
-    // sensors_msg.PITCH = save_v_x;
-    // sensors_msg.YAW = acc_x;
-    // sensors_msg.DEPTH = acc_y;
     sensors_msg.YAW = yaw;
     sensors_msg.DEPTH = loop_speed;
 
@@ -950,11 +921,6 @@ void PID_control_yaw()
     pwm_m5 = -PID_yaw + throttle + ESC_NEUTRAL + darknet_Th_3;
   }
 
-  // pwm_m1 = constrain(pwm_m1, 1100, 1500);
-  // pwm_m2 = constrain(pwm_m2, 1500, 1900);
-  // pwm_m4 = constrain(pwm_m4, 1100, 1500);
-  // pwm_m5 = constrain(pwm_m5, 1500, 1900);
-
   pwm_m1 = constrain(pwm_m1, ESC_MIN, ESC_MAX);
   pwm_m2 = constrain(pwm_m2, ESC_MIN, ESC_MAX);
   pwm_m4 = constrain(pwm_m4, ESC_MIN, ESC_MAX);
@@ -962,9 +928,6 @@ void PID_control_yaw()
 
   esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
   esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
-
-  // esc_input(0x02, pwm_m0, pwm_m1, 1500);
-  // esc_input(0x03, pwm_m3, 1500, 1500);
 
   error_pid_yaw1 = error_pid_yaw;
 }
@@ -984,9 +947,6 @@ void PID_control_depth()
 
   pwm_m0 = constrain(pwm_m0, DEPTH_PWM_MIN, DEPTH_PWM_MAX);
   pwm_m3 = constrain(pwm_m3, DEPTH_PWM_MIN, DEPTH_PWM_MAX);
-
-  // esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
-  // esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
 
   error_pid_depth1 = error_pid_depth;
 }
