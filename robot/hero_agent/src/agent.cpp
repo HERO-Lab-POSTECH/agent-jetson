@@ -116,6 +116,16 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
         return;
     }
 
+    // Relay 키1: 칩 펌웨어(2f6725d)는 self-toggle을 안 하고 'e'=relay_on/'t'=relay_off
+    // 분리식이다. 따라서 노드가 현재 relay 상태(State_addit bit2 미러)를 보고 OFF면
+    // 'e'(ON), ON이면 't'(OFF)를 발행한다. lookup/translate 이전에 가로채므로 다른
+    // 23개 키 경로는 불변. debounce는 여기서 직접 적용(keymap flag 비의존, 기존 0.5s).
+    if (ch == '1') {
+        if (!debounce_ok('1')) return;
+        send_command(state_monitor.relayEnabled() ? 't' : 'e');
+        return;
+    }
+
     const KeyDef* kd = lookup_key(ch);
     if (!kd) {                               // allow-list: 미등록 키는 조용히 drop
         ROS_WARN_THROTTLE(1.0, "[teleop] unknown key %d (ignored)", ch);

@@ -17,7 +17,10 @@ struct KeyDef {
 // SSOT. allow-list: 여기 있는 키만 처리. 없으면 translator가 drop.
 static const KeyDef KEYMAP[] = {
     // System
-    {'1', 'R', 0, true,  true,  GRP_SYSTEM,  "Relay"},
+    // 키1은 key_input_callback이 가로채 relay 상태에 따라 'e'/'t'를 직접 발행한다
+    // (칩 2f6725d는 self-toggle 안 함). 따라서 fw_char는 KEYMAP을 통해 발행되지 않는
+    // 죽은 값 → 0으로 표기(heave 행과 동일 컨벤션). 행은 HELP 라벨/그룹 보존용으로 유지.
+    {'1', 0,   0, true,  true,  GRP_SYSTEM,  "Relay"},
     {'2', 'P', 0, false, true,  GRP_SYSTEM,  "PWM Neutral"},
     {'N', 'Z', 0, false, false, GRP_SYSTEM,  "Yaw Reset"},
     // Control toggles
