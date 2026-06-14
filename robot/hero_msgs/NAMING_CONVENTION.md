@@ -103,6 +103,50 @@ prevent .msg proliferation)."
 
 ---
 
+## teleop 키맵 SSOT (key_input 와이어 프로토콜)
+
+`keymap.h`의 `KEYMAP[]` 테이블이 **user_key → fw_char 매핑의 단일 진실**이다.
+3곳이 fw_char 와이어 프로토콜을 공유하며 반드시 lock-step으로 유지해야 한다:
+
+| SSOT 위치 | 역할 |
+|:---|:---|
+| `robot/hero_agent/include/hero_agent/keymap.h` `KEYMAP[]` | user_key → fw_char 매핑 정의 (SSOT) |
+| `robot/hero_agent/scripts/key_teleop.py` KEY_TABLE | HELP 화면 광고 (KEYMAP[]에서 자동생성) |
+| `firmware/agent/agent.ino` `messageCommand` | fw_char → 펌웨어 동작 분기 |
+
+**경계(boundary)**: fw_char 문자 하나. 이 문자가 바뀌면 3곳 모두 동시에 바꿔야 한다.
+
+### 확정 키 레이아웃 (2026-06-15 기준)
+
+| 그룹 | 사용자 키 | 동작 | fw_char | 종류 |
+|:---|:---|:---|:---|:---|
+| 시스템 | `1` | Relay | `R` | self-toggle |
+| | `2` | PWM Neutral (ESC init) | `P` | one-shot |
+| | `N` | Yaw reset | `Z` | one-shot |
+| | `R`(shift) | CSV 로깅 | (agent 내부, KEYMAP 없음) | toggle |
+| 제어 | `3` | Yaw control | `Y` | self-toggle |
+| | `4` | Depth control | `D` | self-toggle |
+| | `5` | Laser | `L` | self-toggle |
+| Jog | `w`/`s`/`a`/`d` | 전진/후진/좌/우 | `w`/`s`/`a`/`d` | press |
+| | `q` | STOP | `q` | press |
+| Speed | `y`/`h` | move_speed ±10 | `+`/`-` | press |
+| Throttle | `u`/`j` | throttle ±10 | `u`/`j` | press |
+| Setpoint | `i`/`k` | desired_yaw ±0.1 | `i`/`k` | press |
+| | `o`/`l` | desired_depth ±0.1 | `o`/`l` | press |
+| Gripper | `c`/`v`/`b` | open/stop/close | `c`/`v`/`b` | press |
+| Heave | `r`/`f` | z축 ± (Jetson teleop) | (fw 미전달) | press |
+| (제거됨) | — | concon, dvl cont | — | 삭제 |
+
+### 정책
+
+- **allow-list drop**: `KEYMAP[]`에 없는 키는 `key_translator`에서 버려진다. 미등록 키가 fw에 도달하는 패스스루는 없다.
+- **self-toggle**: R/Y/D/L은 fw_char 단일 문자; 펌웨어가 `state=!state`로 처리. 별도 on/off char 없음.
+- **SSOT 동기화 의무**: `KEYMAP[]` 변경 시 `messageCommand`(firmware)와 KEY_TABLE(key_teleop.py)을 lock-step으로 갱신한다.
+
+> **self-toggle 리셋 desync 주의 (필드 운용)**: 펌웨어 리셋 후 `state_Relay`/`state_Laser`는 0으로 재초기화되나 물리 relay가 ON이면 첫 토글 1회가 resync에 소비된다. 설계 상 의도된 트레이드오프.
+
+---
+
 ## 메시지 생애주기 분류
 
 ### ACTIVE (6) — live 그래프에 publisher·subscriber 양끝 존재
