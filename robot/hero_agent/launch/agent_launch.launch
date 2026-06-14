@@ -18,7 +18,7 @@
   <!-- Arduino serial bridge -->
   <node pkg="rosserial_python" name="rosserial_agent" type="serial_node.py">
     <param name="port"    value="/dev/ttyUSB1"/>
-    <param name="baud"    value="76800"/>
+    <param name="baud"    value="57600"/>
   </node>
 
   <!-- Agent (key translation + teleop + monitor + rosbag) -->
