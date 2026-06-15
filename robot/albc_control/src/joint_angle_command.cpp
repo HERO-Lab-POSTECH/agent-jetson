@@ -103,6 +103,17 @@ void enableTorque(uint8_t id) {
     }
 }
 
+// RL-DEPLOY: release torque so the arm free-wheels and can be repositioned by
+// hand. Called on node shutdown -- previously torque stayed ON after the node
+// exited, so the only way to free the joints was cutting motor power (relay OFF).
+void disableTorque(uint8_t id) {
+    uint8_t error = 0;
+    int result = packet_handler->write1ByteTxRx(port_handler, id, ADDR_TORQUE_ENABLE, 0, &error);
+    if (result != COMM_SUCCESS) {
+        ROS_ERROR("Failed to disable torque for Dynamixel ID %d (err=%d)", id, result);
+    }
+}
+
 void setPosition(uint8_t id, int32_t position) {
     uint8_t error = 0;
     int result = packet_handler->write4ByteTxRx(port_handler, id, ADDR_GOAL_POSITION, (unsigned int)position, &error);
@@ -348,6 +359,14 @@ int main(int argc, char **argv) {
         ros::spinOnce();
         loop_rate.sleep();
     }
+
+    // RL-DEPLOY: release joint torque on shutdown so the arm can be moved by
+    // hand once the node exits. Runs on graceful (SIGINT) shutdown, before the
+    // port closes. WARNING: if the arm is holding a pose out of water, it will
+    // drop under gravity when torque releases.
+    disableTorque(JOINT1_ID);
+    disableTorque(JOINT2_ID);
+    ROS_INFO("Joint torque released -- arm is now free to move by hand.");
 
     port_handler->closePort();
     return 0;
