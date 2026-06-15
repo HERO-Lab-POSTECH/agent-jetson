@@ -32,6 +32,41 @@ def test_exactly_on_tol_boundary_finishes():
     assert should_finish_homing(jpos, TARGET, TOL) is True
 
 
+def test_full_turn_offset_counts_as_converged():
+    # joint1 is a continuous-rotation motor: the driver seeds abs_meas from the
+    # first raw read, so a physically-nominal arm reads ~2*pi (6.286). The angular
+    # distance to target 0 is ~0, so this MUST count as converged.
+    jpos = np.array([6.286, 1.569], dtype=np.float32)
+    assert should_finish_homing(jpos, TARGET, TOL) is True
+
+
+def test_negative_full_turn_offset_counts_as_converged():
+    # Same situation one turn the other way: -2*pi + small offset is also ~nominal.
+    jpos = np.array([-6.280, 1.5708], dtype=np.float32)
+    assert should_finish_homing(jpos, TARGET, TOL) is True
+
+
+def test_full_turn_plus_real_error_not_finished():
+    # 2*pi offset PLUS a genuine 0.3 rad error must still read as not converged,
+    # so wrapping does not mask a real miss.
+    jpos = np.array([6.286 + 0.3, 1.5708], dtype=np.float32)
+    assert should_finish_homing(jpos, TARGET, TOL) is False
+
+
+def test_nan_input_not_finished():
+    # A stale/garbage sensor read (NaN) must fail-safe to not-converged, so the
+    # policy never starts on an unknown arm pose.
+    jpos = np.array([np.nan, 1.5708], dtype=np.float32)
+    assert should_finish_homing(jpos, TARGET, TOL) is False
+
+
+def test_empty_input_not_finished():
+    # np.all([]) is vacuously True; the size guard must override it to False so
+    # an empty joint message is never read as "converged -> start policy".
+    jpos = np.array([], dtype=np.float32)
+    assert should_finish_homing(jpos, np.array([], dtype=np.float32), TOL) is False
+
+
 def test_timeout_not_elapsed():
     assert homing_timed_out(3.0, 8.0) is False
 
