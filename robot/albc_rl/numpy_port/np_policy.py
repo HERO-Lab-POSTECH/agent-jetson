@@ -122,6 +122,7 @@ class NumpyStudentPolicy:
         self._tcn_window = deque(maxlen=TCN_HISTORY)
         self._gru_hidden = None
         self._joint_target = NOMINAL_JOINT_POS.copy()
+        self._joint_target_seeded = False
         self._prev_action = np.zeros(ACTION_DIM, dtype=np.float32)
         self._hist_step_counter = 0
         self.reset()
@@ -179,7 +180,13 @@ class NumpyStudentPolicy:
         self._integral[:] = 0.0
         self._tcn_window.clear()
         self._gru_hidden = None
+        # Placeholder until the first act() seeds it from the measured joint_pos.
+        # The sim seeds _joint_pos_targets from the measured joint angle at reset
+        # (events.randomize_joint_positions / _reset_action_buffers), so the
+        # history joint_pos_error starts at 0. reset() here runs before any ROS
+        # measurement arrives, so the seed is deferred to the first act().
         self._joint_target = NOMINAL_JOINT_POS.copy()
+        self._joint_target_seeded = False
         self._prev_action[:] = 0.0
         self._hist_step_counter = 0
 
@@ -195,6 +202,17 @@ class NumpyStudentPolicy:
         return self._joint_target.copy()
 
     def act(self, proprio_20, cmd_3):
+        proprio_20 = np.asarray(proprio_20, dtype=np.float32)
+        # First-tick seed: align the joint PD target with the MEASURED joint
+        # angle (proprio[9:11]) so the history joint_pos_error starts at 0,
+        # exactly as the sim does at reset. Without this the target starts at
+        # nominal [0, pi/2] while the real arm may be elsewhere (e.g. 4.294 rad),
+        # feeding the policy a large false joint_pos_error every tick and driving
+        # a monotonic joint-target runaway. Must run BEFORE _assemble_obs so the
+        # very first observation already has joint_pos_error == 0.
+        if not self._joint_target_seeded:
+            self._joint_target = proprio_20[9:11].copy()
+            self._joint_target_seeded = True
         obs69 = self._assemble_obs(proprio_20, cmd_3)
         obs_b = obs69.reshape(1, -1).astype(np.float32)
 
