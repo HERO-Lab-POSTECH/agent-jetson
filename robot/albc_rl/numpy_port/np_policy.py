@@ -236,42 +236,6 @@ class NumpyStudentPolicy:
         action = self.actor.act(obs_n, z).reshape(-1)   # (8,)
         action = np.clip(action, -1.0, 1.0).astype(np.float32)
 
-        # DIAG: expose the exact 69D obs fed to the policy this tick so the ROS
-        # node can publish it (/rl/obs69) for sim-vs-real OOD channel analysis.
-        # Pure numpy attribute, no ROS dependency. Cheap (a reference, not a copy).
-        self.last_obs69 = obs69
-
-        # --- TEMP DIAG (remove after first-tick instrumentation run) -------------
-        # Prints the first PROBE_TICKS act() calls: which obs entries the policy
-        # sees on tick 1 and the raw action it emits. Answers "att err ~0 but arm
-        # action != 0 from the very first step?" without guessing.
-        if getattr(self, "_diag_n", 0) < 12:
-            self._diag_n = getattr(self, "_diag_n", 0) + 1
-            o = obs69
-            cmd = o[0:3]; eul = o[3:6]; angv = o[6:9]
-            jpos = o[9:11]; jvel = o[11:13]; manip = o[13]
-            integ = o[66:69]
-            att_rp_err = _wrap_angle(cmd[:2] - eul[:2])
-            yaw_rate_err = cmd[2] - angv[2]
-            import sys
-            sys.stderr.write(
-                "[DIAG %02d] cmd=%s eul=%s angv=%s | att_rp_err=%s yaw_rate_err=%+.4f "
-                "| jpos=%s jtgt=%s manip=%.3f integ=%s | act01=%s act_arm_raw=%s\n" % (
-                    self._diag_n,
-                    np.array2string(cmd, precision=3, suppress_small=True),
-                    np.array2string(eul, precision=3, suppress_small=True),
-                    np.array2string(angv, precision=4, suppress_small=True),
-                    np.array2string(att_rp_err, precision=4, suppress_small=True),
-                    float(yaw_rate_err),
-                    np.array2string(jpos, precision=3, suppress_small=True),
-                    np.array2string(self._joint_target, precision=3, suppress_small=True),
-                    float(manip),
-                    np.array2string(integ, precision=4, suppress_small=True),
-                    np.array2string(action[:2], precision=4, suppress_small=True),
-                    np.array2string(action, precision=3, suppress_small=True)))
-            sys.stderr.flush()
-        # --- END TEMP DIAG ------------------------------------------------------
-
         # update buffers for the NEXT step (order mirrors the sim step):
         #   1) accumulate joint PD target with this step's arm action
         #   2) clamp joint1 to +-6*pi (hardware cable-wrap protection, 3 turns)
