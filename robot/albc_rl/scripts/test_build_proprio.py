@@ -233,17 +233,25 @@ def test_rotate_imu_matches_cpp_reference_sweep():
 
 # ----------------------------------------------- thruster echo: builder-owned
 # Contract (node docstring + set_last_action docstring): obs[14:20] = the 6
-# thruster channels of the LAST action. The node must not have to thread the
-# echo through the sensor dict every tick -- when 'thruster' is absent, the
-# builder echoes set_last_action() itself (closing the node<->builder seam
-# where the audit found obs[14:20] permanently stuck at zero).
-def test_thruster_echo_falls_back_to_last_action():
+# thruster channels of the LAST action, FILTERED through the sim's first-order lag.
+# The node must not have to thread the echo through the sensor dict every tick --
+# when 'thruster' is absent, the builder echoes set_last_action() itself (closing
+# the node<->builder seam where the audit found obs[14:20] permanently stuck at zero).
+#
+# 2026-07-02: the echo now runs the sim's thruster lag (marinelab apply_dynamics)
+# instead of returning the raw action. The board previously echoed raw commands
+# (std 1.0) while the sim always feeds the FILTERED state (std ~0.1-0.3), an OOD
+# input |z| up to 8.7 vs the normalizer -> thruster saturation. See _advance_thruster_lag.
+def test_thruster_echo_falls_back_to_last_action_filtered():
     b = ProprioBuilder()
     b.set_last_action([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
     s = _sensors()
     s.pop("thruster")
     out = b.build(s)
-    np.testing.assert_allclose(out[14:20], [0.3, 0.4, 0.5, 0.6, 0.7, 0.8], atol=ATOL)
+    # one step from state=0 with all targets>0 (rising -> tau_up=0.1, dt=0.005):
+    #   alpha = 0.005/0.1 = 0.05;  state = 0 + 0.05*(target-0) = 0.05*target
+    expected = 0.05 * np.array([0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
+    np.testing.assert_allclose(out[14:20], expected, atol=ATOL)
 
 
 def test_thruster_echo_zeros_before_first_action():
@@ -256,11 +264,76 @@ def test_thruster_echo_zeros_before_first_action():
 
 
 def test_explicit_thruster_key_overrides_echo():
-    # bench tests / golden replays inject thruster explicitly -- that path wins
+    # bench tests / golden replays inject thruster explicitly -- that path wins,
+    # and it MUST bypass the lag (golden fixtures already carry the filtered state).
     b = ProprioBuilder()
     b.set_last_action([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
     out = b.build(_sensors(thruster=(9, 9, 9, 9, 9, 9)))
     np.testing.assert_allclose(out[14:20], [9, 9, 9, 9, 9, 9], atol=ATOL)
+
+
+# ----------------------------------------------- thruster first-order lag (sim parity)
+# obs[14:20] runs marinelab ThrusterModel.apply_dynamics() so the board reports the
+# FILTERED thruster state the policy trained on. Constants pinned to the live sim:
+# tau_up=0.1 (rising), tau_down=0.05 (falling), dt=physics_dt=0.005, target=clip(cmd,-1,1).
+THR_TAU_UP, THR_TAU_DOWN, THR_DT = 0.1, 0.05, 0.005
+
+
+def _sim_apply_dynamics(state, cmd):
+    """Independent transcription of marinelab ThrusterModel.apply_dynamics (per channel).
+
+    float32 accumulation to mirror the sim's torch float32 state exactly (the port is
+    also float32), so this pins byte-for-byte parity, not a float64 approximation.
+    """
+    target = np.clip(np.asarray(cmd, np.float32), -1.0, 1.0)
+    tau = np.where(target > state, THR_TAU_UP, THR_TAU_DOWN)
+    return (state + (THR_DT / tau) * (target - state)).astype(np.float32)
+
+
+def test_thruster_lag_uses_tau_up_when_rising():
+    # from 0, a positive command rises with tau_up=0.1 -> alpha=0.05
+    b = ProprioBuilder()
+    b.set_last_action([0, 0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+    s = _sensors(); s.pop("thruster")
+    out = b.build(s)
+    np.testing.assert_allclose(out[14:20], np.full(6, 0.05), atol=ATOL)  # 0.005/0.1*1
+
+
+def test_thruster_lag_uses_tau_down_when_falling():
+    # settle high, then command below state -> falling uses tau_down=0.05 -> alpha=0.1
+    b = ProprioBuilder()
+    st = np.zeros(6, np.float32)
+    b.set_last_action([0, 0, 1, 1, 1, 1, 1, 1]); s = _sensors(); s.pop("thruster")
+    for _ in range(30):                       # drive state up near 1
+        b.build(s); st = _sim_apply_dynamics(st, np.ones(6))
+    b.set_last_action([0, 0, 0, 0, 0, 0, 0, 0])   # now command 0 < state -> falling
+    out = b.build(s); st = _sim_apply_dynamics(st, np.zeros(6))
+    np.testing.assert_allclose(out[14:20], st, atol=1e-6)
+
+
+def test_thruster_lag_matches_sim_over_multistep_sequence():
+    # full parity: a mixed rise/fall/sign-flip sequence must track the sim recurrence.
+    b = ProprioBuilder()
+    s = _sensors(); s.pop("thruster")
+    st = np.zeros(6, np.float32)
+    rng = np.random.RandomState(3)
+    for _ in range(40):
+        cmd6 = rng.uniform(-1.2, 1.2, 6)      # includes out-of-range -> clip path
+        b.set_last_action(np.concatenate([[0, 0], cmd6]))
+        out = b.build(s)
+        st = _sim_apply_dynamics(st, cmd6)
+        np.testing.assert_allclose(out[14:20], st, atol=1e-6)
+
+
+def test_thruster_lag_reset_zeros_state():
+    b = ProprioBuilder()
+    b.set_last_action([0, 0, 1, 1, 1, 1, 1, 1]); s = _sensors(); s.pop("thruster")
+    for _ in range(20):
+        b.build(s)                            # state climbs away from 0
+    b.reset()
+    b.set_last_action([0, 0, 1, 1, 1, 1, 1, 1])
+    out = b.build(s)                          # first step after reset -> 0.05*1 again
+    np.testing.assert_allclose(out[14:20], np.full(6, 0.05), atol=ATOL)
 
 
 # ----------------------------------------------- reset clears estimator state
