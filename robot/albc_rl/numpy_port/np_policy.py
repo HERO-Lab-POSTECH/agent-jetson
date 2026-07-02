@@ -73,6 +73,11 @@ INTEGRAL_SIGMA = np.array([0.10, 0.10, 0.10], dtype=np.float32)  # [att_rp, att_
 NOMINAL_JOINT_POS = np.array([0.0, np.pi / 2.0], dtype=np.float32)
 DELTA_SCALE = 0.10
 TCN_HISTORY = 9
+# Hardware-protection clamp on joint1's accumulated target: +-6*pi = +-3 turns,
+# the cable-wrap limit. This is a SAFETY rail, not a control law -- the policy is
+# expected to stay near nominal on its own (training-side constraint). joint2 has
+# no physical wrap limit, so it is left unclamped (np.inf).
+JOINT_TARGET_CLAMP = np.array([6.0 * np.pi, np.inf], dtype=np.float32)
 
 
 def _wrap_angle(a):
@@ -264,8 +269,11 @@ class NumpyStudentPolicy:
 
         # update buffers for the NEXT step (order mirrors the sim step):
         #   1) accumulate joint PD target with this step's arm action
-        #   2) remember this action as prev_action for the next history feature
+        #   2) clamp joint1 to +-6*pi (hardware cable-wrap protection, 3 turns)
+        #   3) remember this action as prev_action for the next history feature
         self._joint_target = self._joint_target + DELTA_SCALE * action[:2]
+        np.clip(self._joint_target, -JOINT_TARGET_CLAMP, JOINT_TARGET_CLAMP,
+                out=self._joint_target)
         self._prev_action = action.copy()
         return action
 

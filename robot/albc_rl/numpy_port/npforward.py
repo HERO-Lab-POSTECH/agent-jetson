@@ -4,17 +4,16 @@ Mirrors student_inference.py's torch modules exactly, but depends ONLY on numpy
 so it runs on the Jetson TX2 (Python 3.5, numpy 1.11.0, no torch). Every op here
 is checked against torch-produced golden vectors to atol=1e-5 (see test_npforward.py).
 
-numpy-1.11.0 + Python-2.7 compatibility: uses np.dot for matmul (NOT the `@`
-operator, which is Python 3.5+ only -- ROS lunar rospy runs on py2.7), plus
-np.maximum/np.expm1/np.tanh, np.abs, broadcasting, as_strided. No np.einsum-only
-paths, no newer kwargs.
+numpy-1.11.0 / Python 2.7 compatibility: uses np.dot (NOT @, which is py3.5+
+only -- ROS lunar rospy runs the board node on py2.7), np.maximum/np.expm1/np.tanh,
+np.abs, broadcasting, as_strided. No np.einsum-only paths, no newer kwargs.
 """
 import numpy as np
 
 
 # ---------------------------------------------------------------- primitives
 def linear(x, w, b):
-    """torch nn.Linear: y = x @ w.T + b. w is (out, in), x is (..., in)."""
+    """torch nn.Linear: y = x.dot(w.T) + b. w is (out, in), x is (..., in)."""
     return np.dot(x, w.T) + b
 
 
@@ -73,8 +72,8 @@ def gru_cell(x_t, h, w_ih, w_hh, b_ih, b_hh):
     w_ih: (3*hidden, in)   w_hh: (3*hidden, hidden)   b_ih/b_hh: (3*hidden,)
     """
     hidden = h.shape[-1]
-    gi = np.dot(x_t, w_ih.T) + b_ih    # (batch, 3*hidden)
-    gh = np.dot(h, w_hh.T) + b_hh      # (batch, 3*hidden)
+    gi = np.dot(x_t, w_ih.T) + b_ih   # (batch, 3*hidden)
+    gh = np.dot(h, w_hh.T) + b_hh     # (batch, 3*hidden)
     i_r, i_z, i_n = gi[:, :hidden], gi[:, hidden:2 * hidden], gi[:, 2 * hidden:]
     h_r, h_z, h_n = gh[:, :hidden], gh[:, hidden:2 * hidden], gh[:, 2 * hidden:]
     r = _sigmoid(i_r + h_r)
@@ -126,7 +125,7 @@ class StudentTCN:
     """channel_transform -> 3x(Conv1d+ELU) -> head(Linear+ELU+LN+Linear) -> softsign."""
 
     def __init__(self, w):
-        self.ct_w = w["channel_transform.0.weight"]   # (32, 87)
+        self.ct_w = w["channel_transform.0.weight"]   # (32, 69)
         self.ct_b = w["channel_transform.0.bias"]
         self.convs = [
             (w["conv.0.weight"], w["conv.0.bias"]),
@@ -138,7 +137,7 @@ class StudentTCN:
         self.h3_w, self.h3_b = w["head.3.weight"], w["head.3.bias"]
 
     def forward(self, win):
-        """win: (batch, H, 87) -> latent (batch, 9)."""
+        """win: (batch, H, 69) -> latent (batch, 9)."""
         b, h, d = win.shape
         x = elu(linear(win.reshape(b * h, d), self.ct_w, self.ct_b)).reshape(b, h, -1)
         x = np.transpose(x, (0, 2, 1))          # (b, 32, H)
@@ -155,7 +154,7 @@ class StudentGRU:
     """stateful GRU -> head(Linear+ELU+LN+Linear) -> softsign. Carry hidden across calls."""
 
     def __init__(self, w):
-        self.w_ih = w["gru.weight_ih_l0"]   # (384, 87)
+        self.w_ih = w["gru.weight_ih_l0"]   # (384, 69)
         self.w_hh = w["gru.weight_hh_l0"]   # (384, 128)
         self.b_ih = w["gru.bias_ih_l0"]
         self.b_hh = w["gru.bias_hh_l0"]
@@ -168,7 +167,7 @@ class StudentGRU:
         return np.zeros((batch, self.hidden_size), dtype=np.float32)
 
     def step(self, x_t, hidden):
-        """x_t: (batch, 87), hidden: (batch, 128). Returns (latent (batch,9), new hidden)."""
+        """x_t: (batch, 69), hidden: (batch, 128). Returns (latent (batch,9), new hidden)."""
         hidden = gru_cell(x_t, hidden, self.w_ih, self.w_hh, self.b_ih, self.b_hh)
         x = elu(linear(hidden, self.h0_w, self.h0_b))
         x = layer_norm(x, self.ln_g, self.ln_b)

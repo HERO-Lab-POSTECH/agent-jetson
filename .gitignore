@@ -22,3 +22,6 @@ Thumbs.db
 
 # superpowers scratch (design/plan intermediate artifacts)
 .sp/
+
+# numpy runtime cache (as_strided etc.)
+**/.cache/
