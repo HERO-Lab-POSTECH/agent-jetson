@@ -28,6 +28,11 @@
   <arg name="imu_yaw_offset_deg"  default="45.0" />
   <arg name="sensor_timeout_s"    default="0.2" />
   <arg name="joint_timeout_s"     default="0.5" />
+  <!-- B1 per-channel sign table [T0..T5], MEASURED in a restrained tank test.
+       Identity (+1) until measured; keep thruster_scale tiny while unmeasured.
+       NOTE: scale is applied ONCE, in the RL node above; the mixer does NOT
+       re-apply it (that would square the scale). Mixer takes only the signs. -->
+  <arg name="thruster_sign"       default="[1, 1, 1, 1, 1, 1]" />
 
   <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
   <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen" />
@@ -44,11 +49,19 @@
     <arg name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
   </include>
 
+  <!-- 3) RL thruster mixer: /albc/thruster_cmd (already scaled by the RL node)
+          -> per-channel sign table -> /hero_agent/thruster_pwm (firmware ESC sub).
+          Does NOT re-apply thruster_scale (RL node owns scale). The firmware
+          watchdog (B2) NEUTRALs the ESCs if this node dies, so a crash fails safe. -->
+  <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py" output="screen">
+    <rosparam param="thruster_sign" subst_value="True">$(arg thruster_sign)</rosparam>
+  </node>
+
   <!-- ROSBAG: auto-record core topics for post-hoc field-test diagnosis.
        Captures relay timing (/hero_agent/key_input), joint_states (the topic that
        dropped out in run 1), thruster_cmd (safety), IMU, currents, and /rosout_agg
        (every node log incl. read-fail reasons + STALE). Camera excluded (size).
        Files land in ~/albc_bags/fieldtest_<timestamp>.bag (fixed dir, easy to find). -->
   <node pkg="rosbag" type="record" name="albc_fieldtest_recorder" output="screen"
-        args="-o /home/nvidia/albc_bags/fieldtest /albc/joint_states /hero_agent/active_joint1_position_controller/command /hero_agent/active_joint2_position_controller/command /albc/thruster_cmd /hero_agent/key_input /hero_agent/sensors /joint_currents /rosout_agg" />
+        args="-o /home/nvidia/albc_bags/fieldtest /albc/joint_states /hero_agent/active_joint1_position_controller/command /hero_agent/active_joint2_position_controller/command /albc/thruster_cmd /hero_agent/thruster_pwm /hero_agent/key_input /hero_agent/sensors /joint_currents /rosout_agg" />
 </launch>

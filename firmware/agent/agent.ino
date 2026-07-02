@@ -16,6 +16,9 @@
 #include "hero_msgs/hero_agent_dvl.h"
 #include "hero_msgs/hero_agent_dvl_velocity.h"
 
+// RL thruster mixer command (float32[6] thrust in [-1,1], ch T0..T5 = m0..m5).
+#include "hero_msgs/hero_agent_thruster_cmd.h"
+
 // 20220613_add for dvl position cont
 #include "hero_msgs/hero_agent_cont_xy.h"
 #include "hero_msgs/hero_agent_cont_para.h"
@@ -84,6 +87,25 @@ volatile int pwm_m2 = ESC_NEUTRAL, pid_pwm_m2;
 volatile int pwm_m3 = ESC_NEUTRAL, pid_pwm_m3;
 volatile int pwm_m4 = ESC_NEUTRAL, pid_pwm_m4;
 volatile int pwm_m5 = ESC_NEUTRAL, pid_pwm_m5;
+//--------------------------------------
+
+// for RL thruster mixer ----------------
+// PWM = ESC_NEUTRAL + action * SPAN, then constrain (BEFORE esc_input — the
+// uint16 esc_input param wraps a negative int to ~65000 otherwise, mirroring
+// the PID path's constrain-before-esc_input at pid.cpp:56-62).
+// calibration knob: SPAN·중립점은 실추력 측정 후 튜닝. 수평(m1/m2/m4/m5)은
+// full ±300, 수직(m0/m3)은 좁은 ±150 (DEPTH_PWM 트림 = 양성부력 의도) — sim이
+// 대칭 ±1을 학습했으므로 이 수직 축소는 sim-to-real 부채. 수조 under-actuate
+// 확인 후에만 확대할 것.
+static const int RL_PWM_SPAN_HORZ = 300; // m1,m2,m4,m5: 1500 +- 300 = ESC_MIN/MAX
+static const int RL_PWM_SPAN_VERT = 150; // m0,m3: 1500 +- 150 = DEPTH_PWM_MIN/MAX
+// B2: inter-message watchdog. mixer 크래시/rosserial 끊김 시 firmware가 마지막
+// PWM을 영원히 latch하지 않게, RL 메시지가 이 시간(ms) 넘게 안 오면 전 채널
+// NEUTRAL. relay_on()의 의도된 5초 arming 블로킹(io.cpp:36)이 오발동시키지
+// 않도록, RL 콜백과 relay_on()이 last_rl_msg_ms를 갱신한다.
+static const unsigned long RL_TIMEOUT_MS = 300;
+volatile uint8_t rl_active = 0;             // 1 = at least one RL msg seen (arms the watchdog)
+volatile unsigned long last_rl_msg_ms = 0;  // millis() of last RL msg (and relay_on refresh)
 //--------------------------------------
 
 // for Control yaw and depth---------------------
@@ -319,6 +341,59 @@ void messageCommand(const std_msgs::Int8 &command_msg)
 ros::Subscriber<std_msgs::Int8> sub_command("/hero_agent/command",
                                             &messageCommand);
 
+// RL thruster: map one action ch in [-1,1] to a constrained ESC PWM.
+// CONSTRAIN BEFORE esc_input — esc_input's uint16 param would wrap a negative
+// int (out-of-range action) to ~65000 and emit a garbage high-throttle byte.
+// Horizontal: lo/hi = ESC_MIN/ESC_MAX, bias 0. Vertical (m0/m3): lo/hi =
+// DEPTH_PWM_MIN/MAX and bias = DEPTH_BIAS (positive-buoyancy trim, pid.cpp:77-78).
+// The neutral is ESC_NEUTRAL-bias, so the constrain window is ALSO shifted by
+// -bias (lo-bias, hi-bias). Otherwise the window stays centred on ESC_NEUTRAL
+// while the command centres on ESC_NEUTRAL-bias → the low end clips and the high
+// end is unreachable, silently making the vertical authority ASYMMETRIC vs. the
+// symmetric ±1 the policy was trained on. Shifting the window keeps a=±1 mapping
+// to (ESC_NEUTRAL-bias)±span symmetrically (vertical: 1470±150 = [1320,1620]).
+static int rl_action_to_pwm(float a, int span, int lo, int hi, int bias)
+{
+  if (a > 1.0f) a = 1.0f;
+  else if (a < -1.0f) a = -1.0f;
+  int pwm = ESC_NEUTRAL - bias + (int)(a * span);
+  return constrain(pwm, lo - bias, hi - bias);
+}
+
+// RL thruster mixer command callback. Six channels in [-1,1], T0..T5 = m0..m5.
+// B3: force PID OFF + reset stale teleop bias EVERY message (self-healing against
+//     an accidental 'Y'/'D' PID re-activation or a stale throttle/move_speed).
+// B2: stamp last_rl_msg_ms so the loop() watchdog can NEUTRAL on link loss.
+void messageThruster(const hero_msgs::hero_agent_thruster_cmd &msg)
+{
+  // B3 — take exclusive ownership of the ESCs away from the legacy PID/teleop.
+  cont_yaw_on = 0;
+  cont_depth_on = 0;
+  cont_Yaw = 0;
+  cont_Depth = 0;
+  cont_direc = 0;   // no teleop jog mixing
+  throttle = 0;     // drop the 40-count stale bias the PID path would add
+  move_speed = 0;
+
+  // Vertical channels m0/m3: narrow span + DEPTH_BIAS trim. Horizontal: full span.
+  pwm_m0 = rl_action_to_pwm(msg.thrust[0], RL_PWM_SPAN_VERT, DEPTH_PWM_MIN, DEPTH_PWM_MAX, DEPTH_BIAS);
+  pwm_m1 = rl_action_to_pwm(msg.thrust[1], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
+  pwm_m2 = rl_action_to_pwm(msg.thrust[2], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
+  pwm_m3 = rl_action_to_pwm(msg.thrust[3], RL_PWM_SPAN_VERT, DEPTH_PWM_MIN, DEPTH_PWM_MAX, DEPTH_BIAS);
+  pwm_m4 = rl_action_to_pwm(msg.thrust[4], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
+  pwm_m5 = rl_action_to_pwm(msg.thrust[5], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
+
+  esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
+  esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+
+  // B2 — arm + refresh the watchdog (cleared to NEUTRAL in loop() on timeout).
+  rl_active = 1;
+  last_rl_msg_ms = millis();
+}
+
+ros::Subscriber<hero_msgs::hero_agent_thruster_cmd> sub_thruster("/hero_agent/thruster_pwm",
+                                                                 &messageThruster);
+
 ros::Subscriber<hero_msgs::hero_agent_cont_xy> sub_cont_xy_darknet("/hero_agent/cont_xy_darknet",
                                                                    &msgCallback_cont_xy_darknet);
 
@@ -389,6 +464,7 @@ void setup()
   nh.advertise(pub_sensors);
   nh.advertise(pub_result);
   nh.subscribe(sub_command);
+  nh.subscribe(sub_thruster);
   nh.subscribe(sub_cont_xy_darknet);
   nh.subscribe(sub_dvl);
   nh.subscribe(sub_cont_para);
@@ -414,6 +490,33 @@ void loop()
   if (cont_yaw_on == 1)
     PID_control_yaw();
   nh.spinOnce();
+
+  // B2 — RL thruster watchdog: once armed, if no RL msg within RL_TIMEOUT_MS the
+  // mixer/link is presumed dead → drive all ESCs to NEUTRAL (a latched last-PWM
+  // is NOT a stop). relay_on()'s intended 5s arming block refreshes last_rl_msg_ms
+  // so it is not counted as a missed message. millis() wraps at ~49.7 days; the
+  // unsigned subtraction stays correct across a single wrap.
+  // Concurrency: last_rl_msg_ms is 4 bytes (non-atomic on 8-bit AVR), but the
+  // callback runs synchronously INSIDE the nh.spinOnce() above and this read is
+  // AFTER spinOnce returns — cooperative, single-threaded, no ISR writes it — so
+  // no torn read is possible. volatile is sufficient; do NOT add cli()/sei().
+  if (rl_active && (millis() - last_rl_msg_ms > RL_TIMEOUT_MS))
+  {
+    pwm_m0 = ESC_NEUTRAL;
+    pwm_m1 = ESC_NEUTRAL;
+    pwm_m2 = ESC_NEUTRAL;
+    pwm_m3 = ESC_NEUTRAL;
+    pwm_m4 = ESC_NEUTRAL;
+    pwm_m5 = ESC_NEUTRAL;
+    // NEUTRAL rides the UART2 ESC link, which is INDEPENDENT of the (dead)
+    // rosserial PC link — so this frame reaches the ESCs even when the mixer is
+    // gone. ESCs latch the last PWM, so one NEUTRAL frame holds them neutral;
+    // hence the one-shot (rl_active=0) below. The load-bearing assumption is that
+    // this single UART2 frame is delivered (no per-frame retry).
+    esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
+    esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+    rl_active = 0;  // one-shot NEUTRAL; re-arms on the next RL msg
+  }
 
   if (depth_count == 0)
   {

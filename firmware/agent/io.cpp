@@ -34,6 +34,9 @@ void relay_on()
   // ESC가 끼어듦 없이 arming을 완료하게 한다. 구조화 때 "단순 블로킹"으로 오판해
   // 제거했다가 실기에서 ESC 미기동(monitor relay ON·기동음 없음)으로 발견·복원함.
   delay(5000);
+  // B2: this 5s block is intentional, not a lost RL link — refresh the watchdog
+  // clock so loop() does not spuriously NEUTRAL right after an 'R' relay toggle.
+  last_rl_msg_ms = millis();
 }
 
 void relay_off()

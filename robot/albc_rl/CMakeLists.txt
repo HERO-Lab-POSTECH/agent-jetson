@@ -26,5 +26,6 @@ catkin_package(
 catkin_install_python(PROGRAMS
   scripts/rl_inference_node.py
   scripts/build_proprio.py
+  scripts/thruster_mixer.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

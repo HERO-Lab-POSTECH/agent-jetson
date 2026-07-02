@@ -26,6 +26,7 @@ add_message_files(
    hero_agent_position_result.msg
    hero_agent_cont_para.msg
    hero_agent_dvl_velocity.msg
+   hero_agent_thruster_cmd.msg
 )
 
 
