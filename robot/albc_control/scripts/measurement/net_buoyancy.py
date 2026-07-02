@@ -15,12 +15,13 @@ depth z(t)를 로깅해 **순 수직력의 부호(뜨나/가라앉나)와 오더
     오더는 후반 종단속도로** 얻는 게 실무적으로 안전.
   - SNR 낮으므로 최소 5회, 서로 다른 초기깊이 2~3, 시간정렬 평균 권장.
 
-⚠️ 이 depth 센서 토픽(/hero_agent/sensors, hero_agent_sensor.msg)에는
-   ROLL/PITCH/YAW/DEPTH만 있고 **가속도(IMU accel) 필드가 없다** → z축 가속도
-   직접 교차검증 불가. z(t)만 로깅한다.
+⚠️ 가속도(IMU accel) 필드는 어느 토픽에도 없다 → z축 가속도 직접 교차검증 불가. z(t)만 로깅한다.
 
-데이터 소스: /hero_agent/sensors (hero_agent_sensor) 의 DEPTH 필드 (raw 센서값).
-  ⚠️ DEPTH 단위는 펌웨어 raw — README에 단위(m/mbar 등)·부호(아래가 +인지) 반드시 기입.
+데이터 소스: /hero_agent/state (hero_agent_state) 의 **Depth 필드** = MS5837 read4() 실측 깊이.
+  ⚠️ (2026-07-02 수정) 이전엔 /hero_agent/sensors 의 DEPTH를 썼으나 그 필드는
+     펌웨어에서 loop_speed(루프 Hz)가 실려 있어 깊이가 아니다(agent.ino:451).
+     진짜 깊이는 state_msg.Depth(agent.ino:471)로만 나가므로 그쪽을 구독한다.
+  ⚠️ Depth 단위는 펌웨어 raw — README에 단위(m/mbar 등)·부호(아래가 +인지) 반드시 기입.
 
 실행 (보드 agent-jetson에서, roscore·센서 노드 살아있어야 함):
   rosrun albc_control net_buoyancy.py --condition neutral_buoy --duration 8 --trials 5
@@ -39,7 +40,7 @@ import time
 
 try:
     import rospy
-    from hero_msgs.msg import hero_agent_sensor
+    from hero_msgs.msg import hero_agent_state
 except ImportError as exc:
     sys.stderr.write(
         "[FATAL] rospy/hero_msgs import 실패 (%s). ROS 환경 source 후 "
@@ -65,12 +66,13 @@ class DepthLogger(object):
         self.recording = False
 
     def callback(self, msg):
+        # hero_agent_state.Depth = MS5837 실측 깊이 (sensors.DEPTH가 아님 — 그건 loop_speed)
         if not self.recording:
-            self.last_depth = msg.DEPTH
+            self.last_depth = msg.Depth
             return
         t = time.time() - self.t0
-        self.rows.append(("%.6f" % t, "%.6f" % msg.DEPTH))
-        self.last_depth = msg.DEPTH
+        self.rows.append(("%.6f" % t, "%.6f" % msg.Depth))
+        self.last_depth = msg.Depth
         self.count += 1
 
 
@@ -103,7 +105,7 @@ def write_readme(out_dir, args, trial_stats):
     lines.append("")
     lines.append("- **조건**: %s" % args.condition)
     lines.append("- **trials**: %d, 각 %.1fs 로깅" % (args.trials, args.duration))
-    lines.append("- **토픽**: /hero_agent/sensors (hero_agent_sensor.DEPTH)")
+    lines.append("- **토픽**: /hero_agent/state (hero_agent_state.Depth = MS5837 실측 깊이)")
     lines.append("")
     lines.append("## ⚠️ 필수 수동 기입")
     lines.append("- **DEPTH 단위·부호**: raw 센서값 단위(m? mbar?), 아래로 갈수록 +인지 -인지")
@@ -171,7 +173,7 @@ def main():
 
     rospy.init_node("net_buoyancy_meter", anonymous=True)
     logger = DepthLogger()
-    rospy.Subscriber("/hero_agent/sensors", hero_agent_sensor, logger.callback, queue_size=200)
+    rospy.Subscriber("/hero_agent/state", hero_agent_state, logger.callback, queue_size=200)
 
     print("=" * 60)
     print(" ALBC NET BUOYANCY 계측 (측정2)")
@@ -181,7 +183,7 @@ def main():
     print("=" * 60)
 
     # 센서 수신 대기
-    print("[WAIT] /hero_agent/sensors 수신 대기...")
+    print("[WAIT] /hero_agent/state 수신 대기 (Depth 필드)...")
     t_wait = time.time()
     while logger.last_depth is None and not rospy.is_shutdown():
         if time.time() - t_wait > 10.0:
