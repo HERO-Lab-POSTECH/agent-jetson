@@ -236,6 +236,11 @@ class NumpyStudentPolicy:
         action = self.actor.act(obs_n, z).reshape(-1)   # (8,)
         action = np.clip(action, -1.0, 1.0).astype(np.float32)
 
+        # DIAG: expose the exact 69D obs fed to the policy this tick so the ROS
+        # node can publish it (/rl/obs69) for sim-vs-real OOD channel analysis.
+        # Pure numpy attribute, no ROS dependency. Cheap (a reference, not a copy).
+        self.last_obs69 = obs69
+
         # --- TEMP DIAG (remove after first-tick instrumentation run) -------------
         # Prints the first PROBE_TICKS act() calls: which obs entries the policy
         # sees on tick 1 and the raw action it emits. Answers "att err ~0 but arm

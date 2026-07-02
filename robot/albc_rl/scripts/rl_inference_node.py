@@ -167,6 +167,8 @@ class RLInferenceNode(object):
         self._pub_j2 = rospy.Publisher(
             "/hero_agent/active_joint2_position_controller/command", Float64, queue_size=1)
         self._pub_thr = rospy.Publisher("/albc/thruster_cmd", Float32MultiArray, queue_size=1)
+        # DIAG: full 69D policy input, for sim-vs-real OOD channel analysis (recorded to bag).
+        self._pub_obs = rospy.Publisher("/rl/obs69", Float32MultiArray, queue_size=1)
 
         self._log_startup_banner(weights_dir, student_npz, teacher_npz)
         self._timer = rospy.Timer(rospy.Duration(1.0 / self.hz), self._tick)
@@ -330,6 +332,13 @@ class RLInferenceNode(object):
             self.builder.reset()
             return False
         self.builder.set_last_action(action)
+
+        # DIAG: publish the exact 69D obs the policy saw this tick (sim-vs-real OOD analysis).
+        obs69 = getattr(self.policy, "last_obs69", None)
+        if obs69 is not None:
+            m = Float32MultiArray()
+            m.data = [float(x) for x in obs69]
+            self._pub_obs.publish(m)
 
         # --- publish -------------------------------------------------------------
         # arm joints: ABSOLUTE accumulated PD target (driver contract), never scaled
