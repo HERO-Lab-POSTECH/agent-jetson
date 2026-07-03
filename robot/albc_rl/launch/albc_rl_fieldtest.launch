@@ -28,10 +28,21 @@
   <arg name="imu_yaw_offset_deg"  default="45.0" />
   <arg name="sensor_timeout_s"    default="0.2" />
   <arg name="joint_timeout_s"     default="0.5" />
-  <!-- B1 per-channel sign table [T0..T5], MEASURED in a restrained tank test.
-       Identity (+1) until measured; keep thruster_scale tiny while unmeasured.
+  <!-- Channel PERMUTATION [fw m0..m5], value = SIM source index. The sim TAM
+       puts the two VERTICAL thrusters at sim indices 4,5, but the firmware wires
+       its vertical motors to channels m0,m3; an identity pass-through would
+       route depth thrust to horizontal motors (uncommanded dive). Default is
+       AXIS-correct (m0 from sim4, m3 from sim5) but within-axis arbitrary; the
+       mixer ASSERTS the axis split at startup and refuses any crossing order.
+       The within-axis horizontal assignment is filled from the B1 tank test.
+       TEMPORARY: permanent fix is to reorder the sim TAM + re-train. -->
+  <arg name="thruster_order"      default="[4, 0, 1, 5, 2, 3]" />
+  <!-- B1 per-OUTPUT-channel sign table [m0..m5], MEASURED in a restrained tank
+       test (indexed by FIRMWARE channel, NOT sim channel, so it stays valid if
+       thruster_order is edited). Identity (+1) until measured; keep
+       thruster_scale tiny while unmeasured.
        NOTE: scale is applied ONCE, in the RL node above; the mixer does NOT
-       re-apply it (that would square the scale). Mixer takes only the signs. -->
+       re-apply it (that would square the scale). Mixer takes only order+signs. -->
   <arg name="thruster_sign"       default="[1, 1, 1, 1, 1, 1]" />
 
   <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
@@ -54,6 +65,7 @@
           Does NOT re-apply thruster_scale (RL node owns scale). The firmware
           watchdog (B2) NEUTRALs the ESCs if this node dies, so a crash fails safe. -->
   <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py" output="screen">
+    <rosparam param="thruster_order" subst_value="True">$(arg thruster_order)</rosparam>
     <rosparam param="thruster_sign" subst_value="True">$(arg thruster_sign)</rosparam>
   </node>
 
