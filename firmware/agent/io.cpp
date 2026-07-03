@@ -29,13 +29,13 @@ void relay_on()
 {
   state_Relay = 1;
   digitalWrite(PIN_RELAY, HIGH);
-  // ESC arming 대기 (필수): relay HIGH로 스러스터 ESC에 전원이 인가되면 ESC가
-  // 부팅·초기화("띠리리띠띠" 기동음)에 시간이 필요하다. 이 5초간 loop를 멈춰
-  // ESC가 끼어듦 없이 arming을 완료하게 한다. 구조화 때 "단순 블로킹"으로 오판해
-  // 제거했다가 실기에서 ESC 미기동(monitor relay ON·기동음 없음)으로 발견·복원함.
-  delay(5000);
-  // B2: this 5s block is intentional, not a lost RL link — refresh the watchdog
-  // clock so loop() does not spuriously NEUTRAL right after an 'R' relay toggle.
+  // NO blocking wait here (user's final decision, field-verified 2026-07-03).
+  // ESC arming needs wall-clock time after relay HIGH, but that happens in the
+  // BACKGROUND — the ESC boots off its own power rail while loop() keeps running.
+  // A delay(5000) here froze the whole loop: rosserial spinOnce, the B2 watchdog,
+  // and teleop all stalled for 5s, dropping joint/teleop commands and desyncing
+  // the rosserial session. That, not "ESC not arming", was the relay regression.
+  // Keep the refresh below so loop() does not spuriously NEUTRAL on relay toggle.
   last_rl_msg_ms = millis();
 }
 

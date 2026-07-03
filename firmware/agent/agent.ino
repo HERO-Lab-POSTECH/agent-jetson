@@ -101,8 +101,9 @@ static const int RL_PWM_SPAN_HORZ = 300; // m1,m2,m4,m5: 1500 +- 300 = ESC_MIN/M
 static const int RL_PWM_SPAN_VERT = 150; // m0,m3: 1500 +- 150 = DEPTH_PWM_MIN/MAX
 // B2: inter-message watchdog. mixer 크래시/rosserial 끊김 시 firmware가 마지막
 // PWM을 영원히 latch하지 않게, RL 메시지가 이 시간(ms) 넘게 안 오면 전 채널
-// NEUTRAL. relay_on()의 의도된 5초 arming 블로킹(io.cpp:36)이 오발동시키지
-// 않도록, RL 콜백과 relay_on()이 last_rl_msg_ms를 갱신한다.
+// NEUTRAL. RL 콜백과 relay_on()이 last_rl_msg_ms를 갱신한다 — relay 토글 직후
+// (RL 메시지가 아직 없을 때) loop가 즉시 오발동 NEUTRAL 내지 않게. (relay_on()의
+// 옛 5초 블로킹은 제거됨 — io.cpp 참조.)
 static const unsigned long RL_TIMEOUT_MS = 300;
 volatile uint8_t rl_active = 0;             // 1 = at least one RL msg seen (arms the watchdog)
 volatile unsigned long last_rl_msg_ms = 0;  // millis() of last RL msg (and relay_on refresh)
@@ -493,8 +494,8 @@ void loop()
 
   // B2 — RL thruster watchdog: once armed, if no RL msg within RL_TIMEOUT_MS the
   // mixer/link is presumed dead → drive all ESCs to NEUTRAL (a latched last-PWM
-  // is NOT a stop). relay_on()'s intended 5s arming block refreshes last_rl_msg_ms
-  // so it is not counted as a missed message. millis() wraps at ~49.7 days; the
+  // is NOT a stop). relay_on() refreshes last_rl_msg_ms so a relay toggle is not
+  // counted as a missed message. millis() wraps at ~49.7 days; the
   // unsigned subtraction stays correct across a single wrap.
   // Concurrency: last_rl_msg_ms is 4 bytes (non-atomic on 8-bit AVR), but the
   // callback runs synchronously INSIDE the nh.spinOnce() above and this read is
