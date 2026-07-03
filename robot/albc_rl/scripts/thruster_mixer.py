@@ -146,8 +146,9 @@ class ThrusterMixer(object):
         for j in range(NUM_THR):
             # permute: fw output channel j sources sim index order[j]
             a = float(msg.data[self.order[j]])
-            # drop a non-finite value to 0 (safe neutral) rather than pass garbage
-            if not math.isfinite(a):
+            # drop a non-finite value to 0 (safe neutral) rather than pass garbage.
+            # NOTE: math.isfinite is py3-only; on ROS-lunar python2 use isnan/isinf.
+            if math.isnan(a) or math.isinf(a):
                 a = 0.0
             a *= self.sign[j]                 # sign per PHYSICAL channel -- NO scale
             a = max(-1.0, min(1.0, a))        # defensive clamp to policy contract
