@@ -57,7 +57,7 @@ import math
 # ==============================================================================
 JOINT_IDS = {1: 11, 2: 12}          # 논리 관절 -> Dynamixel ID
 DEFAULT_PORT = "/dev/ttyDynamixel"
-DEFAULT_BAUD = 57600                 # 배포와 동일. --baud 로 상향 가능(1M~3M -> 200Hz+)
+DEFAULT_BAUD = 1000000               # 배포와 동일(2026-07-03 모터 EEPROM 57600->1M). --baud 로 조절
 PROTOCOL = 2.0
 
 # 레지스터 주소 (XW540-T260, Protocol 2.0 Control Table)
