@@ -149,8 +149,9 @@ public:
     float sensorPitch() const { return sensor_pitch; }
     float sensorYaw() const { return sensor_yaw; }
 
-    // 모니터 상태 게터. 칩(2f6725d)이 토글 ON/OFF를 별도 char로 받으므로(self-toggle X)
-    // key_input_callback이 키1/3/4/5 토글 시 이 게터로 현재 상태를 읽어 ON/OFF char를 가른다.
+    // 모니터 상태 게터(firmware State_addit 비트 미러). firmware f569da4는 self-toggle
+    // 이라 key_input_callback이 더 이상 이 게터로 ON/OFF char를 가르지 않는다(그 분기 제거).
+    // HUD 표시(print)와 향후 용도로 유지 — backing 필드는 onState가 계속 갱신한다.
     int relayEnabled() const { return relay_enabled; }
     int controlYawEnabled() const { return control_yaw_enabled; }
     int controlDepthEnabled() const { return control_depth_enabled; }

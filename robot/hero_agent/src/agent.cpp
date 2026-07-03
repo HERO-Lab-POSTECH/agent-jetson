@@ -58,10 +58,14 @@ RosbagRecorder rosbag_recorder;
 
 // ==============================
 // Toggle debounce — KeyTranslator-layer concern, kept as free global.
-// non-const so main can override from the debounce_sec param (default 0.5 = prior behavior).
+// non-const so main can override from the debounce_sec param.
+// 0.8s (was 0.5): firmware f569da4 toggles are self-toggle (one char flips state),
+// so a duplicate send NETS a no-op / nondeterministic final state. The sender's OS
+// key auto-repeat can cluster duplicates; this node-side gate is the backstop, and
+// key_teleop.py also drops same-key repeats within a window (defense in depth).
 // ==============================
 static ros::Time last_toggle_time[256];
-static double DEBOUNCE_SEC = 0.5;
+static double DEBOUNCE_SEC = 0.8;
 
 static bool debounce_ok(int ch)
 {
@@ -110,43 +114,14 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
 {
     int ch = msg->data;
 
-    // CSV 로깅 토글 (KEYMAP 범위 밖, agent 내부 플래그)
+    // CSV 로깅 토글 (KEYMAP 범위 밖, agent 내부 플래그). 사용자 키 'R'=CSV이지 relay
+    // 아님(relay는 키 '1'). relay/yaw/depth/laser 토글은 firmware f569da4가 self-toggle
+    // 이라 노드 상태추적 없이 keymap fw_char(R/Y/D/L)를 일반 경로로 발행한다 — 과거
+    // 칩 2f6725d의 'e'/'t' 분리식 가로채기 로직은 제거됨. HUD ON/OFF 표시는 여전히
+    // 정확: firmware가 State_all→/hero_agent/state.State_addit로 실제 상태를 되보내고
+    // state_monitor.onState가 그걸 미러하므로(노드 로컬 추론 아님).
     if (ch == 'R') {
         csv_logger.toggle();
-        return;
-    }
-
-    // Relay 키1: 칩 펌웨어(2f6725d)는 self-toggle을 안 하고 'e'=relay_on/'t'=relay_off
-    // 분리식이다. 따라서 노드가 현재 relay 상태(State_addit bit2 미러)를 보고 OFF면
-    // 'e'(ON), ON이면 't'(OFF)를 발행한다. lookup/translate 이전에 가로채므로 다른
-    // 23개 키 경로는 불변. debounce는 여기서 직접 적용(keymap flag 비의존, 기존 0.5s).
-    if (ch == '1') {
-        if (!debounce_ok('1')) return;
-        send_command(state_monitor.relayEnabled() ? 't' : 'e');
-        return;
-    }
-
-    // Yaw Ctrl 키3: 칩 2f6725d는 'y'=cont_yaw_on=1 / 'h'=cont_yaw_on=0 분리식.
-    // 현재 yaw-ctrl 상태(State_addit bit0 미러)를 보고 OFF면 'y'(ON), ON이면 'h'(OFF).
-    if (ch == '3') {
-        if (!debounce_ok('3')) return;
-        send_command(state_monitor.controlYawEnabled() ? 'h' : 'y');
-        return;
-    }
-
-    // Depth Ctrl 키4: 칩 2f6725d는 'p'=cont_depth_on=1 / ';'=cont_depth_on=0 분리식.
-    // 현재 depth-ctrl 상태(State_addit bit1 미러)를 보고 OFF면 'p'(ON), ON이면 ';'(OFF).
-    if (ch == '4') {
-        if (!debounce_ok('4')) return;
-        send_command(state_monitor.controlDepthEnabled() ? ';' : 'p');
-        return;
-    }
-
-    // Laser 키5: 칩 2f6725d는 'r'=laser_on / 'f'=laser_off 분리식.
-    // 현재 laser 상태(State_addit bit3 미러)를 보고 OFF면 'r'(ON), ON이면 'f'(OFF).
-    if (ch == '5') {
-        if (!debounce_ok('5')) return;
-        send_command(state_monitor.laserEnabled() ? 'f' : 'r');
         return;
     }
 

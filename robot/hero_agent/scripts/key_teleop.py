@@ -42,6 +42,15 @@ def build_help():
 
 HELP_TEXT = build_help()
 
+# Keys whose firmware action is a SELF-TOGGLE or a state-flip one-shot: a duplicate
+# send (from OS keyboard auto-repeat while a key is held) would toggle back and leave
+# a nondeterministic final state. Suppress same-key repeats within REPEAT_GUARD_SEC
+# for these ONLY. Jog/throttle/setpoint keys (w/a/s/d/u/j/i/k/o/l...) are intentionally
+# repeatable (hold to keep moving), so they are NOT guarded. The node-side debounce is
+# the backstop; this is defense-in-depth at the source of the repeat storm.
+REPEAT_GUARD_KEYS = set(ord(k) for k in "12345Nyh")  # relay/neutral/yaw/depth/laser/reset/speed+/-
+REPEAT_GUARD_SEC = 0.3
+
 running = True
 
 def signal_handler(sig, frame):
@@ -62,6 +71,8 @@ def main():
     print(HELP_TEXT)
     rospy.loginfo("Key teleop started. Press keys to send commands.")
 
+    last_sent = {}   # guarded key -> last publish time (auto-repeat suppression)
+
     try:
         while running and not rospy.is_shutdown():
             try:
@@ -75,6 +86,14 @@ def main():
                 break
             if c > 127:  # Int8 range: -128~127, skip non-ASCII keys
                 continue
+            # Suppress OS auto-repeat for self-toggle/state-flip keys only: a held
+            # key must not toggle relay/ctrl on-off-on-off. Intentional re-press
+            # after REPEAT_GUARD_SEC still passes; jog keys are never guarded.
+            if c in REPEAT_GUARD_KEYS:
+                now = rospy.get_time()
+                if now - last_sent.get(c, 0.0) < REPEAT_GUARD_SEC:
+                    continue
+                last_sent[c] = now
             pub.publish(Int8(data=c))
             rospy.loginfo("Key: '%s' (%d)", ch, c)
     finally:
