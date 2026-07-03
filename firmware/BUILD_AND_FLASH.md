@@ -80,7 +80,7 @@ avrdude 시그니처 read로 칩이 직접 답함: **`Device signature = 0x1e980
 | 최적화 | **`-Os`** (recipe 정본). `-O0`로 빌드하면 hex가 **1.94배** 비대해진다(73KB vs 37KB) — 함정 |
 | 컴파일 플래그 | `-c -g -Os -w -std=gnu++11 -fno-exceptions -ffunction-sections -fdata-sections -fno-threadsafe-statics` |
 | defines | `-mmcu=atmega2560 -DF_CPU=16000000L -DARDUINO=10809 -DARDUINO_AVR_ATmega2560 -DARDUINO_ARCH_AVR` (IDE 1.8.9=10809) |
-| include (-I) | core·variant(`100-pin-arduino-mega`)·`~/Arduino/libraries/ros_lib`·Servo·Wire·Wire/utility·MS5837 (7개) |
+| include (-I) | core·variant(`100-pin-avr` — 17행 Pinout과 일치, 보드 실제 설정)·`~/Arduino/libraries/ros_lib`·Servo·Wire·Wire/utility·MS5837 (7개) |
 | ros_lib | 헤더(-I)뿐 아니라 **`time.cpp`·`duration.cpp`도 컴파일**해야 함 — 안 하면 link에서 `undefined reference to ros::normalizeSecNSec` |
 | 라이브러리 | `Servo.cpp`·`Wire.cpp`·`Wire/utility/twi.c`·`MS5837.cpp` |
 | core.a | MegaCore `MCUdude_corefiles` 전체 → `avr-ar rcs` (표준 core면 `__vector_36` 충돌, §위 참조) |

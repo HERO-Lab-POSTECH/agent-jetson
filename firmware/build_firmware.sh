@@ -25,7 +25,13 @@ NAME="${2:?출력이름 필요}"
 
 MEGA=~/.arduino15/packages/MegaCore/hardware/avr/2.0.1
 CORE=$MEGA/cores/MCUdude_corefiles
-VARIANT=$MEGA/variants/100-pin-arduino-mega
+# variant 는 보드 실제 설정과 반드시 일치해야 한다: ~/.arduino15/preferences.txt 의
+# custom_pinout=2560_avr_pinout → boards.txt:158 → build.variant=100-pin-avr.
+# ⚠️ 100-pin-arduino-mega 로 빌드하면 digital pin 번호→포트 매핑이 어긋난다:
+# pin 15(PIN_RELAY) 가 avr=PB0(SS) 인데 arduino-mega=PJ0(USART3_RX) 로 매핑돼
+# digitalWrite(15,HIGH) 가 엉뚱한 핀을 켠다. State bit4 는 토글되나 물리 relay 는
+# 죽는다(2026-07-03 실기 확정: avr variant 로 재빌드하니 dynamixel PING_OK, relay 작동).
+VARIANT=$MEGA/variants/100-pin-avr
 ROSLIB=~/Arduino/libraries/ros_lib
 SERVO=/usr/share/arduino/libraries/Servo
 WIRE=/usr/share/arduino/libraries/Wire
