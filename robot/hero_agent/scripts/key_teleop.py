@@ -17,6 +17,22 @@ import termios
 import os
 import signal
 
+# System/Control toggle keys → firmware char, published DIRECTLY to /hero_agent/command.
+# Rationale: relay/yaw/depth/laser toggles are firmware self-toggles (one char, no node
+# state). Routing them through /key_input → agent-node translation added a 3rd hop whose
+# single point of failure (agent node down → relay dead) bit us. These keys need no
+# g_teleop target state, so key_teleop translates them itself and skips the agent node.
+# keymap.h KEYMAP[] stays the SSOT for jog/setpoint/gripper (they DO need agent-node
+# teleop state) — those still go via /key_input. Keep this table in sync with keymap.h.
+DIRECT_CMD = {
+    ord('1'): ord('R'),  # Relay toggle
+    ord('2'): ord('P'),  # PWM Neutral
+    ord('N'): ord('Z'),  # Yaw Reset
+    ord('3'): ord('Y'),  # Yaw Ctrl toggle
+    ord('4'): ord('D'),  # Depth Ctrl toggle
+    ord('5'): ord('L'),  # Laser toggle
+}
+
 # keymap.h KEYMAP[]와 lock-step (사용자키, 동작). 변경 시 양쪽 동시 수정.
 # 'R'(CSV log)은 keymap 범위 밖 agent 내부 플래그(csv_logger.toggle) — 광고만 여기.
 KEY_TABLE = [
@@ -63,6 +79,8 @@ def main():
 
     rospy.init_node('key_teleop', anonymous=True, disable_signals=True)
     pub = rospy.Publisher('/hero_agent/key_input', Int8, queue_size=10)
+    # Toggle keys bypass the agent node and hit the firmware command topic directly.
+    pub_cmd = rospy.Publisher('/hero_agent/command', Int8, queue_size=10)
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
@@ -94,8 +112,17 @@ def main():
                 if now - last_sent.get(c, 0.0) < REPEAT_GUARD_SEC:
                     continue
                 last_sent[c] = now
-            pub.publish(Int8(data=c))
-            rospy.loginfo("Key: '%s' (%d)", ch, c)
+            # Toggle keys → firmware command topic directly (no agent-node hop).
+            # Everything else → key_input for the agent node (jog/setpoint/gripper/CSV
+            # need its teleop state). A key goes to exactly ONE topic, never both, so
+            # the firmware never sees a double-toggle.
+            if c in DIRECT_CMD:
+                pub_cmd.publish(Int8(data=DIRECT_CMD[c]))
+                rospy.loginfo("Key: '%s' (%d) -> cmd '%s' (%d) [direct]",
+                              ch, c, chr(DIRECT_CMD[c]), DIRECT_CMD[c])
+            else:
+                pub.publish(Int8(data=c))
+                rospy.loginfo("Key: '%s' (%d)", ch, c)
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
         print("\nTeleop stopped.")
