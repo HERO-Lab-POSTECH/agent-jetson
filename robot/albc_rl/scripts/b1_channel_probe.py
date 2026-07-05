@@ -130,6 +130,14 @@ def _parse_float_list(s):
 
 def main():
     rospy.init_node("b1_channel_probe")
+    # Capture whether ~channel was EXPLICITLY passed this run, BEFORE the cleanup
+    # loop deletes it. This distinguishes an operator-typed `_channel:=-1` (real
+    # panic) from the mere ABSENCE of ~channel (get_param default -1). Without
+    # this, running `_pair:=...` with no ~channel would hit the default -1 and the
+    # panic-first check below would fire, making pair/channels UNREACHABLE
+    # (observed 2026-07-05). Panic must mean "operator asked to stop", not "no
+    # channel arg given".
+    channel_given = rospy.has_param("~channel")
     channel = int(rospy.get_param("~channel", -1))       # -1 = all neutral
     level = float(rospy.get_param("~level", 0.05))
     duration = float(rospy.get_param("~duration", 3.0))
@@ -183,12 +191,14 @@ def main():
     # let the publisher connection establish before the timed drive
     rospy.sleep(0.5)
 
-    # PANIC-FIRST (structural backstop, above all mode priority): an explicit
+    # PANIC-FIRST (structural backstop, above all mode priority): an EXPLICIT
     # `_channel:=-1` ALWAYS means STOP and must never be overridable by a leftover
     # ~pair/~channels from a prior run. The per-run param delete above already
     # clears stale state, but if that delete ever fails (logged), this check still
     # guarantees the panic reaches NEUTRAL. Checked BEFORE pair/channels on purpose.
-    if channel == -1:
+    # Guarded by channel_given so that OMITTING ~channel (default -1) does NOT
+    # trigger panic -- otherwise pair/channels modes would be unreachable.
+    if channel_given and channel == -1:
         rospy.loginfo("b1_channel_probe: PANIC STOP (channel=-1) -- sending zeros")
         send_neutral()
         return
