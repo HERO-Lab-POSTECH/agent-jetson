@@ -1,0 +1,96 @@
+<launch>
+  <!-- ============================================================= -->
+  <!-- B1 THRUSTER-PROBE BRING-UP  (restrained tank)                  -->
+  <!-- ============================================================= -->
+  <!-- Purpose: hold the arm at its reference pose (torque ON) and    -->
+  <!-- record everything, so the operator can drive thruster channels -->
+  <!-- one at a time (b1_channel_probe.py) and Claude can analyse the  -->
+  <!-- bag to recover ~thruster_sign / ~thruster_order for the mixer.  -->
+  <!--                                                                 -->
+  <!-- WHY this is NOT albc_rl_fieldtest.launch:                       -->
+  <!--   * NO rl_inference_node  -> the policy must NOT command the    -->
+  <!--     joints or the thrusters during B1 (it would move the arm    -->
+  <!--     and publish thrust, confounding the per-channel probe).     -->
+  <!--   * NO thruster_mixer     -> the probe publishes DIRECTLY to    -->
+  <!--     /hero_agent/thruster_pwm (thrust[j] == physical motor m_j); -->
+  <!--     the mixer would permute channels via ~thruster_order, which -->
+  <!--     is exactly what B1 is measuring. Two publishers on one      -->
+  <!--     topic = garbage, so the mixer is deliberately absent.       -->
+  <!--                                                                 -->
+  <!-- WHAT THIS BRINGS UP:                                            -->
+  <!--   1) joint_angle_command  -> Dynamixel driver (holds arm torque)-->
+  <!--   2) two rostopic pub -r  -> hold J1, J2 at the reference pose  -->
+  <!--   3) rosbag record        -> core topics for post-hoc analysis  -->
+  <!--                                                                 -->
+  <!-- PREREQUISITES (one-time / per-boot, do BEFORE this launch):     -->
+  <!--   * catkin build with b1_channel_probe.py installed             -->
+  <!--     (CMakeLists catkin_install_python) + it is chmod +x, so     -->
+  <!--     `rosrun albc_rl b1_channel_probe.py` resolves. Without this  -->
+  <!--     the probe AND its panic-stop do not run.                    -->
+  <!--   * mkdir -p /home/nvidia/albc_bags   (rosbag does NOT create   -->
+  <!--     missing parent dirs; a missing dir = silent no-recording).  -->
+  <!--   * launch-agent already running (serial bridge + relay), else  -->
+  <!--     /hero_agent/sensors and /hero_agent/thruster_pwm are dead.  -->
+  <!--                                                                 -->
+  <!-- FIELD WORKFLOW:                                                 -->
+  <!--   1) launch-agent  -> press 1 to turn the power RELAY ON        -->
+  <!--        (powers BOTH thrusters and the Dynamixel arm; the arm    -->
+  <!--        will NOT hold torque until the relay is ON).             -->
+  <!--   2) THIS launch   -> arm moves to reference pose + holds; bag  -->
+  <!--        starts recording. Confirm the recorder logged            -->
+  <!--        "Recording to ...b1probe_<ts>.bag", /albc/joint_states   -->
+  <!--        settles at [hold_j1, hold_j2], and the robot sits level. -->
+  <!--   3) In another terminal, drive one channel at a time:          -->
+  <!--        rosrun albc_rl b1_channel_probe.py _channel:=0 \         -->
+  <!--          _level:=0.05 _duration:=3.0                            -->
+  <!--        Do VERTICAL channels m0, m3 FIRST and most carefully     -->
+  <!--        (a wrong vertical sign is a dive). Panic stop:           -->
+  <!--        rosrun albc_rl b1_channel_probe.py _channel:=-1          -->
+  <!-- ============================================================= -->
+
+  <!-- Reference / origin pose (MEASURED 2026-07-05, user).           -->
+  <!--   J2 = pi  => arm FULLY FOLDED (origin). J2 = 0/2pi => extended.-->
+  <!--   J1 angle is pose-irrelevant; 0.0 is the chosen hold.          -->
+  <!-- Absolute-angle commands, so re-publishing the same value at     -->
+  <!-- 10 Hz holds without drift. Override per-run if the pose moves:  -->
+  <!--   roslaunch albc_rl b1_thruster_probe.launch hold_j2:=1.57      -->
+  <arg name="hold_j1" default="0.0" />
+  <arg name="hold_j2" default="3.14159265" />
+  <arg name="hold_hz" default="10.0" />
+
+  <!-- 1) Dynamixel joint driver: publishes /albc/joint_states, receives
+          absolute-angle commands on the two position-controller topics. -->
+  <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command"
+        output="screen" />
+
+  <!-- 2) Hold each joint at the reference pose. A command must keep arriving so
+          the driver keeps torque on the target; a joint with no command would go
+          slack and let the arm extend (tipping the robot, confounding the
+          thruster observation).
+          Implemented as `rostopic pub -f FILE.yaml` rather than an inline
+          quoted `data:` payload. Reason: roslaunch's args splitter does NOT
+          reliably preserve a single-quoted YAML token, so the inline form can
+          hand rostopic a broken message (no working precedent in this repo). A
+          file payload sidesteps quoting entirely. rostopic reads the message
+          body from the .yaml, and only unambiguous flags stay on the cmd line.
+          The hold_pose_j1.yaml / hold_pose_j2.yaml files live next to this
+          launch and contain a single line, `data: ANGLE`.
+          To change the hold angle, edit the .yaml (the hold_j1/hold_j2 args are
+          kept only for documentation of the current reference pose).
+          VERIFY on the board before 실기: `rostopic echo` each command topic and
+          confirm a Float64 with the right value arrives at ~hold_hz. -->
+  <node pkg="rostopic" type="rostopic" name="hold_joint1"
+        args="pub -r $(arg hold_hz) /hero_agent/active_joint1_position_controller/command std_msgs/Float64 -f $(find albc_rl)/launch/hold_pose_j1.yaml" />
+  <node pkg="rostopic" type="rostopic" name="hold_joint2"
+        args="pub -r $(arg hold_hz) /hero_agent/active_joint2_position_controller/command std_msgs/Float64 -f $(find albc_rl)/launch/hold_pose_j2.yaml" />
+
+  <!-- 3) ROSBAG: record the topics needed to attribute each probed channel
+          to a physical motor + direction. joint_states/currents = arm held
+          steady (sanity); thruster_pwm = which channel WE commanded + when;
+          sensors = IMU ROLL/PITCH/YAW response (which axis moved, which way);
+          rosout_agg = the probe's "driving m0..." logwarn timestamps to align
+          command vs attitude change. Camera excluded (size).
+          Files land in ~/albc_bags/b1probe_TIMESTAMP.bag (fixed dir). -->
+  <node pkg="rosbag" type="record" name="b1probe_recorder" output="screen"
+        args="-o /home/nvidia/albc_bags/b1probe /albc/joint_states /hero_agent/active_joint1_position_controller/command /hero_agent/active_joint2_position_controller/command /hero_agent/thruster_pwm /hero_agent/sensors /joint_currents /rosout_agg" />
+</launch>

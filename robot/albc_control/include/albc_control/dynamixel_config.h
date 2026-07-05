@@ -13,6 +13,20 @@
 //   - Control-table addresses are MX(Protocol 2.0) register offsets.
 //   - 2048 ticks = pi rad (a half-turn) for the 4096-tick/rev encoder.
 //   - Present-current LSB ~= 2.69 mA (CURRENT_TO_MA).
+//
+// Joint2 (ID 12) physical pose <-> commanded angle (measured 2026-07-05, user):
+//   - This is a CONTINUOUS-ROTATION joint (no hard limit), so the angle is
+//     absolute and wraps; the pose is what the angle means physically.
+//   - theta2 = pi (~3.14 rad) => arm FULLY FOLDED (the reference/origin pose).
+//   - theta2 = 0 (== 2*pi)    => arm FULLY EXTENDED (straight out); the angle
+//                                wraps, so 2*pi is the same pose as 0 = extended.
+//   - Fold amount tracks |theta2 - pi|: it folds monotonically toward pi, and
+//     past pi (e.g. the 4.25 rad ~= 1.35*pi field reading) it unfolds again.
+//   REFERENCE POSE for tank bring-up / B1 thruster probe: J1 = 0.0, J2 = pi.
+//   Hold the arm here (torque on) so a slack/extended arm does not tip the
+//   robot and confound thruster observations.
+//   NOTE: supersedes the kinematic guess in the 2026-06-24 joint1-drift note
+//   ("theta2=pi would give manip=0") -- the user's direct physical read wins.
 
 #ifndef ALBC_CONTROL_DYNAMIXEL_CONFIG_H
 #define ALBC_CONTROL_DYNAMIXEL_CONFIG_H
