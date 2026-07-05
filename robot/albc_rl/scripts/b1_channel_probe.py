@@ -21,6 +21,12 @@ SAFETY (read before running):
     NEUTRAL (all zeros) and exits. Ctrl-C also sends NEUTRAL on the way out.
   * This tool is a bring-up probe, NOT part of the live pipeline. Do not launch
     it alongside the mixer (two publishers on one topic = garbage).
+  * PARAMS ARE ONE-SHOT: `rosrun _p:=v` params PERSIST on the ROS param server
+    after the node exits, so each run DELETEs its own params on startup (after
+    reading them). Pass EVERY flag you need on EVERY run -- nothing carries over.
+    (Before this, a leftover ~pair silently overrode later runs incl. the panic
+    stop -- observed 2026-07-05.) An explicit `_channel:=-1` panic is checked
+    FIRST and can never be overridden by any leftover mode param.
 
 USAGE (on the board, after `source devel/setup.bash`):
     rosrun albc_rl b1_channel_probe.py _channel:=0 _level:=0.05 _duration:=3.0
@@ -138,6 +144,29 @@ def main():
     channels_str = str(rospy.get_param("~channels", "") or "")
     levels_str = str(rospy.get_param("~levels", "") or "")
 
+    # CRITICAL: `rosrun ... _p:=v` writes private params to the PARAM SERVER and
+    # they PERSIST after the node exits. A later run with a DIFFERENT flag (e.g.
+    # `_channel:=-1` panic, or `_channels:=...`) still sees the stale `~pair` from
+    # an earlier run and, because mode priority is pair > channels > single, keeps
+    # driving the OLD pair -- the panic stop and every new mode are silently
+    # overridden (observed 2026-07-05: three different commands all ran the first
+    # `_pair:=0,3`). So immediately AFTER reading this run's values, delete our own
+    # private params from the server. This run already has its values in local
+    # vars, so the delete does not affect it; it only stops the NEXT run from
+    # inheriting them. Each rosrun re-writes the params it explicitly passes just
+    # before the node starts, so a param given this run survives to be read above.
+    for _p in ("~pair", "~channels", "~levels", "~channel", "~level", "~duration"):
+        try:
+            if rospy.has_param(_p):
+                rospy.delete_param(_p)
+        except Exception as _e:
+            # never let param cleanup abort the run / block the drive, but DO log:
+            # a silently-failing cleanup is exactly how the persistence bug stayed
+            # invisible for three runs (2026-07-05). The next run may then inherit
+            # this param -- the panic-first check below is the structural backstop.
+            rospy.logwarn("b1_channel_probe: param cleanup failed for %s: %s "
+                          "(next run may inherit it)", _p, _e)
+
     pub = rospy.Publisher("/hero_agent/thruster_pwm",
                           hero_agent_thruster_cmd, queue_size=1)
 
@@ -153,6 +182,16 @@ def main():
 
     # let the publisher connection establish before the timed drive
     rospy.sleep(0.5)
+
+    # PANIC-FIRST (structural backstop, above all mode priority): an explicit
+    # `_channel:=-1` ALWAYS means STOP and must never be overridable by a leftover
+    # ~pair/~channels from a prior run. The per-run param delete above already
+    # clears stale state, but if that delete ever fails (logged), this check still
+    # guarantees the panic reaches NEUTRAL. Checked BEFORE pair/channels on purpose.
+    if channel == -1:
+        rospy.loginfo("b1_channel_probe: PANIC STOP (channel=-1) -- sending zeros")
+        send_neutral()
+        return
 
     # Mode priority: ~pair > ~channels > legacy ~channel single. Any parse
     # failure falls back to ALL-NEUTRAL (panic stop) rather than driving
