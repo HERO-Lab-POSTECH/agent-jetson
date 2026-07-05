@@ -41,14 +41,15 @@ def build_msg(channel, level):
     for i in range(NUM_THR):
         m.thrust[i] = 0.0
     if 0 <= channel < NUM_THR:
-        # Hard ceiling for a bring-up probe; never full-scale here. Raised to 0.5
-        # (2026-07-05): the firmware vertical channels m0/m3 use a narrow span
-        # (RL_PWM_SPAN_VERT=150) AND a DEPTH_BIAS=30 buoyancy trim, so 0.3 yields
-        # pwm = 1500 - 30 + 0.3*150 = 1515 -> effective -15 below neutral: the
-        # vertical thrusters never spin up. 0.5 gives 1500 - 30 + 0.5*150 = 1545
-        # (+45), enough to clear the deadband and actually produce heave.
-        # NOTE: at 0.5 on a FREE (untethered) robot this really moves it up/down.
-        lvl = max(-0.5, min(0.5, float(level)))
+        # Clamp to the policy contract [-1, 1] only. The earlier bring-up ceiling
+        # (0.3, then 0.5) was removed at the operator's request on 2026-07-05:
+        # vertical m0/m3 need more than 0.3 to clear DEPTH_BIAS=30 plus the narrow
+        # RL_PWM_SPAN_VERT=150, and the operator drives and judges risk directly.
+        # The firmware still constrains PWM to ESC_MIN/MAX and DEPTH_PWM_MIN/MAX,
+        # so hardware limits stay enforced downstream regardless of this value.
+        # WARNING: near +-1 on a FREE (untethered) robot this is FULL thrust and
+        # it moves fast / dives; the operator stops it if it gets risky.
+        lvl = max(-1.0, min(1.0, float(level)))
         m.thrust[channel] = lvl
     return m
 
