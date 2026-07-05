@@ -63,26 +63,27 @@
   <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command"
         output="screen" />
 
-  <!-- 2) Hold each joint at the reference pose. A command must keep arriving so
-          the driver keeps torque on the target; a joint with no command would go
-          slack and let the arm extend (tipping the robot, confounding the
-          thruster observation).
-          Implemented as `rostopic pub -f FILE.yaml` rather than an inline
-          quoted `data:` payload. Reason: roslaunch's args splitter does NOT
-          reliably preserve a single-quoted YAML token, so the inline form can
-          hand rostopic a broken message (no working precedent in this repo). A
-          file payload sidesteps quoting entirely. rostopic reads the message
-          body from the .yaml, and only unambiguous flags stay on the cmd line.
-          The hold_pose_j1.yaml / hold_pose_j2.yaml files live next to this
-          launch and contain a single line, `data: ANGLE`.
-          To change the hold angle, edit the .yaml (the hold_j1/hold_j2 args are
-          kept only for documentation of the current reference pose).
-          VERIFY on the board before 실기: `rostopic echo` each command topic and
-          confirm a Float64 with the right value arrives at ~hold_hz. -->
-  <node pkg="rostopic" type="rostopic" name="hold_joint1"
-        args="pub -r $(arg hold_hz) /hero_agent/active_joint1_position_controller/command std_msgs/Float64 -f $(find albc_rl)/launch/hold_pose_j1.yaml" />
-  <node pkg="rostopic" type="rostopic" name="hold_joint2"
-        args="pub -r $(arg hold_hz) /hero_agent/active_joint2_position_controller/command std_msgs/Float64 -f $(find albc_rl)/launch/hold_pose_j2.yaml" />
+  <!-- 2) Hold each joint at the reference pose via the hold_joint.py publisher.
+          A command must keep arriving so the driver keeps torque on the target;
+          a joint with no command would go slack and let the arm extend (tipping
+          the robot, confounding the thruster observation).
+          Uses a dedicated rospy publisher (hold_joint.py) rather than
+          `rostopic pub` as a node. Reason: the rostopic-pub inline and file
+          payload idioms did NOT survive roslaunch on the board. The hold nodes
+          silently died at launch and nothing published to the command topic
+          (observed 2026-07-05, arm did not move). A real node takes ~angle as a
+          plain rosparam, so there is no arg-splitting or YAML-quoting to break.
+          Absolute-angle command, so republishing never drifts. -->
+  <node pkg="albc_rl" type="hold_joint.py" name="hold_joint1" output="screen">
+    <param name="topic" value="/hero_agent/active_joint1_position_controller/command" />
+    <param name="angle" value="$(arg hold_j1)" />
+    <param name="rate"  value="$(arg hold_hz)" />
+  </node>
+  <node pkg="albc_rl" type="hold_joint.py" name="hold_joint2" output="screen">
+    <param name="topic" value="/hero_agent/active_joint2_position_controller/command" />
+    <param name="angle" value="$(arg hold_j2)" />
+    <param name="rate"  value="$(arg hold_hz)" />
+  </node>
 
   <!-- 3) ROSBAG: record the topics needed to attribute each probed channel
           to a physical motor + direction. joint_states/currents = arm held
