@@ -20,13 +20,15 @@ from np_policy import NumpyStudentPolicy, NOMINAL_JOINT_POS, DELTA_SCALE
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-@pytest.fixture(scope="module")
-def pol():
-    # GRU is the shipped 72D encoder; the TCN pack here is still 69D (pre-bias_ema).
+@pytest.fixture(scope="module", params=["gru", "tcn"])
+def pol(request):
+    # Both 72D packs ship off the same incumbent teacher: gru is primary, tcn the
+    # fallback. Every API guard below must hold for whichever one the node loads.
+    enc = request.param
     return NumpyStudentPolicy(
-        os.path.join(HERE, "weights_gru.npz"),
+        os.path.join(HERE, "weights_%s.npz" % enc),
         os.path.join(HERE, "weights_teacher.npz"),
-        "gru",
+        enc,
     )
 
 

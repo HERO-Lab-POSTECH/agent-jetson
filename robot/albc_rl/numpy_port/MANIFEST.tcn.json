@@ -1,0 +1,57 @@
+{
+  "tag": "pack_inc9998_tcn_260810_162157",
+  "student_arch": "tcn",
+  "checkpoints": {
+    "student_tcn": {
+      "file": "student_999.pt",
+      "iter": 999,
+      "path": "logs/rsl_rl/albc_trpo_student/student_final_round/trpo_sdfinal_tcn_select_inc9998_s30_260810_160551/models/student_999.pt"
+    },
+    "teacher": {
+      "file": "model_9998.pt",
+      "iter": 9998,
+      "path": "logs/rsl_rl/albc_trpo_teacher/teacher_iter_budget/trpo_iterbudget_s30_260805_012813/model_9998.pt"
+    }
+  },
+  "dims": {
+    "obs": 72,
+    "action": 8,
+    "latent": 9,
+    "teacher_input": 81,
+    "tcn_history": 9
+  },
+  "normalization": "(x - mean) / (std + 0.01)   # eps=0.01, _std=sqrt(var) eps NOT folded",
+  "golden_device": "cpu  # standard conv, matches board numpy runtime",
+  "files": {
+    "weights_teacher.npz": {
+      "sha256": "1d4cb97504bbf173eb77c34ee91aa8426cc63ceef0d1cd5f0e76d4159709c85a",
+      "bytes": 253844
+    },
+    "weights_tcn.npz": {
+      "sha256": "e9c01e07645b6cb4a2303d98a86ae598be0a7075926d3facf4693bb065c7b9a3",
+      "bytes": 536558
+    },
+    "npforward.py": {
+      "sha256": "8ab626b00d01def68651dc4d64e04abdc0175e6e0648dc170a414113959f9240",
+      "bytes": 7284
+    },
+    "golden/golden_tcn.npz": {
+      "sha256": "b115d66e871e4b5941934e38bcd8aa20a2d2cfcbeeb2155a3976a7d00a94afbb",
+      "bytes": 10154
+    },
+    "golden/golden_teacher.npz": {
+      "sha256": "69466118c712a59ab5d7032b5d0acbce07ce76463fa1e030bd4c6fa0c37169a8",
+      "bytes": 2230
+    }
+  },
+  "parity": {
+    "atol": 1e-05,
+    "teacher_normalize_max_err": 0.0,
+    "teacher_act_max_err": 9.5367431640625e-07,
+    "teacher_closed": true,
+    "tcn_latent_max_err": 8.940696716308594e-08,
+    "tcn_closed": true,
+    "closed_in_container": true
+  },
+  "npforward_sha256": "8ab626b00d01def68651dc4d64e04abdc0175e6e0648dc170a414113959f9240"
+}
