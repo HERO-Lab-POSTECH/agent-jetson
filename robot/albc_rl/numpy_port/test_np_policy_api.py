@@ -22,10 +22,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 @pytest.fixture(scope="module")
 def pol():
+    # GRU is the shipped 72D encoder; the TCN pack here is still 69D (pre-bias_ema).
     return NumpyStudentPolicy(
-        os.path.join(HERE, "weights_tcn.npz"),
+        os.path.join(HERE, "weights_gru.npz"),
         os.path.join(HERE, "weights_teacher.npz"),
-        "tcn",
+        "gru",
     )
 
 
@@ -106,6 +107,29 @@ def test_no_runaway_when_arm_fixed_and_attitude_level(pol):
     assert drift1 < 1.0, (
         "joint1 target drifted %.3f rad over 60 ticks -- still runaway "
         "(seed fix not effective)" % drift1)
+
+
+def test_bias_ema_tracks_err3_and_lands_at_obs_69_72(pol):
+    # The 72D bump: obs[69:72] is an ungated EMA over the SAME err3 the integral
+    # uses (roll err, pitch err, yaw-rate err), alpha=0.99, zeroed on reset.
+    from np_policy import POLICY_OBS_DIM, BIAS_EMA_ALPHA
+    pol.reset()
+    proprio = np.zeros(20, dtype=np.float32)
+    proprio[3:6] = [0.1, -0.2, 0.0]     # euler: roll, pitch, yaw
+    proprio[6:9] = [0.0, 0.0, 0.3]      # ang vel: p, q, r
+    cmd = np.zeros(3, dtype=np.float32)
+    err3 = np.array([-0.1, 0.2, -0.3], dtype=np.float32)   # cmd - measured
+
+    expected = np.zeros(3, dtype=np.float32)
+    for _ in range(4):
+        obs = pol._assemble_obs(proprio, cmd)
+        expected = BIAS_EMA_ALPHA * expected + (1.0 - BIAS_EMA_ALPHA) * err3
+        assert obs.shape[0] == POLICY_OBS_DIM
+        np.testing.assert_allclose(obs[69:72], expected, atol=1e-6)
+    assert np.abs(expected).max() > 0.0, "bias_ema stayed at zero -- update is dead"
+
+    pol.reset()
+    np.testing.assert_allclose(pol._bias_ema, np.zeros(3), atol=0.0)
 
 
 if __name__ == "__main__":

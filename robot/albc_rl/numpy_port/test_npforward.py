@@ -45,6 +45,13 @@ def test_tcn():
     print("== student TCN encoder ==")
     w = _load("weights_tcn.npz")
     g = _load("golden/golden_tcn.npz")
+    # The shipped TCN pack is 69D (pre-bias_ema plant); the contract is now 72D. Passing
+    # this test on an artifact the loader would reject is a false green, so skip loudly.
+    from np_policy import POLICY_OBS_DIM
+    if g["input_window"].shape[-1] != POLICY_OBS_DIM:
+        print("  [SKIP] TCN pack is %dD, contract is %dD -- stale, not deployable"
+              % (g["input_window"].shape[-1], POLICY_OBS_DIM))
+        return
     enc = npf.StudentTCN(w)
 
     # submodule-by-submodule, reusing torch intermediates as inputs where useful
@@ -84,24 +91,28 @@ def test_gru():
     g = _load("golden/golden_gru.npz")
     enc = npf.StudentGRU(w)
 
-    seq = g["input_seq"]            # (1, 4, 87)
+    seq = g["input_seq"]            # (1, T, 72)
     T = seq.shape[1]
     hidden = enc.init_hidden(1)
-    _check("init_hidden", hidden, g["init_hidden"][0])  # golden (1,1,128) -> (1,128)
+    assert hidden.shape == (1, enc.hidden_size) and not hidden.any(), \
+        "init_hidden must be zeros (1, %d), got %s" % (enc.hidden_size, hidden.shape)
 
-    latents = []
+    hiddens, latents = [], []
     for t in range(T):
         z, hidden = enc.step(seq[:, t, :], hidden)
-        latents.append(z)
-    latents = np.stack(latents, axis=0)   # (T, 1, 9)
-    _check("latents_per_step", latents, g["latents_per_step"])
-
-    # final hidden matches full-seq hidden
-    _check("hidden_final", hidden[0], g["hidden_full_seq"][0, 0])
+        hiddens.append(hidden[0])
+        latents.append(z[0])
+    # golden stores (batch, T, ...) -- restack the per-step lists the same way
+    _check("after_gru (hidden/step)", np.stack(hiddens)[None], g["after_gru"])
+    _check("latent_seq", np.stack(latents)[None], g["latent_seq"])
+    _check("forward_out", np.stack(latents)[None], g["forward_out"])
+    _check("hidden_final", hidden[0], g["hidden_final"][0, 0])
+    # after_head is the pre-softsign head output; softsign(it) is the latent
+    _check("softsign(after_head)", npf.softsign(g["after_head"]), g["latent_seq"])
 
 
 def _gru_golden_is_current():
-    """True only if the GRU golden/weights match the current POLICY_OBS_DIM (69)."""
+    """True only if the GRU golden/weights match the current POLICY_OBS_DIM (72)."""
     from np_policy import POLICY_OBS_DIM
     try:
         g = _load("golden/golden_gru.npz")
@@ -119,5 +130,5 @@ if __name__ == "__main__":
         test_gru()
     else:
         print("== student GRU encoder (stateful) ==")
-        print("  [SKIP] no 69D GRU distill checkpoint/golden yet (TCN-only deploy)")
+        print("  [SKIP] no 72D GRU distill checkpoint/golden yet (TCN-only deploy)")
     print("\nALL PARITY CHECKS PASSED (atol={})".format(ATOL))

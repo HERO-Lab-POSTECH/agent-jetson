@@ -1,0 +1,59 @@
+{
+  "tag": "pack_inc9998_gru_260810_150713",
+  "student_arch": "gru",
+  "checkpoints": {
+    "student_gru": {
+      "file": "student_999.pt",
+      "iter": 999,
+      "path": "logs/rsl_rl/albc_trpo_student/student_final_round/trpo_sdfinal_c3_gruselect_inc9998_s30_260810_124813/models/student_999.pt"
+    },
+    "teacher": {
+      "file": "model_9998.pt",
+      "iter": 9998,
+      "path": "logs/rsl_rl/albc_trpo_teacher/teacher_iter_budget/trpo_iterbudget_s30_260805_012813/model_9998.pt"
+    }
+  },
+  "dims": {
+    "obs": 72,
+    "action": 8,
+    "latent": 9,
+    "teacher_input": 81,
+    "gru_hidden": 128,
+    "gru_golden_steps": 9
+  },
+  "normalization": "(x - mean) / (std + 0.01)   # eps=0.01, _std=sqrt(var) eps NOT folded",
+  "golden_device": "cpu  # standard conv, matches board numpy runtime",
+  "files": {
+    "weights_teacher.npz": {
+      "sha256": "1d4cb97504bbf173eb77c34ee91aa8426cc63ceef0d1cd5f0e76d4159709c85a",
+      "bytes": 253844
+    },
+    "weights_gru.npz": {
+      "sha256": "1c71f26b2d424c4b1395b29c56e3ea278dcf7c8ef4dec70d657af33d6e173bfa",
+      "bytes": 348754
+    },
+    "npforward.py": {
+      "sha256": "8ab626b00d01def68651dc4d64e04abdc0175e6e0648dc170a414113959f9240",
+      "bytes": 7284
+    },
+    "golden/golden_gru.npz": {
+      "sha256": "b60d655d1d6b3a851a8e71bb33fff4d67e548b1e5fc68a3d01002b8e311afeb6",
+      "bytes": 10220
+    },
+    "golden/golden_teacher.npz": {
+      "sha256": "69466118c712a59ab5d7032b5d0acbce07ce76463fa1e030bd4c6fa0c37169a8",
+      "bytes": 2230
+    }
+  },
+  "parity": {
+    "atol": 1e-05,
+    "teacher_normalize_max_err": 0.0,
+    "teacher_act_max_err": 9.5367431640625e-07,
+    "teacher_closed": true,
+    "gru_latent_max_err": 1.4901161193847656e-07,
+    "gru_hidden_max_err": 1.4901161193847656e-07,
+    "gru_closed": true,
+    "closed_in_container": true
+  },
+  "npforward_sha256": "8ab626b00d01def68651dc4d64e04abdc0175e6e0648dc170a414113959f9240"
+}

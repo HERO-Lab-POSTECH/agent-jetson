@@ -3,7 +3,7 @@
   <!-- SURFACE TEST DEFAULT: thruster_scale=0.0 -> thrusters held at 0, joint-only. -->
   <!-- Brief surface thrust burst (args are declared, so CLI override WORKS):       -->
   <!--   roslaunch albc_rl albc_rl.launch thruster_scale:=1.0 thruster_max_s:=2.0   -->
-  <arg name="encoder_type"        default="tcn" />    <!-- tcn | gru -->
+  <arg name="encoder_type"        default="gru" />    <!-- tcn | gru; shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />  <!-- true=trust /albc_status angvel -->
   <arg name="thruster_scale"      default="0.0" />    <!-- 0.0=joint-only surface test, 1.0=live -->

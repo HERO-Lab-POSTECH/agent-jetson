@@ -37,17 +37,19 @@ WHAT THIS NODE OWNS vs DELEGATES
   * joint velocity ........................... driver JointState.velocity verbatim
         (driver differentiates at its true 10 Hz; re-diffing here would staircase)
   * thruster echo (obs 14:20) ................ builder echoes set_last_action()
-  * history(20:66) + integral(66:69) ......... NumpyStudentPolicy (state buffers)
+  * history(20:66) + integral(66:69)
+    + bias_ema(69:72) ........................ NumpyStudentPolicy (state buffers)
   * command setpoint (obs 0:3) ............... this node (_command, via /rl/command)
   * staleness / non-finite gates ............. this node (_tick gates; holds = no publish)
 
 The 3D integral is the policy runtime's responsibility (leak=0.99, clamp=2.0,
-gated, sigma=0.10, mirroring attitude_only/albc_env.py). This node passes the
-3D command straight through; it does NOT reorder or recompute the integral.
+gated, sigma=0.10, mirroring attitude_only/albc_env.py). The 3D bias_ema
+(alpha=0.99, ungated) is likewise the runtime's. This node passes the 3D command
+straight through; it does NOT reorder or recompute either buffer.
 
 ROSPARAMS (all defaults are field-safe)
 ---------------------------------------
-  ~encoder_type       : "tcn" | "gru"             (default tcn)
+  ~encoder_type       : "tcn" | "gru"             (default gru)
   ~weights_dir        : dir with weights_*.npz    (default ../numpy_port)
   ~control_hz         : 50
   ~use_board_rates    : false  (true => trust /albc_status angular vel [8:11];
@@ -101,7 +103,9 @@ def _md5_8(path):
 
 class RLInferenceNode(object):
     def __init__(self):
-        self.encoder_type = rospy.get_param("~encoder_type", "tcn")
+        # gru: the shipped 72D pack is GRU (pack_inc9998_gru). The 69D TCN pack in
+        # numpy_port/ predates the bias_ema obs and would fail the contract check.
+        self.encoder_type = rospy.get_param("~encoder_type", "gru")
         weights_dir = rospy.get_param(
             "~weights_dir", os.path.join(_HERE, "..", "numpy_port"))
         self.hz = float(rospy.get_param("~control_hz", 50.0))

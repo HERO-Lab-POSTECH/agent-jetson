@@ -6,8 +6,8 @@ from the .npz produced by export_golden.py. Runs on Jetson TX2 (Python 3.5, nump
 The contract constants are duplicated here (frozen at training time) so this module is
 self-contained on the robot -- it does NOT import student_inference.py (which needs torch).
 
-69D attitude-only contract (extracted from the marinegym-isaaclab attitude_only sim):
-  policy obs dim : 69  (20 proprio + 46 history + 3 integral)
+72D attitude-only contract (extracted from the marinegym-isaaclab attitude_only sim):
+  policy obs dim : 72  (20 proprio + 46 history + 3 integral + 3 bias_ema)
   proprio 20D    : [0:3] ang_cmd, [3:6] euler(r,p,y), [6:9] ang_vel_b(p,q,r),
                    [9:11] joint_pos, [11:13] joint_vel, [13] manip, [14:20] thruster
   history 18D/step: [0:2] joint_pos_error (q_des_{t-1}-joint_pos), [2:4] joint_vel,
@@ -15,6 +15,10 @@ self-contained on the robot -- it does NOT import student_inference.py (which ne
                    [10:18] prev_action (the previous act() output)
   obs history blk: jb_hist 10D x 3 steps (30D, all steps) + act_hist 8D x 2 newest (16D)
   integral 3D    : leaky, gated (|err|<sigma), clamp +-2.0, on [roll, pitch, yaw_rate]
+  bias_ema 3D    : ungated EMA, a*prev + (1-a)*err3, a=0.99, same err3 as the integral.
+                   Sim updates it in _get_rewards next to _error_integral and consumes
+                   both in _get_observations, so the board updates it in the same place
+                   and in the same order as the integral (albc_env.py:1366-1398, :1229-1235).
 """
 from collections import deque
 
@@ -54,7 +58,7 @@ if _numpy_version_tuple() < _NUMPY_MIN:
 
 
 # ---- frozen contract constants (must match student_inference.py / attitude_only sim) ----
-POLICY_OBS_DIM = 69
+POLICY_OBS_DIM = 72
 PROPRIO_DIM = 20
 LATENT_DIM = 9
 ACTION_DIM = 8
@@ -70,6 +74,8 @@ INTEGRAL_LEAK = 0.99
 INTEGRAL_CLAMP = 2.0
 INTEGRAL_GATED = True
 INTEGRAL_SIGMA = np.array([0.10, 0.10, 0.10], dtype=np.float32)  # [att_rp, att_rp, yaw_vel]
+BIAS_EMA_DIM = 3
+BIAS_EMA_ALPHA = 0.99       # cfg.reward.bias_ema_alpha (incumbent env.yaml:389)
 NOMINAL_JOINT_POS = np.array([0.0, np.pi / 2.0], dtype=np.float32)
 DELTA_SCALE = 0.10
 TCN_HISTORY = 9
@@ -86,7 +92,7 @@ def _wrap_angle(a):
 
 
 class NumpyStudentPolicy:
-    """Drop-in numpy replacement for DeployedStudentPolicy (69D attitude-only).
+    """Drop-in numpy replacement for DeployedStudentPolicy (72D attitude-only).
 
     Usage on the robot:
         pol = NumpyStudentPolicy("weights_tcn.npz", "weights_teacher.npz", "tcn")
@@ -110,7 +116,7 @@ class NumpyStudentPolicy:
                 % (student_npz, encoder_type, e))
         tw = np.load(teacher_npz)
 
-        # fail-fast BEFORE building the encoder/actor: the frozen 69D/8D contract
+        # fail-fast BEFORE building the encoder/actor: the frozen 72D/8D contract
         # must match the loaded weights. A stale npz (e.g. the old 87D policy)
         # would otherwise blow up inside npforward's constructor with an opaque
         # KeyError, or pass __init__ and fail later in act() with a shape mismatch.
@@ -124,6 +130,7 @@ class NumpyStudentPolicy:
 
         self._hist_buf = deque(maxlen=HIST_LEN)
         self._integral = np.zeros(INTEGRAL_DIM, dtype=np.float32)
+        self._bias_ema = np.zeros(BIAS_EMA_DIM, dtype=np.float32)
         self._tcn_window = deque(maxlen=TCN_HISTORY)
         self._gru_hidden = None
         self._joint_target = NOMINAL_JOINT_POS.copy()
@@ -134,7 +141,7 @@ class NumpyStudentPolicy:
 
     @staticmethod
     def _assert_contract(tw, sw, encoder_type):
-        """Validate the loaded .npz against the frozen 69D/8D/9D contract.
+        """Validate the loaded .npz against the frozen 72D/8D/9D contract.
 
         Raises ValueError with a precise message if any key is missing or any
         dimension diverges from POLICY_OBS_DIM / ACTION_DIM / LATENT_DIM. This is
@@ -147,7 +154,7 @@ class NumpyStudentPolicy:
                                  % (name, key, list(npz.files)))
             return npz[key]
 
-        # teacher actor: normalizer is per-obs (1, 69); actor.0 takes obs+latent (78);
+        # teacher actor: normalizer is per-obs (1, 72); actor.0 takes obs+latent (81);
         # actor.6 emits the 8D action.
         mean = need(tw, "normalizer._mean", "teacher")
         if mean.shape[-1] != POLICY_OBS_DIM:
@@ -183,6 +190,7 @@ class NumpyStudentPolicy:
         for _ in range(HIST_LEN):
             self._hist_buf.append(np.zeros(HIST_FEAT_DIM, dtype=np.float32))
         self._integral[:] = 0.0
+        self._bias_ema[:] = 0.0          # sim: _bias_ema[env_ids] = 0.0 (albc_env.py:1835)
         self._tcn_window.clear()
         self._gru_hidden = None
         # Placeholder until the first act() seeds it from the measured joint_pos.
@@ -218,11 +226,11 @@ class NumpyStudentPolicy:
         if not self._joint_target_seeded:
             self._joint_target = proprio_20[9:11].copy()
             self._joint_target_seeded = True
-        obs69 = self._assemble_obs(proprio_20, cmd_3)
-        obs_b = obs69.reshape(1, -1).astype(np.float32)
+        obs_vec = self._assemble_obs(proprio_20, cmd_3)
+        obs_b = obs_vec.reshape(1, -1).astype(np.float32)
 
         if self.encoder_type == "tcn":
-            self._tcn_window.append(obs69.astype(np.float32))
+            self._tcn_window.append(obs_vec.astype(np.float32))
             while len(self._tcn_window) < TCN_HISTORY:
                 self._tcn_window.appendleft(self._tcn_window[0])
             win = np.stack(list(self._tcn_window)).reshape(1, TCN_HISTORY, POLICY_OBS_DIM)
@@ -284,10 +292,17 @@ class NumpyStudentPolicy:
             self._integral = self._integral + err * CONTROL_DT
         np.clip(self._integral, -INTEGRAL_CLAMP, INTEGRAL_CLAMP, out=self._integral)
 
-        # --- obs assembly: proprio(20) + jb_hist(30) + act_hist(16) + integral(3) ---
+        # --- ungated EMA bias on the same err3, updated right after the integral ---
+        # Mirrors albc_env.py:1389-1398, which sits in the same _get_rewards call as the
+        # integral update above; both are consumed by the next _get_observations. No gate,
+        # no clamp. astype pins float32 on numpy 1.11 (board) and 2.x (dev) alike.
+        self._bias_ema = (BIAS_EMA_ALPHA * self._bias_ema
+                          + (1.0 - BIAS_EMA_ALPHA) * err).astype(np.float32)
+
+        # --- obs assembly: proprio(20)+jb_hist(30)+act_hist(16)+integral(3)+bias_ema(3) ---
         buf = list(self._hist_buf)
         jb_hist = np.concatenate([f[:HIST_JB_DIM] for f in buf])               # 10 x 3 = 30
         act_hist = np.concatenate([f[HIST_JB_DIM:] for f in buf[-HIST_ACTION_LEN:]])  # 8 x 2 = 16
-        obs = np.concatenate([proprio_20, jb_hist, act_hist, self._integral])
+        obs = np.concatenate([proprio_20, jb_hist, act_hist, self._integral, self._bias_ema])
         assert obs.shape[0] == POLICY_OBS_DIM, obs.shape[0]
         return obs.astype(np.float32)
