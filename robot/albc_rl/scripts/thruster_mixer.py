@@ -65,16 +65,27 @@ NUM_THR = 6
 #   horizontal= m1,m2,m4,m5
 FW_VERT_CH = (0, 3)
 FW_HORZ_CH = (1, 2, 4, 5)
-# Sim thruster axis sets (from constrained-albc TAM Fz row (0,0,0,0,1,1)):
-#   vertical (heave) = sim indices 4,5 ; horizontal = 0,1,2,3
-SIM_VERT = frozenset((4, 5))
-SIM_HORZ = frozenset((0, 1, 2, 3))
+# Sim ACTION axis sets. The policy's action[2:8] is ALREADY in firmware channel
+# order: constrained-albc builds its live TAM as
+#     allocation_matrix = _reorder_columns(_BASE_ALLOCATION_MATRIX, _ESC_CHANNEL_ORDER)
+# (envs/main/config.py), so the reorder happens sim-side. The LIVE Fz row recorded
+# in the deployed teacher run (logs/.../trpo_iterbudget_s30_260805_012813/
+# params/env.yaml) is (1,0,0,1,0,0) -- vertical at columns 0 and 3, exactly the
+# firmware wiring. The pre-reorder (0,0,0,0,1,1) that the old {4,5} came from is
+# _BASE_ALLOCATION_MATRIX, which the board never sees.
+SIM_VERT = frozenset((0, 3))
+SIM_HORZ = frozenset((1, 2, 4, 5))
 
-# Safe default order: AXIS-correct, within-axis arbitrary (identity is KNOWN-WRONG
-# -> dive). m0<-sim4, m3<-sim5 (both vertical); horizontal fw channels take sim
-# {0,1,2,3}. The within-axis horizontal assignment + every sign are placeholders
-# until B1 measures them; live safety is the RL node's thruster_scale=0.0 gate.
-DEFAULT_ORDER = [4, 0, 1, 5, 2, 3]  # index = fw channel j, value = sim source
+# Default order is IDENTITY, because sim already reordered to firmware channels.
+# The old [4,0,1,5,2,3] applied that same permutation a SECOND time, routing the
+# m4/m5 horizontal commands into the m0/m3 vertical motors -- an uncommanded dive
+# that the axis assert below could NOT catch while SIM_VERT was the stale {4,5},
+# and which simultaneously made this correct identity order raise ROSInitException.
+# Harmless until 2026-08-11 only because thruster_scale defaulted to 0.0; the
+# recorded field-test bags (fieldtest_2026-07-06-*) carry thruster_pwm == 0
+# throughout, so no run ever exercised the bad routing.
+# Per-channel SIGNS remain placeholders until the B1 tank measurement.
+DEFAULT_ORDER = [0, 1, 2, 3, 4, 5]  # index = fw channel j, value = sim source
 
 
 class ThrusterMixer(object):
@@ -113,10 +124,14 @@ class ThrusterMixer(object):
 
     def _validate_order(self, order):
         """Enforce the axis invariant: fw vertical channels (m0,m3) MUST source
-        from sim vertical indices {4,5}, and fw horizontal channels from sim
-        horizontal {0,1,2,3}. An axis-crossing order dives the boat, so we refuse
-        to run rather than publish it. Within-axis assignment is NOT constrained
-        (B1 measures it)."""
+        from sim vertical action indices {0,3}, and fw horizontal channels from
+        sim horizontal {1,2,4,5}. An axis-crossing order dives the boat, so we
+        refuse to run rather than publish it. Within-axis assignment is NOT
+        constrained (B1 measures it).
+
+        The sim index sets here are LIVE-TAM indices (post _ESC_CHANNEL_ORDER),
+        not _BASE_ALLOCATION_MATRIX indices -- see the SIM_VERT comment. Getting
+        that wrong is what let the double-permutation default through."""
         ok = (isinstance(order, (list, tuple)) and len(order) == NUM_THR
               and sorted(int(x) for x in order) == list(range(NUM_THR)))
         if not ok:
