@@ -232,16 +232,26 @@ def _check(args):
                   % (worst, args.tol))
             print("        the board, or the four sides were not actually 90 deg apart")
 
-        print("SELF-CHECK 2 (handedness): ", end="")
-        if all(g > 0 for g in gaps) or all(g < 0 for g in gaps):
-            print("PASS  azimuth advances monotonically")
-            print("  NOTE compare that direction against the physical order you measured.")
-            print("       If you went counter-clockwise (seen from above) and the azimuths")
-            print("       DECREASE, the corrected frame is still left-handed -- the pinned")
-            print("       raw_pitch = -(PITCH) is wrong and everything downstream is suspect.")
+        # Handedness. In FLU (+x fwd, +y left, +z up) azimuth grows from +x toward
+        # +y, i.e. COUNTER-clockwise seen from above. So measuring the raised side
+        # in clockwise order must make the azimuth DECREASE. If it increases, the
+        # corrected frame is still left-handed -- the pinned raw_pitch = -(PITCH)
+        # is wrong and every attitude-derived judgement downstream is suspect.
+        want = -1 if args.order == "cw" else +1
+        print("SELF-CHECK 2 (handedness, measured %s from above): " % args.order, end="")
+        if not (all(g > 0 for g in gaps) or all(g < 0 for g in gaps)):
+            ok = False
+            print("FAIL  gaps change sign -- not a consistent rotation")
+        elif (1 if gaps[0] > 0 else -1) == want:
+            print("PASS  azimuth %s as expected -- corrected frame is right-handed"
+                  % ("decreases" if want < 0 else "increases"))
         else:
             ok = False
-            print("FAIL  gaps change sign -- readings are not a consistent rotation")
+            print("FAIL  azimuth %s but %s order requires the opposite."
+                  % ("increases" if gaps[0] > 0 else "decreases", args.order))
+            print("      The corrected frame is LEFT-handed: rotate_imu's pinned")
+            print("      raw_pitch = -(PITCH) does not restore handedness here. STOP --")
+            print("      do not run the policy; every attitude judgement is sign-suspect.")
 
     grip = [r for r in keep if "grip" in r["label"].lower()]
     print("SELF-CHECK 3 (theta1=0 azimuth): ", end="")
@@ -290,6 +300,9 @@ def main():
     c = sub.add_parser("check", help="re-read the CSV and run the self-checks")
     c.add_argument("--gripper-j1", type=float, default=None,
                    help="J1 in degrees at which the arm points at the gripper (2026-08-11: 135.44)")
+    c.add_argument("--order", choices=("cw", "ccw"), default="cw",
+                   help="the order the four sides were measured in, seen FROM ABOVE "
+                        "(default cw: gripper, then +90 clockwise each time)")
     c.add_argument("--tol", type=float, default=12.0, help="allowed deviation from 90 deg spacing")
     c.add_argument("--delta-tol", type=float, default=10.0,
                    help="|delta| above which J1 Homing Offset should absorb it")
