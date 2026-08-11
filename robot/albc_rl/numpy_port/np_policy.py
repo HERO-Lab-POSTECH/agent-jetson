@@ -135,6 +135,7 @@ class NumpyStudentPolicy:
         self._gru_hidden = None
         self._joint_target = NOMINAL_JOINT_POS.copy()
         self._joint_target_seeded = False
+        self._reset_frame = True
         self._prev_action = np.zeros(ACTION_DIM, dtype=np.float32)
         self._hist_step_counter = 0
         self.reset()
@@ -200,6 +201,7 @@ class NumpyStudentPolicy:
         # measurement arrives, so the seed is deferred to the first act().
         self._joint_target = NOMINAL_JOINT_POS.copy()
         self._joint_target_seeded = False
+        self._reset_frame = True
         self._prev_action[:] = 0.0
         self._hist_step_counter = 0
 
@@ -277,27 +279,32 @@ class NumpyStudentPolicy:
             self._prev_action,                   # 8
         ]).astype(np.float32)                    # = 18
 
-        # --- stride ring buffer: record every HIST_STRIDE-th step ---
-        self._hist_step_counter += 1
-        if self._hist_step_counter % HIST_STRIDE == 0:
-            self._hist_buf.append(feat)
-
         # --- leaky gated integral on [roll_err, pitch_err, yaw_rate_err] ---
         err = np.concatenate([att_rp_err, np.array([yaw_rate_err], dtype=np.float32)])
-        self._integral = INTEGRAL_LEAK * self._integral
-        if INTEGRAL_GATED:
-            gate = (np.abs(err) < INTEGRAL_SIGMA).astype(np.float32)
-            self._integral = self._integral + gate * err * CONTROL_DT
+        if self._reset_frame:
+            # The sim's first observation of an episode carries integral == bias_ema == 0:
+            # DirectRLEnv.step runs _get_rewards (which owns both updates) BEFORE
+            # _get_observations, and after a reset no step has run yet. Updating on the
+            # board's first tick instead would leave every later observation one
+            # accumulation ahead of anything the policy saw in training.
+            # Verified against a sim rollout: skipping here takes integral 1.9e-3 -> 3.8e-7
+            # and bias_ema 4.9e-3 -> 1.1e-6.
+            self._reset_frame = False
         else:
-            self._integral = self._integral + err * CONTROL_DT
-        np.clip(self._integral, -INTEGRAL_CLAMP, INTEGRAL_CLAMP, out=self._integral)
+            self._integral = INTEGRAL_LEAK * self._integral
+            if INTEGRAL_GATED:
+                gate = (np.abs(err) < INTEGRAL_SIGMA).astype(np.float32)
+                self._integral = self._integral + gate * err * CONTROL_DT
+            else:
+                self._integral = self._integral + err * CONTROL_DT
+            np.clip(self._integral, -INTEGRAL_CLAMP, INTEGRAL_CLAMP, out=self._integral)
 
-        # --- ungated EMA bias on the same err3, updated right after the integral ---
-        # Mirrors albc_env.py:1389-1398, which sits in the same _get_rewards call as the
-        # integral update above; both are consumed by the next _get_observations. No gate,
-        # no clamp. astype pins float32 on numpy 1.11 (board) and 2.x (dev) alike.
-        self._bias_ema = (BIAS_EMA_ALPHA * self._bias_ema
-                          + (1.0 - BIAS_EMA_ALPHA) * err).astype(np.float32)
+            # --- ungated EMA bias on the same err3, updated right after the integral ---
+            # Mirrors albc_env.py:1389-1398, which sits in the same _get_rewards call as
+            # the integral update above. No gate, no clamp. astype pins float32 on
+            # numpy 1.11 (board) and 2.x (dev) alike.
+            self._bias_ema = (BIAS_EMA_ALPHA * self._bias_ema
+                              + (1.0 - BIAS_EMA_ALPHA) * err).astype(np.float32)
 
         # --- obs assembly: proprio(20)+jb_hist(30)+act_hist(16)+integral(3)+bias_ema(3) ---
         buf = list(self._hist_buf)
@@ -305,4 +312,16 @@ class NumpyStudentPolicy:
         act_hist = np.concatenate([f[HIST_JB_DIM:] for f in buf[-HIST_ACTION_LEN:]])  # 8 x 2 = 16
         obs = np.concatenate([proprio_20, jb_hist, act_hist, self._integral, self._bias_ema])
         assert obs.shape[0] == POLICY_OBS_DIM, obs.shape[0]
+
+        # --- stride ring buffer: record AFTER assembling, every HIST_STRIDE-th step ---
+        # The sim records in _pre_physics_step (albc_env.py:751), so a feature derived
+        # from state s first reaches the policy in the observation of the NEXT step.
+        # Appending before assembly would hand the policy a history one control step
+        # fresher than training ever produced. Content was already correct -- only the
+        # visibility was early; moving this block took act_hist to 0.0 and jb_hist to
+        # 4.1e-5 (the sim's always-on proprio noise, irreducible from here).
+        self._hist_step_counter += 1
+        if self._hist_step_counter % HIST_STRIDE == 0:
+            self._hist_buf.append(feat)
+
         return obs.astype(np.float32)

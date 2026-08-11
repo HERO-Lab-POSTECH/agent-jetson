@@ -122,16 +122,57 @@ def test_bias_ema_tracks_err3_and_lands_at_obs_69_72(pol):
     cmd = np.zeros(3, dtype=np.float32)
     err3 = np.array([-0.1, 0.2, -0.3], dtype=np.float32)   # cmd - measured
 
+    # Tick 0 is the reset frame and carries ZERO: the sim's first observation of an
+    # episode is taken before _get_rewards (which owns the update) has ever run, so a
+    # board that updated on tick 0 would sit one accumulation ahead of training for the
+    # whole episode. Verified numerically against a sim rollout -- skipping it moved
+    # bias_ema from 4.9e-3 to 1.1e-6 (deploy/check_obs_assembly.py).
     expected = np.zeros(3, dtype=np.float32)
-    for _ in range(4):
+    for tick in range(4):
         obs = pol._assemble_obs(proprio, cmd)
-        expected = BIAS_EMA_ALPHA * expected + (1.0 - BIAS_EMA_ALPHA) * err3
+        if tick > 0:
+            expected = BIAS_EMA_ALPHA * expected + (1.0 - BIAS_EMA_ALPHA) * err3
         assert obs.shape[0] == POLICY_OBS_DIM
         np.testing.assert_allclose(obs[69:72], expected, atol=1e-6)
+        if tick == 0:
+            np.testing.assert_allclose(
+                obs[69:72], np.zeros(3), atol=0.0,
+                err_msg="reset frame must carry zero bias_ema, not the first update")
     assert np.abs(expected).max() > 0.0, "bias_ema stayed at zero -- update is dead"
 
     pol.reset()
     np.testing.assert_allclose(pol._bias_ema, np.zeros(3), atol=0.0)
+
+
+def test_history_is_never_same_tick_fresh(pol):
+    """A feature derived from tick k must not appear in tick k's own observation.
+
+    The sim records history in _pre_physics_step (albc_env.py:751), so the entry built
+    from state s first reaches the policy one control step later. Appending before
+    assembly instead -- which is what this board did until the phase fix -- feeds a
+    history 20 ms fresher than anything training produced. act_hist is the sharpest
+    probe: it is the stored prev_action verbatim, so a same-tick leak shows up exactly.
+    """
+    from np_policy import HIST_STRIDE
+    pol.reset()
+    proprio = np.zeros(20, dtype=np.float32)
+    proprio[10] = np.pi / 2.0
+    cmd = np.zeros(3, dtype=np.float32)
+
+    # A marker action the ring buffer can only be carrying if it recorded this tick.
+    marker = np.full(8, 0.777, dtype=np.float32)
+    for tick in range(1, HIST_STRIDE + 1):
+        pol._prev_action = marker.copy() if tick == HIST_STRIDE else np.zeros(8, np.float32)
+        obs = pol._assemble_obs(proprio, cmd)
+        assert not np.any(np.isclose(obs[50:66], 0.777)), (
+            "tick %d observation already carries this tick's own action -- history is "
+            "one control step ahead of the sim" % tick)
+
+    # ...and it must be visible on the very next tick, otherwise the append was lost.
+    pol._prev_action = np.zeros(8, dtype=np.float32)
+    obs = pol._assemble_obs(proprio, cmd)
+    assert np.any(np.isclose(obs[50:66], 0.777)), (
+        "recorded feature never surfaced -- stride append is dead")
 
 
 if __name__ == "__main__":
