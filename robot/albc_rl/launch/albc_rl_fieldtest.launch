@@ -25,21 +25,26 @@
   <arg name="use_board_rates"     default="false" />
   <arg name="thruster_scale"      default="0.0" />
   <arg name="thruster_max_s"      default="0.0" />
-  <arg name="imu_yaw_offset_deg"  default="45.0" />
+  <arg name="imu_yaw_offset_deg"  default="-78.0" />
   <arg name="sensor_timeout_s"    default="0.2" />
   <arg name="joint_timeout_s"     default="0.5" />
-  <!-- Channel PERMUTATION [fw m0..m5], value = SIM action index. IDENTITY is
-       correct: the sim already reorders its TAM columns to firmware ESC order
-       (_reorder_columns(_BASE_ALLOCATION_MATRIX, _ESC_CHANNEL_ORDER), envs/main/
-       config.py), so action[2+j] is already meant for firmware channel mj. The
-       deployed teacher run's params/env.yaml records the LIVE Fz row as
-       (1,0,0,1,0,0): vertical at columns 0 and 3, matching the wiring.
-       The former default [4,0,1,5,2,3] applied that permutation a SECOND time
-       and routed the m4/m5 horizontal commands into the m0/m3 vertical motors
-       (uncommanded dive). It slipped past the mixer's axis assert because that
-       assert compared against pre-reorder indices. Fixed 2026-08-11; verify the
-       startup log prints order(fw<-sim)=[0, 1, 2, 3, 4, 5] before any thrust. -->
-  <arg name="thruster_order"      default="[0, 1, 2, 3, 4, 5]" />
+  <!-- Channel PERMUTATION [fw m0..m5], value = SIM action index.
+       MEASURED 2026-08-11 (dry, one channel at a time via b1_channel_probe): every
+       firmware channel was driven and the spinning propeller located on a clock
+       face with the gripper at 12. Result, fw channel to clock position:
+         m0=3h (vertical), m1=1.5h, m2=4.5h, m3=9h (vertical, DEAD), m4=7.5h, m5=10.5h
+       The sim side comes from actuators.xacro, which places T0..T3 at the four
+       diagonals and T4/T5 on +-x at 0.1445 m; those coordinates reproduce the TAM's
+       Mz=+-0.144 and My=+-0.145 to four decimals, so the sim geometry is exact.
+       With +x=3h and +y=12h (gripper), the LIVE columns sit at:
+         col0=T4 9h, col1=T1 10.5h, col2=T3 1.5h, col3=T5 3h, col4=T2 4.5h, col5=T0 7.5h
+       Matching by physical position gives [3, 2, 4, 0, 5, 1]. The previous identity
+       default was 90 deg out on all four horizontals and swapped the two verticals.
+       (Identity itself replaced [4,0,1,5,2,3] earlier the same day, which had applied
+       the sim's own column reorder a SECOND time and routed horizontal commands into
+       the vertical motors.) Verify the startup log prints
+       order(fw from sim)=[3, 2, 4, 0, 5, 1] before any thrust. -->
+  <arg name="thruster_order"      default="[3, 2, 4, 0, 5, 1]" />
   <!-- B1 per-OUTPUT-channel sign table [m0..m5], MEASURED in a restrained tank
        test (indexed by FIRMWARE channel, NOT sim channel, so it stays valid if
        thruster_order is edited). Identity (+1) until measured; keep

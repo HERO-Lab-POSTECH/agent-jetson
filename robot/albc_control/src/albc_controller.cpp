@@ -172,7 +172,9 @@ int main(int argc, char **argv) {
     ik.setConfig(ik_learning_rate, ik_lambda_base, ik_num_iterations);
 
     double imu_yaw_offset_deg;
-    nh.param<double>("imu_yaw_offset", imu_yaw_offset_deg, 45.0);
+    // -78.0 measured 2026-08-11 (was 45.0, a 122.9 deg frame error). Rationale
+    // and the four-tilt solve are in config/albc_controller.yaml next to the value.
+    nh.param<double>("imu_yaw_offset", imu_yaw_offset_deg, -78.0);
     imu_proc.setOffset(DEG2RAD(imu_yaw_offset_deg));
 
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 90.0);

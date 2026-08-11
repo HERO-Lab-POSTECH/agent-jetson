@@ -76,16 +76,29 @@ FW_HORZ_CH = (1, 2, 4, 5)
 SIM_VERT = frozenset((0, 3))
 SIM_HORZ = frozenset((1, 2, 4, 5))
 
-# Default order is IDENTITY, because sim already reordered to firmware channels.
-# The old [4,0,1,5,2,3] applied that same permutation a SECOND time, routing the
-# m4/m5 horizontal commands into the m0/m3 vertical motors -- an uncommanded dive
-# that the axis assert below could NOT catch while SIM_VERT was the stale {4,5},
-# and which simultaneously made this correct identity order raise ROSInitException.
-# Harmless until 2026-08-11 only because thruster_scale defaulted to 0.0; the
-# recorded field-test bags (fieldtest_2026-07-06-*) carry thruster_pwm == 0
-# throughout, so no run ever exercised the bad routing.
+# Default order MEASURED 2026-08-11 (dry, one channel at a time via
+# b1_channel_probe, gripper at 12 o'clock on the observer's clock face):
+#     m0 = 3h vertical    m1 = 1.5h    m2 = 4.5h
+#     m3 = 9h vertical    m4 = 7.5h    m5 = 10.5h        (m3's motor is DEAD)
+# Sim side from actuators.xacro: T0..T3 at the four diagonals (+-0.102, +-0.102),
+# T4/T5 on +-x at 0.1445 m. Those coordinates reproduce the TAM's Mz=+-0.144 and
+# My=+-0.145 to four decimals, so the sim geometry is exact, and with +x=3h,
+# +y=12h (agent.urdf puts the gripper at +y) the LIVE columns land at
+#     col0=T4 9h   col1=T1 10.5h   col2=T3 1.5h
+#     col3=T5 3h   col4=T2 4.5h    col5=T0 7.5h
+# Matching fw channel to live column BY PHYSICAL POSITION gives the order below.
+#
+# Two earlier defaults were both wrong. [4,0,1,5,2,3] applied the sim's own column
+# reorder a SECOND time and routed horizontal commands into the vertical motors (an
+# uncommanded dive the axis assert could not catch while SIM_VERT was the stale
+# {4,5}). Identity, which replaced it earlier on 2026-08-11, assumed the sim-side
+# _ESC_CHANNEL_ORDER already matched the wiring; the dry probe showed all four
+# horizontals 90 deg out and the two verticals swapped. Neither was ever exercised
+# in the water: thruster_scale defaulted to 0.0 and the recorded field-test bags
+# (fieldtest_2026-07-06-*) carry thruster_pwm == 0 throughout.
+#
 # Per-channel SIGNS remain placeholders until the B1 tank measurement.
-DEFAULT_ORDER = [0, 1, 2, 3, 4, 5]  # index = fw channel j, value = sim source
+DEFAULT_ORDER = [3, 2, 4, 0, 5, 1]  # index = fw channel j, value = sim source
 
 
 class ThrusterMixer(object):

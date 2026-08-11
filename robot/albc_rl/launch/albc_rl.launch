@@ -8,7 +8,7 @@
   <arg name="use_board_rates"     default="false" />  <!-- true=trust /albc_status angvel -->
   <arg name="thruster_scale"      default="0.0" />    <!-- 0.0=joint-only surface test, 1.0=live -->
   <arg name="thruster_max_s"      default="0.0" />    <!-- >0 => thrusters latch to 0 after N sec -->
-  <arg name="imu_yaw_offset_deg"  default="45.0" />   <!-- IMU mounting yaw offset (albc_controller.yaml) -->
+  <arg name="imu_yaw_offset_deg"  default="-78.0" /> <!-- MEASURED 2026-08-11; was 45.0 (123 deg frame error). albc_controller.yaml carries the solve -->
   <arg name="sensor_timeout_s"    default="0.2" />    <!-- IMU staleness gate -->
   <arg name="joint_timeout_s"     default="0.5" />    <!-- /albc/joint_states staleness gate -->
 

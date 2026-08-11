@@ -97,8 +97,12 @@ def rotate_imu(ROLL, PITCH, YAW, offset_rad):
         out_pitch = -s*raw_roll + c*raw_pitch
         out_yaw   =  YAW               (passed through, no rotation)
 
-    offset_rad is the IMU mounting yaw offset in RADIANS (board default 45 deg,
-    albc_controller.yaml imu_yaw_offset).
+    offset_rad is the IMU mounting yaw offset in RADIANS (board default -78 deg,
+    albc_controller.yaml imu_yaw_offset). It was 45 deg until 2026-08-11, when four
+    hand-held tilts solved against the sim body frame gave -77.93 +- 4.8 -- a 123 deg
+    error, so the policy had been fed roll/pitch rotated by 123 deg (pitch arriving
+    largely as roll). Only the VALUE moved; the sign conventions above are unchanged
+    and test_build_proprio.py still pins them.
     """
     raw_roll = ROLL
     raw_pitch = -(PITCH)

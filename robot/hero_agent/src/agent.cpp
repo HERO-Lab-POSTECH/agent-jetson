@@ -186,7 +186,9 @@ int main(int argc, char** argv)
 
     // Load IMU yaw offset (same parameter as albc_controller)
     double imu_yaw_offset_deg;
-    nh.param<double>("/albc_controller/imu_yaw_offset", imu_yaw_offset_deg, 45.0);
+    // -78.0 measured 2026-08-11 (was 45.0, a 123 deg frame error); the live value
+    // still comes from albc_control/config/albc_controller.yaml, which holds the solve.
+    nh.param<double>("/albc_controller/imu_yaw_offset", imu_yaw_offset_deg, -78.0);
     state_monitor.setImuOffset(imu_yaw_offset_deg * M_PI / 180.0);
 
     signal(SIGINT, handle_signal);

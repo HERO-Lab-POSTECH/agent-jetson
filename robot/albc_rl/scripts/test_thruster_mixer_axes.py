@@ -28,6 +28,7 @@ MIXER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thruster_mixer
 
 IDENTITY = [0, 1, 2, 3, 4, 5]
 DOUBLE_PERMUTED = [4, 0, 1, 5, 2, 3]  # the pre-2026-08-11 dive default
+MEASURED = [3, 2, 4, 0, 5, 1]  # dry channel probe, 2026-08-11 evening
 
 
 def _constants():
@@ -68,11 +69,19 @@ def test_sim_axis_sets_are_live_tam_indices():
     assert not (c["SIM_VERT"] & c["SIM_HORZ"])
 
 
-def test_identity_is_the_default_and_is_accepted():
-    """Sim already reordered to firmware channels, so the mixer must pass through."""
+def test_measured_order_is_the_default_and_is_accepted():
+    """The default must be the 2026-08-11 dry channel probe, not identity.
+
+    Identity assumed the sim-side _ESC_CHANNEL_ORDER already matched the wiring.
+    Driving each firmware channel alone and locating the spinning propeller showed
+    all four horizontals 90 deg out and the two verticals swapped, so the mixer has
+    real work to do. Identity stays axis-legal (it never crosses the split) -- it is
+    just wrong, which is exactly why it needs pinning here rather than in the assert.
+    """
     c = _constants()
-    assert c["DEFAULT_ORDER"] == IDENTITY
-    assert _accepts(c, IDENTITY)
+    assert c["DEFAULT_ORDER"] == MEASURED
+    assert _accepts(c, MEASURED)
+    assert _accepts(c, IDENTITY), "identity is axis-legal; only the default changed"
 
 
 def test_double_permutation_is_refused():

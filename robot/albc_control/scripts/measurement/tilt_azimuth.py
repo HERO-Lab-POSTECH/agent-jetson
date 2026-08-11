@@ -290,7 +290,7 @@ def main():
     m.add_argument("--label", required=True,
                    help="which physical side is UP, named against the gripper "
                         "(e.g. gripper-up, gripper-down, left-up, right-up)")
-    m.add_argument("--offset-deg", type=float, default=45.0,
+    m.add_argument("--offset-deg", type=float, default=-78.0,
                    help="IMU mounting yaw offset (albc_controller.yaml imu_yaw_offset)")
     m.add_argument("--n", type=int, default=60,
                    help="samples to average (~2.7 s at 22.5 Hz -- a comfortable hold)")

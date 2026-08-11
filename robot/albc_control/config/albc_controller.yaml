@@ -21,8 +21,16 @@ pid_pitch:
 # Gain multiplier
 gain_mult: 3.0
 
-# IMU mounting yaw offset (degrees, FRD convention)
-imu_yaw_offset: 45.0
+# IMU mounting yaw offset (degrees, FRD convention).
+# MEASURED 2026-08-11: -78.0, not the long-standing 45.0 (a 122.9 deg error).
+# Four hand-held tilts (12/3/6/9 o'clock, gripper at 12) solved numerically against
+# the sim body frame give -77.93 +- 4.8 deg. The sim frame is pinned by three
+# independent facts: agent.urdf puts the gripper at +y (0, 0.0881, -0.185); the
+# vertical thrusters sit on +-x (Mx=0, My=+-0.145) and physically at 3/9 o'clock;
+# the Fy=+0.707 pair (T1,T3) is the 10.5/1.5 o'clock pair that pushes toward 12.
+# So +x = 3 o'clock, +y = 12 o'clock, and at 45.0 the policy was fed roll/pitch
+# rotated 123 deg -- pitch arriving mostly as roll.
+imu_yaw_offset: -78.0
 
 # Inverse kinematics
 ik:
