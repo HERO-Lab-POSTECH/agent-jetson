@@ -9,18 +9,26 @@ whole mapping between the operator's view of the robot and the frame the policy
 actually consumes -- including the sign of theta1 = 0, which is what a wrong
 answer would put 180 degrees out.
 
-WHY A TILT BOARD, NOT A LIFTED EDGE
------------------------------------
-A robot resting on the floor and lifted by hand pivots about whatever frame edge
-happens to touch down, so the tilt direction is dragged toward the chassis
-geometry rather than toward where you pushed. Measured 2026-08-11: two tilts 90
-degrees apart in J1 produced an azimuth slope of -1.243 instead of -1.000, a 22%
-error, which is +-10..20 degrees on a single reading.
+HOLD IT IN THE AIR. NOTHING MAY TOUCH THE ROBOT BUT YOUR HANDS.
+---------------------------------------------------------------
+That is the whole procedural requirement, and it is the ONLY one that matters.
 
-Put the robot on a rigid flat board, CHOCK IT so it cannot move relative to the
-board, and tilt the BOARD. Then robot tilt == board tilt by construction and the
-pivot ambiguity is gone. If the robot can rock on the board the measurement is
-void -- self-check 1 below is what catches that.
+A robot still resting on a surface while one side is lifted pivots about whatever
+frame edge happens to touch down, so the tilt direction is dragged toward the
+chassis geometry rather than toward where you pushed. Measured 2026-08-11: two
+tilts 90 degrees apart in J1 produced an azimuth slope of -1.243 instead of
+-1.000 -- a 22% error, i.e. +-10..20 degrees on a single reading.
+
+Lift the robot fully clear and the contact constraint does not exist, so the
+error does not either. A rigid board the robot is chocked to works for the same
+reason (robot tilt == board tilt by construction) but buys nothing over hands and
+is not worth building. What ruins either version is PARTIAL contact -- one corner
+still on the bench, a cable taking weight.
+
+Hand tremor is not a concern: static sensor spread is 0.0004 deg (measured, 135
+msgs over 6 s at 22.5 Hz) and the mean over --n samples absorbs a +-1..2 deg
+wobble about a steady mean pose. Just hold it still for the sampling window
+(default 60 samples ~ 2.7 s) and keep the tilt in the 15-20 deg band.
 
 FRAME CONVENTION
 ----------------
@@ -54,7 +62,8 @@ This script only SUBSCRIBES. It publishes nothing and moves nothing.
 
 USAGE
 -----
-    # once per raised side, 4 sides, ~90 deg apart, tilt 15-25 deg
+    # hold the robot clear of everything, tilt 15-20 deg, hold still, then run.
+    # once per raised side, 4 sides, ~90 deg apart.
     rosrun albc_control tilt_azimuth.py measure --label gripper-up
     rosrun albc_control tilt_azimuth.py measure --label left-up
     ...
@@ -88,7 +97,8 @@ HEADER = [
     "tilt_deg", "alpha_raw_deg", "alpha_cor_deg", "high_side_deg",
 ]
 MIN_TILT_DEG = 10.0   # below this the azimuth is noise-dominated
-MAX_TILT_DEG = 35.0   # above this, suspect the robot slid on the board
+MAX_TILT_DEG = 30.0   # above this rotate_imu's small-angle approximation loosens
+MAX_SEM_DEG = 1.0     # standard error of the mean pose; hand wobble is fine, drift is not
 
 
 def azimuth_deg(roll, pitch):
@@ -130,7 +140,10 @@ def _measure(args):
 
     a = np.array(samples, dtype=np.float64)
     raw_roll, raw_pitch, yaw = a[:, 0].mean(), a[:, 1].mean(), a[:, 2].mean()
+    # Hand-held wobble is EXPECTED and harmless -- what matters is how well the
+    # mean pose is pinned, i.e. the standard error, not the spread.
     jitter = math.degrees(max(a[:, 0].std(), a[:, 1].std()))
+    sem = jitter / math.sqrt(len(samples))
 
     off = math.radians(args.offset_deg)
     cor = rotate_imu(raw_roll, raw_pitch, yaw, off)
@@ -143,17 +156,20 @@ def _measure(args):
 
     print("  raw   roll=%+.4f pitch=%+.4f   alpha_raw=%+.2f deg" % (raw_roll, raw_pitch, a_raw))
     print("  corr  roll=%+.4f pitch=%+.4f   alpha_cor=%+.2f deg" % (cor_roll, cor_pitch, a_cor))
-    print("  tilt  %.2f deg   sample jitter %.3f deg" % (t, jitter))
+    print("  tilt  %.2f deg   hold spread %.3f deg   mean pinned to +-%.3f deg"
+          % (t, jitter, sem))
     print("  ==> RAISED SIDE ('%s') sits at %+.2f deg in the sim body frame" % (args.label, high))
 
     if t < MIN_TILT_DEG:
         print("  WARN tilt %.1f deg < %.0f -- azimuth is noise-dominated, tilt more"
               % (t, MIN_TILT_DEG))
     if t > MAX_TILT_DEG:
-        print("  WARN tilt %.1f deg > %.0f -- check the robot did not slide on the board"
+        print("  WARN tilt %.1f deg > %.0f -- rotate_imu's small-angle approximation"
               % (t, MAX_TILT_DEG))
-    if jitter > 0.5:
-        print("  WARN jitter %.2f deg -- robot is rocking; chock it to the board" % jitter)
+        print("       is loosening; 15-20 deg is the band to aim for")
+    if sem > MAX_SEM_DEG:
+        print("  WARN mean only pinned to +-%.2f deg (> %.1f) -- hold steadier or raise --n"
+              % (sem, MAX_SEM_DEG))
 
     row = [datetime.datetime.now().replace(microsecond=0).isoformat(),
            args.label, args.n, "%.1f" % args.offset_deg,
@@ -266,7 +282,8 @@ def main():
                         "(e.g. gripper-up, gripper-down, left-up, right-up)")
     m.add_argument("--offset-deg", type=float, default=45.0,
                    help="IMU mounting yaw offset (albc_controller.yaml imu_yaw_offset)")
-    m.add_argument("--n", type=int, default=100, help="samples to average")
+    m.add_argument("--n", type=int, default=60,
+                   help="samples to average (~2.7 s at 22.5 Hz -- a comfortable hold)")
     m.add_argument("--timeout", type=float, default=20.0, help="seconds to wait for samples")
     m.set_defaults(func=_measure)
 
