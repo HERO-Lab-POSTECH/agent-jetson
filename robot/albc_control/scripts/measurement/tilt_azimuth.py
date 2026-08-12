@@ -36,8 +36,16 @@ World-up expressed in the body frame is
     u_b = (-sin(pitch), sin(roll)*cos(pitch), cos(roll)*cos(pitch))
 so its horizontal part points at
     alpha = atan2(sin(roll)*cos(pitch), -sin(pitch))
-For a nose-up pitch (>0) that gives alpha = 180 deg, i.e. alpha points at the LOW
-side. The raised side is therefore  alpha + 180.
+In this FLU right-handed frame a POSITIVE pitch is nose-DOWN (a rotation about +y
+carries +x toward -z), so pitch>0 gives alpha = 180 deg and 180 deg is the side
+that went UP -- the tail. **alpha ALREADY points at the raised side.**
+
+FIXED 2026-08-13: this docstring used to say pitch>0 was nose-UP, and the code
+therefore added another 180. That inversion is what produced imu_yaw_offset
+= -78.0, itself 180 deg from the correct +102.0. Verified against measured data
+before the fix: 2026-08-12 dry, 3-o'clock side held DOWN gave cor_pitch = +40.8,
+so the raised side is 9 o'clock = 180 deg in the sim body frame (+x = 3 o'clock),
+and atan2(0, -sin(40.8)) = 180 deg. Equal -- no extra offset belongs here.
 
 The correction is NOT re-derived here: rotate_imu is imported from build_proprio,
 which is itself pinned to the C++ oracle imu_rotation.h. There are already three
@@ -90,7 +98,16 @@ if _RL_SCRIPTS not in sys.path:
     sys.path.insert(0, _RL_SCRIPTS)
 from build_proprio import rotate_imu  # noqa: E402
 
-CSV_PATH = os.path.expanduser("~/albc_diag/tilt_azimuth.csv")
+# J1 Homing Offset (EEPROM addr 20) the `check` suggestions are measured against.
+# CONFIRMED 2026-08-12 by two link1 points 90 deg apart (residual 0.3 deg).
+# Dead values, do not resurrect: -1029, -2908, -2021.
+J1_HOMING_OFFSET = -1509
+
+# v2 because `high_side_deg` changed meaning on 2026-08-13 (the spurious +180 was
+# removed). Rows written before that sit in the v1 file under the OLD convention;
+# mixing the two in one file would silently corrupt `check`. v1 is left in place.
+CSV_PATH = os.path.expanduser("~/albc_diag/tilt_azimuth_v2.csv")
+CSV_PATH_V1 = os.path.expanduser("~/albc_diag/tilt_azimuth.csv")
 HEADER = [
     "ts_iso", "label", "n", "offset_deg",
     "raw_roll", "raw_pitch", "cor_roll", "cor_pitch",
@@ -152,7 +169,9 @@ def _measure(args):
     t = tilt_deg(cor_roll, cor_pitch)
     a_raw = azimuth_deg(raw_roll, raw_pitch)
     a_cor = azimuth_deg(cor_roll, cor_pitch)
-    high = wrap180(a_cor + 180.0)
+    # alpha ALREADY points at the raised side -- see FRAME CONVENTION. The old
+    # `+ 180.0` here is the defect that produced imu_yaw_offset = -78.0.
+    high = wrap180(a_cor)
 
     print("  raw   roll=%+.4f pitch=%+.4f   alpha_raw=%+.2f deg" % (raw_roll, raw_pitch, a_raw))
     print("  corr  roll=%+.4f pitch=%+.4f   alpha_cor=%+.2f deg" % (cor_roll, cor_pitch, a_cor))
@@ -272,14 +291,39 @@ def _check(args):
         if abs(delta) > args.delta_tol:
             print("  ACTION |delta| = %.1f deg > %.1f: absorb it into J1 Homing Offset."
                   % (abs(delta), args.delta_tol))
-            print("         delta_tick = %+.0f  (2048 tick = 180 deg), new offset = -1029 %+.0f"
-                  % (delta / 180.0 * 2048.0, delta / 180.0 * 2048.0))
+            print("         delta_tick = %+.0f  (2048 tick = 180 deg), new offset = %d %+.0f"
+                  % (delta / 180.0 * 2048.0, J1_HOMING_OFFSET, delta / 180.0 * 2048.0))
         else:
-            print("  ACTION none: |delta| = %.1f deg <= %.1f, J1 offset -1029 stands."
-                  % (abs(delta), args.delta_tol))
+            print("  ACTION none: |delta| = %.1f deg <= %.1f, J1 offset %d stands."
+                  % (abs(delta), args.delta_tol, J1_HOMING_OFFSET))
 
     print("\n%s" % ("ALL STRUCTURAL CHECKS PASS" if ok else "SOME CHECKS FAILED -- see above"))
     return 0 if ok else 1
+
+
+def _selftest(args):
+    """Pin the azimuth convention against measured data. No robot, no CSV."""
+    # 2026-08-12 dry: 3-o'clock side held DOWN gave cor_pitch = +40.8 deg, roll ~ 0.
+    # In the sim body frame +x = 3 o'clock, so the side that went UP is 9 o'clock
+    # = 180 deg. The raised side must come out at 180, not at 0.
+    high = wrap180(azimuth_deg(0.0, math.radians(40.8)))
+    assert abs(wrap180(high - 180.0)) < 1.0, \
+        "raised side %+.1f deg, expected 180 -- the +180 defect is back" % high
+
+    # Mirror case: 9-o'clock side down (pitch negative) must raise 3 o'clock = 0 deg.
+    high = wrap180(azimuth_deg(0.0, math.radians(-40.8)))
+    assert abs(wrap180(high)) < 1.0, \
+        "raised side %+.1f deg, expected 0" % high
+
+    # Roll-only: positive roll raises +y = 12 o'clock = +90 deg.
+    high = wrap180(azimuth_deg(math.radians(20.0), 0.0))
+    assert abs(wrap180(high - 90.0)) < 1.0, \
+        "raised side %+.1f deg, expected +90" % high
+
+    assert J1_HOMING_OFFSET == -1509, "J1 offset drifted from the confirmed value"
+    print("selftest OK -- azimuth points at the RAISED side; J1 offset %d"
+          % J1_HOMING_OFFSET)
+    return 0
 
 
 def main():
@@ -307,6 +351,9 @@ def main():
     c.add_argument("--delta-tol", type=float, default=10.0,
                    help="|delta| above which J1 Homing Offset should absorb it")
     c.set_defaults(func=_check)
+
+    s = sub.add_parser("selftest", help="pin the azimuth convention (no robot needed)")
+    s.set_defaults(func=_selftest)
 
     args = p.parse_args()
     if not getattr(args, "cmd", None):
