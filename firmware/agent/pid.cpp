@@ -58,8 +58,13 @@ void PID_control_yaw()
   pwm_m4 = constrain(pwm_m4, ESC_MIN, ESC_MAX);
   pwm_m5 = constrain(pwm_m5, ESC_MIN, ESC_MAX);
 
-  esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
-  esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+  // 2026-08-12: esc_input() 2줄을 여기서 agent.ino 의 loop() 로 옮겼다.
+  // 이 함수가 유일한 전송자였기 때문에 DEPTH 단독 제어가 죽어 있었다 —
+  // PID_control_depth() 는 pwm_m0/pwm_m3 를 계산만 하고 자기 전송이 없어서,
+  // yaw 가 꺼져 있으면 깊이 출력이 계산된 뒤 그대로 버려졌고 yaw 가 켜져 있을
+  // 때만 이 프레임에 얹혀 나갔다(수조 실측 2026-08-12). 이제 두 PID 는 각자
+  // 자기 채널만 계산하고 전송은 호출부가 한다.
+  //   yaw -> m1, m2, m4, m5      depth -> m0, m3
 
   error_pid_yaw1 = error_pid_yaw;
 }

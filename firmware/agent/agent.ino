@@ -498,6 +498,46 @@ void loop()
 
   if (cont_yaw_on == 1)
     PID_control_yaw();
+
+  // --- Classic-path ESC frame (2026-08-12) -------------------------------
+  // The transmit used to sit at the end of PID_control_yaw(), which made DEPTH
+  // CONTROL ALONE A NO-OP: PID_control_depth() computes pwm_m0/pwm_m3 and has no
+  // transmit of its own, so with yaw OFF the depth output was calculated and
+  // thrown away, and with yaw ON it only shipped as a side effect of yaw's frame.
+  // Observed in the tank 2026-08-12 ("depth only works if yaw is on"). Now each
+  // controller owns exactly its own channels and the frame is sent from here, so
+  // either one works alone:   yaw -> m1,m2,m4,m5     depth -> m0,m3
+  //
+  // A controller that is OFF pins its own channels to NEUTRAL instead of latching
+  // whatever the other path last wrote (the ESCs hold the last PWM forever, so an
+  // unpinned channel would keep spinning after its controller was switched off).
+  //
+  // Deliberately NOT gated on rl_active: messageThruster() forces BOTH flags to 0
+  // on every RL message (B3, see :376-379), so this block is already unreachable
+  // while the RL mixer is streaming -- adding a second guard would be dead code.
+  //
+  // Position: kept HERE (before spinOnce) rather than after the depth state
+  // machine so the yaw path keeps its current latency. Depth values therefore
+  // ship one loop iteration after they are computed -- which is exactly what
+  // already happened whenever both controllers were on.
+  if (cont_yaw_on == 1 || cont_depth_on == 1)
+  {
+    if (cont_yaw_on == 0)
+    {
+      pwm_m1 = ESC_NEUTRAL;
+      pwm_m2 = ESC_NEUTRAL;
+      pwm_m4 = ESC_NEUTRAL;
+      pwm_m5 = ESC_NEUTRAL;
+    }
+    if (cont_depth_on == 0)
+    {
+      pwm_m0 = ESC_NEUTRAL;
+      pwm_m3 = ESC_NEUTRAL;
+    }
+    esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
+    esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+  }
+
   nh.spinOnce();
 
   // B2 — RL thruster watchdog: once armed, if no RL msg within RL_TIMEOUT_MS the
