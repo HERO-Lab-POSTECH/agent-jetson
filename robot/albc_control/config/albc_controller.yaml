@@ -30,7 +30,19 @@ gain_mult: 3.0
 # the Fy=+0.707 pair (T1,T3) is the 10.5/1.5 o'clock pair that pushes toward 12.
 # So +x = 3 o'clock, +y = 12 o'clock, and at 45.0 the policy was fed roll/pitch
 # rotated 123 deg -- pitch arriving mostly as roll.
-imu_yaw_offset: -78.0
+#
+# CORRECTED 2026-08-12: +102.0, not -78.0. The 2026-08-11 solve above was right
+# about the 123 deg error and wrong by a further 180 deg, because its raised-side
+# labels came from tilt_azimuth.py's high_side_deg column, which is inverted
+# (azimuth_deg already points at the raised side; the +180 there flips it). Three
+# independent lines fix it at +102.0: the 0d live dry test (3 o'clock down now
+# reads pitch +40.8 where -78.0 read -44.0, and the arm drives to the low side --
+# all four directions checked); the same 2026-08-11 tilts re-scored against the
+# IMU-independent J1 zero (theta1=0 lands at +0.44 deg = +x FRONT, vs -179.6 deg
+# at -78.0); and the inverted-column mechanism itself, which predicts exactly the
+# 180 deg gap observed. rotate_imu spins (roll, pitch) as a 2-vector, so +180 deg
+# negates both components and leaves yaw and GYRO_Z untouched.
+imu_yaw_offset: 102.0
 
 # Inverse kinematics
 ik:

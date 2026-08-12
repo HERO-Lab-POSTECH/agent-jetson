@@ -54,9 +54,9 @@ ROSPARAMS (all defaults are field-safe)
   ~control_hz         : 50
   ~use_board_rates    : false  (true => trust /albc_status angular vel [8:11];
                                 that topic is std_msgs/Float64MultiArray)
-  ~imu_yaw_offset_deg : -78.0  IMU mounting yaw offset (albc_controller.yaml).
-                                MEASURED 2026-08-11; was 45.0, a 123 deg error
-                                that fed the policy roll/pitch rotated by 123 deg.
+  ~imu_yaw_offset_deg : 102.0  IMU mounting yaw offset (albc_controller.yaml).
+                                CONFIRMED 2026-08-12. Was -78.0 (2026-08-11),
+                                itself 180 deg out; before that 45.0.
   ~sensor_timeout_s   : 0.2    IMU staleness gate: hold (no publish) + warn
   ~joint_timeout_s    : 0.5    /albc/joint_states staleness gate (driver = 10 Hz)
   ~thruster_scale     : 0.0    gain on the 6 thruster channels. FAIL-SAFE default:
@@ -113,7 +113,7 @@ class RLInferenceNode(object):
         self.hz = float(rospy.get_param("~control_hz", 50.0))
         self.use_board_rates = rospy.get_param("~use_board_rates", False)
         self.imu_yaw_offset = float(np.deg2rad(
-            float(rospy.get_param("~imu_yaw_offset_deg", -78.0))))
+            float(rospy.get_param("~imu_yaw_offset_deg", 102.0))))
         self._dyn_srv = Server(GyroOffsetConfig, self._on_reconfigure)
         self.sensor_timeout = float(rospy.get_param("~sensor_timeout_s", 0.2))
         self.joint_timeout = float(rospy.get_param("~joint_timeout_s", 0.5))

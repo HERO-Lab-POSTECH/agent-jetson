@@ -97,12 +97,16 @@ def rotate_imu(ROLL, PITCH, YAW, offset_rad):
         out_pitch = -s*raw_roll + c*raw_pitch
         out_yaw   =  YAW               (passed through, no rotation)
 
-    offset_rad is the IMU mounting yaw offset in RADIANS (board default -78 deg,
-    albc_controller.yaml imu_yaw_offset). It was 45 deg until 2026-08-11, when four
-    hand-held tilts solved against the sim body frame gave -77.93 +- 4.8 -- a 123 deg
-    error, so the policy had been fed roll/pitch rotated by 123 deg (pitch arriving
-    largely as roll). Only the VALUE moved; the sign conventions above are unchanged
-    and test_build_proprio.py still pins them.
+    offset_rad is the IMU mounting yaw offset in RADIANS (board default 102 deg,
+    albc_controller.yaml imu_yaw_offset). It was 45 deg until 2026-08-11, then -78 deg
+    until 2026-08-12. Both moves were the same error found twice: the 2026-08-11 solve
+    fixed a 123 deg rotation but landed 180 deg away, because its raised-side labels
+    came from tilt_azimuth.py's inverted high_side_deg column. The live dry test on
+    2026-08-12 settles it at +102 (all four tilt directions). Only the VALUE moved;
+    the sign conventions above are unchanged and test_build_proprio.py still pins
+    them -- note +180 deg on this offset negates out_roll and out_pitch together and
+    leaves out_yaw (and rotate_gyro's out_r) alone, which is why yaw tracking never
+    saw any of this.
     """
     raw_roll = ROLL
     raw_pitch = -(PITCH)

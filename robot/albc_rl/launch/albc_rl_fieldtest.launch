@@ -25,7 +25,7 @@
   <arg name="use_board_rates"     default="false" />
   <arg name="thruster_scale"      default="0.0" />
   <arg name="thruster_max_s"      default="0.0" />
-  <arg name="imu_yaw_offset_deg"  default="-78.0" />
+  <arg name="imu_yaw_offset_deg"  default="102.0" />
   <arg name="sensor_timeout_s"    default="0.2" />
   <arg name="joint_timeout_s"     default="0.5" />
   <!-- Channel PERMUTATION [fw m0..m5], value = SIM action index.

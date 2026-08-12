@@ -169,9 +169,10 @@ private:
     // IMU 캐시 (/hero_agent/sensors)
     float sensor_roll = 0.0f, sensor_pitch = 0.0f, sensor_yaw = 0.0f;
     float sensor_depth = 0.0f;
-    // -78.0 deg MEASURED 2026-08-11 (was 45.0, a 123 deg frame error). Overwritten
-    // at startup from /albc_controller/imu_yaw_offset; this is only the fallback.
-    double imu_yaw_offset_rad = -78.0 * M_PI / 180.0;
+    // 102.0 deg CONFIRMED 2026-08-12 (was -78.0, itself 180 deg out; before that
+    // 45.0). Overwritten at startup from /albc_controller/imu_yaw_offset; this is
+    // only the fallback.
+    double imu_yaw_offset_rad = 102.0 * M_PI / 180.0;
 
     // ALBC 캐시
     std::mutex albc_mutex;
