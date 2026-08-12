@@ -84,6 +84,10 @@
     <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
     <arg name="sensor_timeout_s"   value="$(arg sensor_timeout_s)" />
     <arg name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
+    <!-- this file owns the mixer (block 3 below, with CLI-overridable order/sign/
+         deadband). Letting the child launch its own too would put two nodes named
+         thruster_mixer on the graph and ROS would kill one of them without saying so. -->
+    <arg name="launch_mixer"       value="false" />
   </include>
 
   <!-- 3) RL thruster mixer: /albc/thruster_cmd (already scaled by the RL node)

@@ -11,6 +11,10 @@
   <arg name="imu_yaw_offset_deg"  default="102.0" /> <!-- CONFIRMED 2026-08-12 (was -78.0, itself 180 deg out; before that 45.0). albc_controller.yaml carries the solve -->
   <arg name="sensor_timeout_s"    default="0.2" />    <!-- IMU staleness gate -->
   <arg name="joint_timeout_s"     default="0.5" />    <!-- /albc/joint_states staleness gate -->
+  <arg name="launch_mixer"        default="true" />   <!-- false when the PARENT launch owns
+       the mixer. albc_rl_fieldtest.launch includes this file AND runs its own mixer with
+       CLI-overridable order/sign/deadband; two nodes named thruster_mixer would collide and
+       ROS would silently kill one of them. -->
 
 
   <node pkg="albc_rl" name="rl_inference_node" type="rl_inference_node.py" output="screen">
@@ -33,5 +37,7 @@
        come from thruster_mixer.py's own defaults, which test_deploy_constants.py pins
        against deployed_tam.json. A second copy of those constants in a launch file is a
        second thing to keep in sync, and that is the drift this repo keeps paying for. -->
-  <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py" output="screen" />
+  <group if="$(arg launch_mixer)">
+    <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py" output="screen" />
+  </group>
 </launch>

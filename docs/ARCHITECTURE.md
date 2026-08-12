@@ -285,8 +285,8 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 | `numpy_port/npforward.py` | torch-free 순전파: Conv1d, GRU, LayerNorm | 176 |
 | `numpy_port/test_*.py` | 테스트: golden vector 검증 | 180 |
 | `cfg/GyroOffset.cfg` | dynamic_reconfigure: IMU yaw offset 튜닝 | 10 |
-| `launch/albc_rl.launch` | 독립 실행 노드 | 26 |
-| `launch/albc_rl_fieldtest.launch` | 필드 테스트 번들 (joint_driver + rosbag) | 54 |
+| `launch/albc_rl.launch` | 독립 실행 (정책 + 믹서) | 43 |
+| `launch/albc_rl_fieldtest.launch` | 필드 테스트 번들 (joint_driver + rosbag) | 110 |
 
 **공개 인터페이스**:
 
@@ -704,6 +704,13 @@ graph LR
   <param name="weights_dir" value="..."/>
   <param name="thruster_scale" value="0.0"/>  <!-- FAIL-SAFE -->
 </node>
+
+<!-- 믹서는 선택이 아니다. /albc/thruster_cmd 구독자가 이것뿐이라
+     빠지면 스러스터가 조용히 중립에 머문다. 부모 launch 가 자기 믹서를
+     가지면 launch_mixer:=false 로 끈다 (노드 이름 충돌 방지). -->
+<group if="$(arg launch_mixer)">
+  <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py"/>
+</group>
 ```
 
 **albc_rl_fieldtest.launch** (RL + 드라이버, rosbag 자동 기록):
@@ -889,8 +896,8 @@ robot/
 │   ├── cfg/
 │   │   └── GyroOffset.cfg              (10 LOC, dynamic_reconfigure)
 │   ├── launch/
-│   │   ├── albc_rl.launch              (26 LOC)
-│   │   └── albc_rl_fieldtest.launch    (54 LOC, + joint_driver + rosbag)
+│   │   ├── albc_rl.launch              (43 LOC, 정책 + 믹서)
+│   │   └── albc_rl_fieldtest.launch    (110 LOC, + joint_driver + rosbag)
 │   ├── CMakeLists.txt
 │   ├── package.xml                     (manifest v1.0.0, no CHANGELOG)
 │   └── (no CHANGELOG.md)

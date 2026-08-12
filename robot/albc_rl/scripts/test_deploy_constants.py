@@ -29,6 +29,7 @@ import json
 import math
 import os
 import re
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROBOT = os.path.normpath(os.path.join(HERE, "..", ".."))   # .../robot
@@ -187,6 +188,50 @@ def test_every_imu_yaw_offset_site_equals_the_yaml():
 def test_imu_yaw_offset_is_in_range():
     v = _offset_at(*OFFSET_SITES[0])
     assert -180.0 <= v <= 180.0, "outside the dynamic_reconfigure range: %s" % v
+
+
+LAUNCH_DIR = os.path.join(ROBOT, "albc_rl", "launch")
+
+
+def test_exactly_one_thruster_mixer_per_launch():
+    """No launch may start two nodes named thruster_mixer.
+
+    ROS does not error on a duplicate node name -- the later registration silently
+    unregisters the earlier one, so one mixer dies with nothing in the log that reads
+    like a fault. albc_rl.launch runs a mixer of its own (so running it standalone is
+    not the silent no-op it used to be) and albc_rl_fieldtest.launch includes that file
+    AND runs its own parameterised mixer, which is exactly the collision. The child's
+    mixer is therefore gated on launch_mixer, and any parent that owns a mixer must
+    pass launch_mixer=false. This test is the thing that notices when a new parent
+    forgets, since the symptom at runtime is a node quietly missing.
+    """
+    def mixers(root):
+        return [n for n in root.iter("node") if n.get("name") == "thruster_mixer"]
+
+    # the child's own mixer must stay gated, or the arg becomes decorative
+    child = ET.parse(os.path.join(LAUNCH_DIR, "albc_rl.launch")).getroot()
+    gated = [n for g in child.iter("group")
+             if "launch_mixer" in (g.get("if") or "") for n in mixers(g)]
+    assert len(mixers(child)) == len(gated) == 1, (
+        "albc_rl.launch's thruster_mixer must sit inside <group if=\"$(arg launch_mixer)\">")
+
+    bad = []
+    for fn in sorted(os.listdir(LAUNCH_DIR)):
+        if not fn.endswith(".launch") or fn == "albc_rl.launch":
+            continue
+        root = ET.parse(os.path.join(LAUNCH_DIR, fn)).getroot()
+        includes = [i for i in root.iter("include")
+                    if "albc_rl.launch" in (i.get("file") or "")]
+        if not includes or not mixers(root):
+            continue
+        for inc in includes:
+            passed = {a.get("name"): (a.get("value") or "").strip().lower()
+                      for a in inc.iter("arg")}
+            if passed.get("launch_mixer") != "false":
+                bad.append(fn)
+    assert not bad, (
+        "these launches own a thruster_mixer AND include albc_rl.launch without "
+        "launch_mixer:=false -> duplicate node name: %s" % ", ".join(bad))
 
 
 if __name__ == "__main__":
