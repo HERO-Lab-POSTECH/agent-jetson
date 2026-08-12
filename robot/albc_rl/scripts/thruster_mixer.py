@@ -30,10 +30,13 @@ WHAT THIS NODE OWNS (and, deliberately, what it does NOT):
         but a garbage/NaN upstream value must never reach the firmware mapping.
   * Float32MultiArray -> hero_agent_thruster_cmd conversion.
 
-  ORDER OF OPERATIONS (per output channel j): permute -> sign -> clamp.
-        out[j] = clamp( sign[j] * in[ order[j] ] )
-        permute picks the source, sign corrects that physical channel, clamp is
-        the last defensive gate.
+  ORDER OF OPERATIONS (per output channel j): permute -> sign -> deadband -> clamp.
+        out[j] = clamp( undeadband( sign[j] * in[ order[j] ] ) )
+        permute picks the source, sign corrects that physical channel, undeadband
+        inverts the ESC's dead zone (see _undeadband), clamp is the last defensive
+        gate. Deadband comes AFTER sign because the dead zone is a property of the
+        physical channel, so it must act on the value that channel will actually
+        receive -- inverting before the sign flip would push the wrong direction.
 
 WHAT THIS NODE MUST NOT DO:
   * apply thruster_scale -- rl_inference_node ALREADY scales (rl_inference_node.py
@@ -84,21 +87,67 @@ SIM_HORZ = frozenset((1, 2, 4, 5))
 # T4/T5 on +-x at 0.1445 m. Those coordinates reproduce the TAM's Mz=+-0.144 and
 # My=+-0.145 to four decimals, so the sim geometry is exact, and with +x=3h,
 # +y=12h (agent.urdf puts the gripper at +y) the LIVE columns land at
-#     col0=T4 9h   col1=T1 10.5h   col2=T3 1.5h
-#     col3=T5 3h   col4=T2 4.5h    col5=T0 7.5h
+#     col0=T4 9h    col1=T0 7.5h   col2=T1 10.5h
+#     col3=T5 3h    col4=T2 4.5h   col5=T3 1.5h
+# (col_k = T[_ESC_CHANNEL_ORDER[k]] with the tuple (4,0,1,5,2,3) -- recompute this
+#  block from the tuple, never from memory; a mis-recalled tuple is what produced
+#  the previous wrong default.)
 # Matching fw channel to live column BY PHYSICAL POSITION gives the order below.
 #
-# Two earlier defaults were both wrong. [4,0,1,5,2,3] applied the sim's own column
-# reorder a SECOND time and routed horizontal commands into the vertical motors (an
-# uncommanded dive the axis assert could not catch while SIM_VERT was the stale
-# {4,5}). Identity, which replaced it earlier on 2026-08-11, assumed the sim-side
-# _ESC_CHANNEL_ORDER already matched the wiring; the dry probe showed all four
-# horizontals 90 deg out and the two verticals swapped. Neither was ever exercised
-# in the water: thruster_scale defaulted to 0.0 and the recorded field-test bags
-# (fieldtest_2026-07-06-*) carry thruster_pwm == 0 throughout.
+# THREE earlier defaults were wrong; this is the fourth. [4,0,1,5,2,3] applied the
+# sim's own column reorder a SECOND time and routed horizontal commands into the
+# vertical motors (an uncommanded dive the axis assert could not catch while
+# SIM_VERT was the stale {4,5}). Identity assumed the sim-side _ESC_CHANNEL_ORDER
+# already matched the wiring. [3,2,4,0,5,1] (2026-08-11) had the right METHOD but
+# read _ESC_CHANNEL_ORDER as (4,1,3,5,2,0) -- a value that is not in the repo. The
+# live tuple is (4,0,1,5,2,3), introduced 2026-07-03 (constrained-albc 238932c) and
+# UNCHANGED since; every later config.py commit is DR/latency work. The deployed
+# teacher trained 2026-08-05, so that tuple is what the policy learned. Verified by
+# git log, not by reading the working tree -- the working tree cannot tell you what
+# a checkpoint was trained with.
+# None of the wrong orders was ever exercised in the water: thruster_scale defaults
+# to 0.0 and the field-test bags (fieldtest_2026-07-06-*) carry thruster_pwm == 0.
 #
-# Per-channel SIGNS remain placeholders until the B1 tank measurement.
-DEFAULT_ORDER = [3, 2, 4, 0, 5, 1]  # index = fw channel j, value = sim source
+# Per-channel SIGNS remain placeholders until the tank measurement. NOTE the tank
+# YAW test cannot validate this order: Mz = +0.144 for ALL FOUR horizontals, so any
+# permutation of them yaws identically. Only Fx/Fy (translation direction) separates
+# them, which is why the order is fixed from geometry and the water only confirms.
+DEFAULT_ORDER = [3, 5, 4, 0, 1, 2]  # index = fw channel j, value = sim source
+
+# ESC deadband, normalized to the action range, for the 2026-08-12 firmware.
+DEFAULT_DEADBAND = 0.15
+
+
+def undeadband(a, deadband):
+    """Map a policy action onto the ESC's LIVE range, skipping the deadband.
+
+    MEASURED 2026-08-12 (dry, one channel at a time): an ESC does not turn until
+    the pulse leaves 1450..1545 us, i.e. about +-48 us around neutral. At span 300
+    that is a normalized |a| < 0.15 producing NO thrust, while the policy learned a
+    linear plant through zero. Two channels with different span AND bias (m2
+    horizontal, m0 vertical) both broke away at exactly 1545 us -- that agreement
+    across two different mappings is what pins the number.
+
+    Inverse: to get the sim's thrust fraction t, command D + (1-D)*t, so a=0 -> 0
+    (exactly neutral, no creep) and a=+-1 -> +-1 (full authority preserved).
+    ponytail: assumes thrust ramps linearly straight out of the deadband; a real
+    ESC steps a little at breakaway. Measuring that step needs a thrust stand we do
+    not have -- revisit only if the tank shows a jump at low command.
+
+    PRESUPPOSES the 2026-08-12 firmware (all six channels span 300, bias 0). On the
+    OLD firmware the verticals sat at 1470 with span 150, so their deadband was
+    asymmetric (+0.50 / -0.13) and one scalar cannot express it -- run with
+    ~thruster_deadband:=0.0 until the board is reflashed.
+
+    Module-level and pure so it is testable without rospy (see
+    test_thruster_mixer_axes.py, which parses this file rather than importing it).
+    """
+    if abs(a) < 1e-3:
+        return 0.0
+    if deadband <= 0.0:
+        return a
+    s = 1.0 if a > 0.0 else -1.0
+    return s * (deadband + (1.0 - deadband) * abs(a))
 
 
 class ThrusterMixer(object):
@@ -117,6 +166,16 @@ class ThrusterMixer(object):
                           len(sign), NUM_THR)
             sign = [1] * NUM_THR
         self.sign = [1.0 if s >= 0 else -1.0 for s in sign]
+
+        # ESC deadband, normalized to the action range. See undeadband().
+        # 0.0 disables the compensation (use that on pre-2026-08-12 firmware).
+        self.deadband = float(rospy.get_param("~thruster_deadband", DEFAULT_DEADBAND))
+        if not (0.0 <= self.deadband < 0.9):
+            rospy.logwarn("~thruster_deadband %.3f out of [0,0.9) -- disabling",
+                          self.deadband)
+            self.deadband = 0.0
+        rospy.loginfo("deadband compensation: %.3f%s", self.deadband,
+                      "" if self.deadband > 0.0 else " (DISABLED)")
         if self.sign == [1.0] * NUM_THR:
             rospy.logwarn("THRUSTER SIGN TABLE IS IDENTITY (unmeasured) -- keep "
                           "thruster_scale tiny (0.05-0.1) until B1 sign check is done")
@@ -179,6 +238,7 @@ class ThrusterMixer(object):
             if math.isnan(a) or math.isinf(a):
                 a = 0.0
             a *= self.sign[j]                 # sign per PHYSICAL channel -- NO scale
+            a = undeadband(a, self.deadband)  # invert the ESC deadband (plant inverse)
             a = max(-1.0, min(1.0, a))        # defensive clamp to policy contract
             out.thrust[j] = a
         self._pub.publish(out)

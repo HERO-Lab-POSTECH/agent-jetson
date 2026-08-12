@@ -28,7 +28,12 @@ MIXER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thruster_mixer
 
 IDENTITY = [0, 1, 2, 3, 4, 5]
 DOUBLE_PERMUTED = [4, 0, 1, 5, 2, 3]  # the pre-2026-08-11 dive default
-MEASURED = [3, 2, 4, 0, 5, 1]  # dry channel probe, 2026-08-11 evening
+# Physical positions from the dry channel probe (2026-08-11 evening) matched to the
+# live sim columns, which come from _ESC_CHANNEL_ORDER = (4,0,1,5,2,3) -- in the repo
+# since 2026-07-03 and unchanged, so it is what the deployed teacher trained on.
+# The 2026-08-11 value [3,2,4,0,5,1] used a mis-recalled tuple (4,1,3,5,2,0).
+GEOMETRIC = [3, 5, 4, 0, 1, 2]
+MISRECALLED = [3, 2, 4, 0, 5, 1]  # superseded 2026-08-12; axis-legal but wrong sources
 
 
 def _constants():
@@ -69,8 +74,8 @@ def test_sim_axis_sets_are_live_tam_indices():
     assert not (c["SIM_VERT"] & c["SIM_HORZ"])
 
 
-def test_measured_order_is_the_default_and_is_accepted():
-    """The default must be the 2026-08-11 dry channel probe, not identity.
+def test_geometric_order_is_the_default_and_is_accepted():
+    """The default must be the geometry-derived order, not identity.
 
     Identity assumed the sim-side _ESC_CHANNEL_ORDER already matched the wiring.
     Driving each firmware channel alone and locating the spinning propeller showed
@@ -79,9 +84,75 @@ def test_measured_order_is_the_default_and_is_accepted():
     just wrong, which is exactly why it needs pinning here rather than in the assert.
     """
     c = _constants()
-    assert c["DEFAULT_ORDER"] == MEASURED
-    assert _accepts(c, MEASURED)
+    assert c["DEFAULT_ORDER"] == GEOMETRIC
+    assert _accepts(c, GEOMETRIC)
     assert _accepts(c, IDENTITY), "identity is axis-legal; only the default changed"
+
+
+def test_misrecalled_order_is_axis_legal_but_is_not_the_default():
+    """[3,2,4,0,5,1] passes the axis assert yet routes three horizontals wrongly.
+
+    This is the whole reason the default needs pinning by a test: the startup
+    assertion only guards the vertical/horizontal split, and this order keeps that
+    split intact (m0<-3, m3<-0). It differs from the correct one by a 3-cycle among
+    the horizontal sources, which in the water shows up as translation in the wrong
+    direction -- and NOT as a yaw error, because Mz is identical for all four
+    horizontals. Nothing downstream would have complained.
+    """
+    c = _constants()
+    assert _accepts(c, MISRECALLED), "it was axis-legal, which is why it survived"
+    assert c["DEFAULT_ORDER"] != MISRECALLED
+    moved = [j for j in range(6) if MISRECALLED[j] != GEOMETRIC[j]]
+    assert moved == [1, 4, 5], "only the three horizontal sources moved"
+
+
+def _undeadband_fn():
+    """Exec the shipped undeadband() alone, so the math under test is the real one.
+
+    thruster_mixer.py imports rospy at module scope, so it cannot be imported here.
+    Pulling just this one pure function out of the AST keeps the test honest: a
+    re-implementation would pass even if the shipped formula were wrong.
+    """
+    tree = ast.parse(open(MIXER).read())
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "undeadband":
+            ns = {}
+            try:                       # py3.8+ requires type_ignores; py2.7 rejects it
+                mod = ast.Module(body=[node], type_ignores=[])
+            except TypeError:
+                mod = ast.Module(body=[node])
+            exec(compile(mod, MIXER, "exec"), ns)
+            return ns["undeadband"]
+    raise AssertionError("undeadband() not found in thruster_mixer.py")
+
+
+def test_deadband_inverse_preserves_zero_and_full_scale():
+    """a=0 must stay exactly neutral and a=+-1 must keep full authority.
+
+    Zero is the load-bearing case: the whole reason for this compensation is that
+    the old firmware parked the verticals off-neutral and the ESC crept. A
+    compensation that pushed a=0 off zero would reintroduce exactly that.
+    """
+    f, D = _undeadband_fn(), 0.15
+    assert f(0.0, D) == 0.0
+    assert abs(f(1.0, D) - 1.0) < 1e-9
+    assert abs(f(-1.0, D) + 1.0) < 1e-9
+
+
+def test_deadband_inverse_lifts_small_commands_clear_of_the_dead_zone():
+    """Any non-trivial command must land strictly outside the measured dead zone."""
+    f, D = _undeadband_fn(), 0.15
+    for a in (0.01, 0.05, 0.1, 0.5, -0.01, -0.2):
+        out = f(a, D)
+        assert abs(out) > D, "|%.3f| -> |%.3f| still inside the dead zone" % (a, out)
+        assert (out > 0) == (a > 0), "sign must survive the inverse"
+
+
+def test_deadband_zero_is_a_passthrough():
+    """0.0 disables compensation -- the escape hatch for pre-reflash firmware."""
+    f = _undeadband_fn()
+    for a in (0.05, 0.5, -0.7, 1.0):
+        assert f(a, 0.0) == a
 
 
 def test_double_permutation_is_refused():

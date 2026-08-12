@@ -93,12 +93,19 @@ volatile int pwm_m5 = ESC_NEUTRAL, pid_pwm_m5;
 // PWM = ESC_NEUTRAL + action * SPAN, then constrain (BEFORE esc_input — the
 // uint16 esc_input param wraps a negative int to ~65000 otherwise, mirroring
 // the PID path's constrain-before-esc_input at pid.cpp:56-62).
-// calibration knob: SPAN·중립점은 실추력 측정 후 튜닝. 수평(m1/m2/m4/m5)은
-// full ±300, 수직(m0/m3)은 좁은 ±150 (DEPTH_PWM 트림 = 양성부력 의도) — sim이
-// 대칭 ±1을 학습했으므로 이 수직 축소는 sim-to-real 부채. 수조 under-actuate
-// 확인 후에만 확대할 것.
-static const int RL_PWM_SPAN_HORZ = 300; // m1,m2,m4,m5: 1500 +- 300 = ESC_MIN/MAX
-static const int RL_PWM_SPAN_VERT = 150; // m0,m3: 1500 +- 150 = DEPTH_PWM_MIN/MAX
+// calibration knob: SPAN·중립점은 실추력 측정 후 튜닝. 2026-08-12 부터 6채널이
+// 동일 SPAN·bias 0 이다 — sim 은 6개 스러스터에 같은 max_thrust(50.0)를 주는데
+// 펌웨어만 수직에 절반을 줬던 부채를 갚은 것. 이전 값(수직 ±150 + DEPTH_BIAS 30)
+// 이 만든 두 결함을 건식 실측으로 확인하고 제거했다:
+//   (1) 크리핑 — RL 명령 0 일 때 수직이 1470 에 앉는데 ESC 불감대 하단이 1450
+//       이라 여유가 20us. 전 채널 0 을 발행해도 m0 가 계속 움찔거렸다(실측).
+//       정책의 "추력 0"이 실기에선 0 이 아니었다 = 학습 분포에 없는 plant 편향.
+//   (2) 비대칭·권한 손실 — 중립 1470 기준 양은 a>=0.50, 음은 a<=-0.13 에서야
+//       불감대를 벗어나 양방향 권한의 절반이 죽었다.
+// ESC 불감대 실측(2026-08-12, 건식): 상단 1545 / 하단 약 1450, 반폭 약 48us.
+// span 300·bias 0 이면 정규화 불감대가 6채널 모두 0.15 로 같아져 믹서에서
+// 보상식 하나로 처리된다. 불감대 보상 자체는 thruster_mixer.py 가 소유한다.
+static const int RL_PWM_SPAN_HORZ = 300; // 전 채널: 1500 +- 300 = ESC_MIN/MAX
 // B2: inter-message watchdog. mixer 크래시/rosserial 끊김 시 firmware가 마지막
 // PWM을 영원히 latch하지 않게, RL 메시지가 이 시간(ms) 넘게 안 오면 전 채널
 // NEUTRAL. RL 콜백과 relay_on()이 last_rl_msg_ms를 갱신한다 — relay 토글 직후
@@ -345,14 +352,13 @@ ros::Subscriber<std_msgs::Int8> sub_command("/hero_agent/command",
 // RL thruster: map one action ch in [-1,1] to a constrained ESC PWM.
 // CONSTRAIN BEFORE esc_input — esc_input's uint16 param would wrap a negative
 // int (out-of-range action) to ~65000 and emit a garbage high-throttle byte.
-// Horizontal: lo/hi = ESC_MIN/ESC_MAX, bias 0. Vertical (m0/m3): lo/hi =
-// DEPTH_PWM_MIN/MAX and bias = DEPTH_BIAS (positive-buoyancy trim, pid.cpp:77-78).
-// The neutral is ESC_NEUTRAL-bias, so the constrain window is ALSO shifted by
-// -bias (lo-bias, hi-bias). Otherwise the window stays centred on ESC_NEUTRAL
-// while the command centres on ESC_NEUTRAL-bias → the low end clips and the high
-// end is unreachable, silently making the vertical authority ASYMMETRIC vs. the
-// symmetric ±1 the policy was trained on. Shifting the window keeps a=±1 mapping
-// to (ESC_NEUTRAL-bias)±span symmetrically (vertical: 1470±150 = [1320,1620]).
+// ⚠️ 2026-08-12 부터 **호출자 6개 전부 bias 0** 이다 (ESC_MIN/ESC_MAX, span 300).
+// 아래 bias 설명은 인자를 살려둔 이유이지 현재 쓰임이 아니다 — 수직이 bias 30 을
+// 쓰던 시절의 서술로 읽지 말 것. 왜 뺐는지는 RL_PWM_SPAN_HORZ 주석 참조.
+// bias != 0 을 다시 쓸 경우: 중립이 ESC_NEUTRAL-bias 가 되므로 constrain 창도
+// 같이 -bias 만큼 옮겨야 한다 (lo-bias, hi-bias). 안 옮기면 창은 ESC_NEUTRAL 에
+// 중심을 두는데 명령은 ESC_NEUTRAL-bias 에 중심을 둬서 아래쪽이 clip 되고 위쪽은
+// 도달 불가가 된다 — 정책이 학습한 대칭 ±1 대비 권한이 조용히 비대칭이 된다.
 static int rl_action_to_pwm(float a, int span, int lo, int hi, int bias)
 {
   if (a > 1.0f) a = 1.0f;
@@ -376,11 +382,13 @@ void messageThruster(const hero_msgs::hero_agent_thruster_cmd &msg)
   throttle = 0;     // drop the 40-count stale bias the PID path would add
   move_speed = 0;
 
-  // Vertical channels m0/m3: narrow span + DEPTH_BIAS trim. Horizontal: full span.
-  pwm_m0 = rl_action_to_pwm(msg.thrust[0], RL_PWM_SPAN_VERT, DEPTH_PWM_MIN, DEPTH_PWM_MAX, DEPTH_BIAS);
+  // 6채널 동일 매핑 (2026-08-12). 수직 m0/m3 도 HORZ span·ESC 한계·bias 0 —
+  // 위 RL_PWM_SPAN_HORZ 주석의 (1) 크리핑 / (2) 비대칭 참조. bias 0 이라 RL
+  // 명령 0 이 정확히 ESC_NEUTRAL(1500) 이고, 이는 B2 워치독의 NEUTRAL 과도 같다.
+  pwm_m0 = rl_action_to_pwm(msg.thrust[0], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
   pwm_m1 = rl_action_to_pwm(msg.thrust[1], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
   pwm_m2 = rl_action_to_pwm(msg.thrust[2], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
-  pwm_m3 = rl_action_to_pwm(msg.thrust[3], RL_PWM_SPAN_VERT, DEPTH_PWM_MIN, DEPTH_PWM_MAX, DEPTH_BIAS);
+  pwm_m3 = rl_action_to_pwm(msg.thrust[3], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
   pwm_m4 = rl_action_to_pwm(msg.thrust[4], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
   pwm_m5 = rl_action_to_pwm(msg.thrust[5], RL_PWM_SPAN_HORZ, ESC_MIN, ESC_MAX, 0);
 

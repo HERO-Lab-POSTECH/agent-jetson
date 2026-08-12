@@ -43,8 +43,12 @@
        (Identity itself replaced [4,0,1,5,2,3] earlier the same day, which had applied
        the sim's own column reorder a SECOND time and routed horizontal commands into
        the vertical motors.) Verify the startup log prints
-       order(fw from sim)=[3, 2, 4, 0, 5, 1] before any thrust. -->
-  <arg name="thruster_order"      default="[3, 2, 4, 0, 5, 1]" />
+       order(fw from sim)=[3, 5, 4, 0, 1, 2] before any thrust.
+       2026-08-12: corrected from [3, 2, 4, 0, 5, 1]. That value was derived from a
+       mis-recalled _ESC_CHANNEL_ORDER (4,1,3,5,2,0); the repo value is (4,0,1,5,2,3),
+       unchanged since 2026-07-03 and therefore what the deployed teacher trained on.
+       Only the three horizontal sources moved (m1, m4, m5); verticals were right. -->
+  <arg name="thruster_order"      default="[3, 5, 4, 0, 1, 2]" />
   <!-- B1 per-OUTPUT-channel sign table [m0..m5], MEASURED in a restrained tank
        test (indexed by FIRMWARE channel, NOT sim channel, so it stays valid if
        thruster_order is edited). Identity (+1) until measured; keep
@@ -52,6 +56,14 @@
        NOTE: scale is applied ONCE, in the RL node above; the mixer does NOT
        re-apply it (that would square the scale). Mixer takes only order+signs. -->
   <arg name="thruster_sign"       default="[1, 1, 1, 1, 1, 1]" />
+
+  <!-- ESC deadband, normalized to the action range. MEASURED 2026-08-12 (dry):
+       an ESC stays still inside 1450..1545 us; at span 300 that is |a| < 0.15.
+       The mixer inverts it so a=0 stays exactly neutral and a=+-1 keeps full
+       authority. REQUIRES the 2026-08-12 firmware (all six channels span 300,
+       bias 0). On older firmware the verticals are asymmetric and one scalar
+       cannot express that, so set 0.0 until the board is reflashed. -->
+  <arg name="thruster_deadband"   default="0.15" />
 
   <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
   <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen" />
@@ -75,6 +87,7 @@
   <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py" output="screen">
     <rosparam param="thruster_order" subst_value="True">$(arg thruster_order)</rosparam>
     <rosparam param="thruster_sign" subst_value="True">$(arg thruster_sign)</rosparam>
+    <param name="thruster_deadband" value="$(arg thruster_deadband)" />
   </node>
 
   <!-- ROSBAG: auto-record core topics for post-hoc field-test diagnosis.
