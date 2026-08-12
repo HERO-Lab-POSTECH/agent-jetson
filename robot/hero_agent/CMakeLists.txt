@@ -3,9 +3,15 @@ project(hero_agent)
 
 find_package(catkin REQUIRED COMPONENTS std_msgs roscpp hero_msgs)
 
+# No LIBRARIES here: this package builds only the `agent` executable below, so
+# exporting a `hero_agent` library promises a target that is never created. A
+# warm devel space hid that -- on a clean build the promise surfaces as
+# "tried to find library 'hero_agent' ... neither a target nor built/installed"
+# in every downstream find_package (characterization_tests). albc_control is the
+# correct model next door: INCLUDE_DIRS only, headers arrive via
+# catkin_INCLUDE_DIRS.
 catkin_package(
   INCLUDE_DIRS include
-  LIBRARIES hero_agent
   CATKIN_DEPENDS std_msgs roscpp hero_msgs
 )
 
