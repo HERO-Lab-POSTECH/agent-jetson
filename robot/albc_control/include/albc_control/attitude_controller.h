@@ -128,10 +128,12 @@ public:
         error_roll_  = target_roll_  - current_roll_;
         error_pitch_ = target_pitch_ - current_pitch_;
 
-        // Integral accumulation (freeze when level + symmetric anti-windup clamp)
-        integral_roll_  = integralStep(integral_roll_,  error_roll_,  current_roll_,
+        // Integral accumulation (freeze at setpoint + symmetric anti-windup clamp).
+        // Gated on the error since 2026-08-12; identical to the old current-angle
+        // gate whenever the target is 0. See the control_law.h header note.
+        integral_roll_  = integralStep(integral_roll_,  error_roll_,
                                        ORACLE_LEVEL_THRESHOLD, ORACLE_INTEGRAL_MAX);
-        integral_pitch_ = integralStep(integral_pitch_, error_pitch_, current_pitch_,
+        integral_pitch_ = integralStep(integral_pitch_, error_pitch_,
                                        ORACLE_LEVEL_THRESHOLD, ORACLE_INTEGRAL_MAX);
 
         // Derivative: asymmetric gate on RAW + 1st-order LPF

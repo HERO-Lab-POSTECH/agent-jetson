@@ -18,6 +18,28 @@
 // mode enum (matches ControlMode): 1=TDC, 2=PID, 3=FIXED, 4=MANUAL.
 // Do NOT "fix" signs (e.g. dx = -common_factor*..., the (-1.0) on pitch PID,
 // the (-L2 - target_x) on FIXED) without intent — they are the pinned behavior.
+//
+// DELIBERATE DIVERGENCE FROM THE ORIGINAL (2026-08-12) — the ONE thing in this
+// file that is no longer byte-identical to albc_controller.cpp:385-433:
+//
+//   the LEVEL_THRESHOLD gates now test the ERROR, not the measured angle.
+//     TDC: |error_roll| / |error_pitch|   (was |current_roll| / |current_pitch|)
+//     PID: same swap on both branches
+//   feedback_filters.h integralStep() changed identically, same date.
+//
+// WHY. error = target - current, so at target 0 the two forms are algebraically
+// IDENTICAL (|error| == |current|) -- every run this robot has ever done was at
+// target 0, which is why the original never misbehaved. The moment a nonzero
+// target_roll/target_pitch is set, gating on the measured angle makes those two
+// parameters DEAD: a level robot (|current| < 1 deg) clamps dy/dx to zero before
+// the target is ever consulted, so it can never be commanded away from level,
+// and once tilted the integrator has no setpoint to stop at. Measured live in
+// the tank 2026-08-12: target_roll = 15 deg with the robot at roll 0.52 deg
+// produced exactly zero arm motion.
+//
+// This change is therefore a no-op for all historical target-0 behavior and only
+// adds meaning to a nonzero setpoint. Revert both files together if it is ever
+// reverted -- the integral gate and the control gate must agree.
 
 #ifndef ALBC_CONTROL_CONTROL_LAW_H
 #define ALBC_CONTROL_CONTROL_LAW_H
@@ -73,21 +95,23 @@ inline CtrlOut computeControlOutputOracle(const CtrlIn& in) {
         double dy =  common_factor * (in.M_td * in.Kp_td * in.error_roll);
         double dx = -common_factor * (in.M_td * in.Kp_td * in.error_pitch);
 
-        // Equilibrium hold: within LEVEL_THRESHOLD, clamp dy/dx to 0.
-        if (std::abs(in.current_roll)  < LEVEL_THRESHOLD) dy = 0.0;
-        if (std::abs(in.current_pitch) < LEVEL_THRESHOLD) dx = 0.0;
+        // Equilibrium hold: within LEVEL_THRESHOLD of the TARGET, clamp dy/dx to 0.
+        // Gated on the ERROR, not on the measured angle -- see the 2026-08-12 note
+        // in the header block. At target 0 the two are identical.
+        if (std::abs(in.error_roll)  < LEVEL_THRESHOLD) dy = 0.0;
+        if (std::abs(in.error_pitch) < LEVEL_THRESHOLD) dx = 0.0;
 
         target_y += dy;
         target_x += dx;
         break;
     }
     case CTRL_PID:
-        if (std::abs(in.current_roll) >= LEVEL_THRESHOLD) {
+        if (std::abs(in.error_roll) >= LEVEL_THRESHOLD) {
             target_y = PID_BASE_Y + in.kp_roll  * in.error_roll
                              + in.ki_roll  * in.integral_roll
                              + in.kd_roll  * in.deriv_roll;
         }
-        if (std::abs(in.current_pitch) >= LEVEL_THRESHOLD) {
+        if (std::abs(in.error_pitch) >= LEVEL_THRESHOLD) {
             target_x = PID_BASE_X + (-1.0) * (in.kp_pitch * in.error_pitch
                              + in.ki_pitch * in.integral_pitch
                              + in.kd_pitch * in.deriv_pitch);

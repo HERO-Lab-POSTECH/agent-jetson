@@ -32,18 +32,23 @@ static const double ORACLE_INTEGRAL_MAX    = 100.0;
 static const double ORACLE_DERIV_LPF_ALPHA = 0.2;
 static const double ORACLE_LEVEL_THRESHOLD = 0.01745; // rad (1 deg)
 
-// Integral accumulation with freeze-when-level + symmetric anti-windup clamp.
-// Pure transcription of albc_controller.cpp:674-677 (roll) / 678-681 (pitch);
-// roll and pitch are byte-identical so one function serves both.
+// Integral accumulation with freeze-at-setpoint + symmetric anti-windup clamp.
+// Transcribed from albc_controller.cpp:674-677 (roll) / 678-681 (pitch); roll and
+// pitch are byte-identical so one function serves both.
 //
-//   integral      : current accumulated integral (state.integral_*)
-//   error         : state.error_* (= target - current)
-//   current_angle : state.current_* (roll or pitch), used for the level gate
+// DELIBERATE DIVERGENCE (2026-08-12): the gate tests the ERROR, not the measured
+// angle, and the now-unused `current_angle` parameter is gone. error = target -
+// current, so at target 0 this is algebraically identical to the original -- see
+// the long note in control_law.h for why the original form made target_roll /
+// target_pitch dead parameters. Revert both files together.
+//
+//   integral : current accumulated integral (state.integral_*)
+//   error    : state.error_* (= target - current); also the level gate
 // Returns the NEW integral value.
-inline double integralStep(double integral, double error, double current_angle,
+inline double integralStep(double integral, double error,
                            double LEVEL_THRESHOLD, double INTEGRAL_MAX)
 {
-    if (std::abs(current_angle) >= LEVEL_THRESHOLD) {
+    if (std::abs(error) >= LEVEL_THRESHOLD) {
         integral += error;
         integral  = std::max(-INTEGRAL_MAX, std::min(INTEGRAL_MAX, integral));
     }
