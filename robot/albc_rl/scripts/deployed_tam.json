@@ -41,8 +41,19 @@
     "m1": {"hour": 1.5, "axis": "horizontal", "status": "ok"},
     "m2": {"hour": 4.5, "axis": "horizontal", "status": "ok"},
     "m3": {"hour": 9.0, "axis": "vertical", "status": "DEAD"},
-    "m4": {"hour": 7.5, "axis": "horizontal", "status": "ok"},
+    "m4": {"hour": 7.5, "axis": "horizontal", "status": "FAULTY_ONE_DIRECTION"},
     "m5": {"hour": 10.5, "axis": "horizontal", "status": "ok"}
+  },
+
+  "measured_thruster_sign": {
+    "_what": "SIGN of the yaw/attitude response to a POSITIVE command on each firmware channel, measured in the tank 2026-08-12 with b1_channel_probe.py (mixer bypassed, one channel at a time, level 0.25 -- 0.05 is inside the 1450-1545 ESC deadband and spins nothing).",
+    "_how_to_read_it": "Judge from the GYRO_Z BURST TRACE, not from a mean delta over the drive window: the robot is free-floating, so drift contaminates any average, and a faulty channel that bites intermittently averages to noise. m4 looked like noise until the per-sample trace was read.",
+    "m0": {"sign": "+1", "basis": "CONFIRMED, two independent lines. (a) +0.25 -> pitch -3.36 deg (3 o'clock rises) and -0.25 -> pitch +1.15 deg, a clean reversal with roll unchanged (no Mx, as expected for a thruster on the x axis). (b) operator observed the robot DESCEND on the -0.25 run -- downward thrust for a negative command, so positive = up. Sim col3 (Fz +1.0, My -0.145) also puts +x up for a positive action. All three agree."},
+    "m1": {"sign": "+yaw", "basis": "+0.25 -> gyro_z positive on 64/74 drive samples, peak +1.296 rad/s, net +62.4. Saturated and unambiguous."},
+    "m2": {"sign": "-yaw", "basis": "+0.25 -> net -62.6 deg yaw."},
+    "m5": {"sign": "-yaw", "basis": "+0.25 -> gyro_z negative on 64/74 samples, peak -1.267 rad/s, net -64.2."},
+    "m4": {"sign": "-yaw (PROVISIONAL)", "basis": "Faulty -- see status. It only produces thrust for a NEGATIVE command: -0.90 gave a sustained burst (76/96 samples, peak +0.278 rad/s, net +9.7) while +0.90 gave essentially nothing (peak -0.057). Extrapolating, a positive command would be -yaw, i.e. OPPOSITE m1. All five m4 runs agree in direction (+0.25 -> -4.5 deg, +0.50 -> -1.9, -0.50 -> +3.2, -0.90 -> +yaw). RE-MEASURE AFTER REPAIR before trusting this."},
+    "_discriminator_result": "m4 is the ONLY channel where the sim TAM and the firmware yaw PID disagree. Sim maps m4 -> col5 (Mz +0.144, SAME sign as m1); firmware pid.cpp:22-25 has m1 = +PID_yaw but m4 = -PID_yaw (OPPOSITE). The provisional measurement above favours the FIRMWARE, i.e. the sim TAM is wrong for m4 as well as for the verticals. m1, m2 and m5 cannot discriminate -- both sources predict + - - and both are right."
   },
 
   "expected_thruster_order": [3, 2, 4, 0, 5, 1],
