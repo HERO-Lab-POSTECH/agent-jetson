@@ -44,9 +44,14 @@ WHAT THIS NODE MUST NOT DO:
         the scale (0.1 -> 0.01) and silently break every intermediate tank-ramp
         step. Scale lives in ONE place: the RL node's ~thruster_scale param.
   * apply the PWM mapping -- that is the firmware's job (agent.ino
-        rl_action_to_pwm), which also owns the narrow vertical span + DEPTH_BIAS.
-        The firmware applies that vertical span to m0,m3 BY CHANNEL INDEX -- which
-        is correct ONLY once this node routes vertical sim commands into m0,m3.
+        rl_action_to_pwm). As of 2026-08-12 all SIX RL channels share one mapping
+        (span 300, ESC_MIN/MAX, bias 0), so a zero command is exactly ESC_NEUTRAL
+        on every channel -- the same value the B2 watchdog falls back to. The old
+        narrow vertical span (150) + DEPTH_BIAS (30) is GONE from the RL path; the
+        classic depth PID (pid.cpp) still uses DEPTH_BIAS and was not touched.
+        Because the mapping is now uniform, it no longer depends on this node
+        routing vertical commands into m0,m3 -- but the routing still must be
+        right, or depth thrust lands on horizontal motors.
 
 The firmware has its own inter-message watchdog (B2) that NEUTRALs the ESCs if
 this node dies, so a crash here fails safe.
@@ -215,9 +220,13 @@ class ThrusterMixer(object):
         vert_src = set(order[c] for c in FW_VERT_CH)
         horz_src = set(order[c] for c in FW_HORZ_CH)
         if not (vert_src <= SIM_VERT and horz_src == SIM_HORZ):
+            # NOTE the sets below are the LIVE-TAM indices (SIM_VERT / SIM_HORZ), not
+            # the pre-reorder _BASE_ALLOCATION_MATRIX ones. This message said {4,5} /
+            # {0,1,2,3} until 2026-08-12 -- stale from the old convention, and the one
+            # string an operator reads at the exact moment the node refuses to start.
             rospy.logfatal("~thruster_order %s CROSSES the axis split: fw vertical "
-                           "channels m0,m3 must source sim vertical {4,5} (got %s) "
-                           "and fw horizontal m1,m2,m4,m5 must source sim {0,1,2,3} "
+                           "channels m0,m3 must source sim vertical {0,3} (got %s) "
+                           "and fw horizontal m1,m2,m4,m5 must source sim {1,2,4,5} "
                            "(got %s). This would route depth thrust to horizontal "
                            "motors -> uncommanded dive. Refusing to start.",
                            order, sorted(vert_src), sorted(horz_src))
