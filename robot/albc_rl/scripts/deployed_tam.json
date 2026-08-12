@@ -1,0 +1,55 @@
+{
+  "_what": "The thruster allocation matrix the DEPLOYED policy actually trained with, copied here verbatim so the board can verify its own deployment constants without reaching the training host. This file is the ARTIFACT, not a constant: it is the only thing that answers 'what did this checkpoint learn'. A source-tree constant (_ESC_CHANNEL_ORDER and friends) cannot answer that and produced four wrong thruster_order values in a row.",
+  "_when_to_update": "Only when a NEW checkpoint is packed onto the board. Re-copy from that run's params/env.yaml and update provenance in the same edit. If you find yourself editing thruster_order without touching this file, stop -- one of the two is wrong.",
+
+  "provenance": {
+    "run_path": "logs/rsl_rl/albc_trpo_teacher/teacher_iter_budget/trpo_iterbudget_s30_260805_012813",
+    "checkpoint": "model_9998.pt",
+    "iter": 9998,
+    "checkpoint_sha256": "ccfbfc09cd8f410259e818d4a526339aa5f1a7f3cc3849623cb95d4662ee26fc",
+    "source_file": "params/env.yaml",
+    "source_file_sha256": "830be5ddcc0005aada58841373d2261c05ffe451589ad9116c513fa5db403ed6",
+    "source_line": 303,
+    "trained": "2026-08-05",
+    "host": "ksm-ubuntu, docker container marinelab-isaaclab, /workspace/constrained-albc",
+    "named_teacher_by": ["numpy_port/MANIFEST.tcn.json", "numpy_port/MANIFEST.gru.json"],
+    "copied": "2026-08-12"
+  },
+
+  "allocation_matrix": {
+    "_rows": ["Fx", "Fy", "Fz", "Mx", "My", "Mz"],
+    "_cols": "sim action index 0..5 (action[2:8] of the 8D action)",
+    "Fx": [0.0, 0.707, -0.707, 0.0, -0.707, 0.707],
+    "Fy": [0.0, 0.707, 0.707, 0.0, -0.707, -0.707],
+    "Fz": [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+    "Mx": [0.0, 0.007, -0.007, 0.0, -0.007, 0.007],
+    "My": [0.145, -0.007, -0.007, -0.145, 0.007, 0.007],
+    "Mz": [0.0, -0.144, 0.144, 0.0, -0.144, 0.144]
+  },
+
+  "geometry": {
+    "_note": "Used to invert M = r x F onto a discrete position grid. From actuators.xacro; reproduces the matrix above to four decimals.",
+    "horizontal_arm_m": 0.102,
+    "vertical_arm_m": 0.145
+  },
+
+  "measured_channel_map": {
+    "_frame": "GRIPPER = 12 o'clock, looking DOWN at the robot from above. +x = 3 o'clock, +y = 12 o'clock, +z = up (right-handed). EVERY azimuth in this file is on this clock face and no other.",
+    "_why_the_frame_line_exists": "The 2026-07-05 B1 record said m1=rear-left, m2=front-left, m4=front-right, m5=rear-right without naming its 'front'. It is correct, but only readable once you know its front was the 6 o'clock side (opposite the gripper) with left=3 o'clock. Not stating the frame cost hours and made two correct measurements look like they contradicted each other. State the frame or the record is unusable.",
+    "_measured": "b1_channel_probe.py, dry, one channel at a time. Independently agreed by the 2026-07-05 B1 record (once re-framed), the 2026-08-11 probe, and a 2026-08-12 re-probe of m1 and m2.",
+    "m0": {"hour": 3.0, "axis": "vertical", "status": "ok"},
+    "m1": {"hour": 1.5, "axis": "horizontal", "status": "ok"},
+    "m2": {"hour": 4.5, "axis": "horizontal", "status": "ok"},
+    "m3": {"hour": 9.0, "axis": "vertical", "status": "DEAD"},
+    "m4": {"hour": 7.5, "axis": "horizontal", "status": "ok"},
+    "m5": {"hour": 10.5, "axis": "horizontal", "status": "ok"}
+  },
+
+  "expected_thruster_order": [3, 2, 4, 0, 5, 1],
+  "_expected_thruster_order_note": "DERIVED, not chosen: test_deploy_constants.py recomputes it from allocation_matrix + measured_channel_map and asserts it equals both this field and thruster_mixer.DEFAULT_ORDER. Three-way agreement or the test fails.",
+
+  "open": {
+    "thruster_sign": "UNMEASURED. Matching by position puts an Mz sign on each corner opposite to the 2026-07-05 rotation record (m1,m4 = CW; m2,m5 = CCW). A permutation cannot flip a sign; the per-channel sign table can, and a solution provably exists because each horizontal thruster is tangential to its own radius. Restrained-tank measurement, Phase 2b-0, m0 first. Cannot be measured dry.",
+    "sim_tam_is_rotated": "The sim's horizontal columns sit 90 deg from the real robot and its two vertical columns are swapped, which is why thruster_order is not identity. The vertical half is acknowledged upstream: constrained-albc 3bb042b says 'STILL OPEN ... vertical Fz/My row redesign'. The permanent fix is to correct the sim TAM and retrain; until then the mixer bridges it."
+  }
+}
