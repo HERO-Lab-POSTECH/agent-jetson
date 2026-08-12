@@ -40,6 +40,20 @@
 
 #include <cmath>
 
+// RL-DEPLOY 2026-08-13: the driver's read loop rate, from ~loop_hz. It used to be
+// a hardcoded 10.0 here while the RL node ran at 50 Hz, so the policy integrated its
+// joint-target accumulator across 4-5 ticks of the SAME measurement. Equalising the
+// per-second joint gain did NOT fix the resulting oscillation (control_hz 50 with
+// joint_delta_scale 0.02 was still unstable while control_hz 10 was calm), which
+// leaves the rate mismatch itself. Made a parameter, not a new hardcoded 50, because
+// the right value is a measurement: the Dynamixel bus has to sustain it.
+// Default 10.0 preserves the shipped behaviour when the param is unset.
+// g_startup_ticks and g_read_fail_limit are DERIVED so the 5 s startup ramp and the
+// ~1 s comms-outage threshold stay the same wall-clock durations at any loop rate.
+static double g_loop_hz         = 10.0;
+static int    g_startup_ticks   = STARTUP_TICKS;   // 50 = 5 s at 10 Hz
+static int    g_read_fail_limit = 10;              // 10 = ~1 s at 10 Hz
+
 // ==============================
 // Joint State
 // ==============================
@@ -211,7 +225,7 @@ void noteFirstCommand(int joint_no, double angle) {
     if (!first_command_received) {
         first_command_received = true;
         ROS_INFO("First command received (joint%d = %.3f rad) -- startup ramp begins (%.1f s)",
-                 joint_no, angle, STARTUP_TICKS / 10.0);
+                 joint_no, angle, g_startup_ticks / g_loop_hz);
     }
 }
 
@@ -293,12 +307,30 @@ int main(int argc, char **argv) {
     ROS_INFO("  Joint1 ID=%d  Joint2 ID=%d", JOINT1_ID, JOINT2_ID);
     ROS_INFO("  J1 present: %.1f deg  J2 present: %.1f deg",
              angle1 * 180.0 / M_PI, angle2 * 180.0 / M_PI);
-    ROS_INFO("  Startup: slow move for %.1f sec after first cmd", STARTUP_TICKS / 10.0);
+    ROS_INFO("  Startup: slow move for %.1f sec after first cmd",
+             g_startup_ticks / g_loop_hz);
     ROS_INFO("  RL-DEPLOY: publishing /albc/joint_states (measured pos + vel)");
     ROS_INFO("===================================");
 
-    const double LOOP_HZ = 10.0;
-    ros::Rate loop_rate(LOOP_HZ);
+    // ~loop_hz: how fast this driver reads the servos and republishes
+    // /albc/joint_states. The RL node's control_hz must not outrun it -- see the
+    // g_loop_hz comment at the top of this file. Clamped to a sane band so a typo
+    // cannot flood the 1 Mbps Dynamixel bus or stall the loop to a crawl.
+    ros::NodeHandle pnh("~");
+    pnh.param("loop_hz", g_loop_hz, 10.0);
+    if (g_loop_hz < 1.0 || g_loop_hz > 100.0) {
+        ROS_WARN("loop_hz %.1f out of [1, 100] -- clamping", g_loop_hz);
+        g_loop_hz = std::min(100.0, std::max(1.0, g_loop_hz));
+    }
+    // keep the wall-clock durations these counters were tuned for
+    g_startup_ticks   = static_cast<int>(STARTUP_TICKS / 10.0 * g_loop_hz + 0.5);
+    g_read_fail_limit = static_cast<int>(1.0 * g_loop_hz + 0.5);
+    ROS_INFO("  loop_hz: %.1f Hz  (startup ramp %d ticks = %.1f s, "
+             "read-fail alarm %d ticks = %.1f s)",
+             g_loop_hz, g_startup_ticks, g_startup_ticks / g_loop_hz,
+             g_read_fail_limit, g_read_fail_limit / g_loop_hz);
+
+    ros::Rate loop_rate(g_loop_hz);
     // RL-DEPLOY: differentiate with the MEASURED loop period, not 1/LOOP_HZ -- when
     // the loop runs long (serial latency) a fixed dt systematically overestimates
     // the published joint velocity, which feeds the RL observation.
@@ -307,13 +339,13 @@ int main(int argc, char **argv) {
     while (ros::ok()) {
         // Restore full speed after startup ramp completes (timer starts on first command)
         if (first_command_received) {
-            if (startup_counter == STARTUP_TICKS) {
+            if (startup_counter == g_startup_ticks) {
                 setProfileVelocity(JOINT1_ID, OPERATING_VELOCITY);
                 setProfileVelocity(JOINT2_ID, OPERATING_VELOCITY);
                 ROS_INFO("Startup ramp complete — operating velocity enabled (vel=%d, acc=%d)",
                          OPERATING_VELOCITY, PROFILE_ACCELERATION);
                 startup_counter++;  // only run once
-            } else if (startup_counter < STARTUP_TICKS) {
+            } else if (startup_counter < g_startup_ticks) {
                 startup_counter++;
             }
         }
@@ -346,7 +378,7 @@ int main(int argc, char **argv) {
             ROS_WARN_THROTTLE(1.0, "joint position read failed -- joint_states publish skipped");
             // RL-DEPLOY (2026-06-12 logging): surface a SUSTAINED outage distinctly from a glitch.
             ++consecutive_read_fail;
-            if (consecutive_read_fail >= 10) {  // ~1 s at 10 Hz loop
+            if (consecutive_read_fail >= g_read_fail_limit) {  // ~1 s at any loop_hz
                 ROS_ERROR_THROTTLE(1.0,
                     "joint read FAILED %d cycles in a row -- motor comms likely DOWN "
                     "(power/relay off? serial cable? Dynamixel HW error?)", consecutive_read_fail);

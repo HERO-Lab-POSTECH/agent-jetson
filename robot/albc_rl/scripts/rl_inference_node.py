@@ -185,7 +185,71 @@ class RLInferenceNode(object):
         self._pub_thr = rospy.Publisher("/albc/thruster_cmd", Float32MultiArray, queue_size=1)
 
         self._log_startup_banner(weights_dir, student_npz, teacher_npz)
+
+        # Home the arm BEFORE the policy starts, so every run begins from the same
+        # pose. Without this the operator had to launch-albc, press 3 (FIXED ramps
+        # to FK(90,90)), then Ctrl-C -- and that Ctrl-C kills joint_angle_command,
+        # whose exit handler disables torque, so the arm drifted again before the
+        # RL driver picked it up. Doing it here removes the round trip AND the drift.
+        # It matters beyond convenience: np_policy seeds _joint_target from the
+        # MEASURED angles on the first act(), so the starting pose is an initial
+        # condition of the experiment, not a detail. On 2026-08-13 a run started at
+        # joint2 = 2.985 rad, 0.157 from the pi abort threshold and at 8 % of the
+        # available moment arm.
+        if rospy.get_param("~home_on_start", True):
+            self._home_arm(
+                float(rospy.get_param("~home_joint1", 0.0)),
+                float(rospy.get_param("~home_joint2", np.pi / 2.0)),
+                float(rospy.get_param("~home_tol", 0.05)),
+                float(rospy.get_param("~home_timeout_s", 25.0)))
+
         self._timer = rospy.Timer(rospy.Duration(1.0 / self.hz), self._tick)
+
+    def _home_arm(self, q1, q2, tol, timeout_s):
+        """Drive the arm to (q1, q2) and block until it arrives or times out.
+
+        Safe to block: rospy dispatches subscriber callbacks on their own threads,
+        so _on_joints keeps updating self._joint_pos while this loop runs. The
+        driver applies its own 5 s startup ramp to the first command it receives
+        (joint_angle_command STARTUP_TICKS), so this is a slow move, not a snap.
+
+        A timeout WARNS and continues rather than aborting: refusing to start would
+        leave the operator with a dead node and a wet robot, which is worse than a
+        known-bad initial condition that the log records.
+        """
+        rospy.loginfo("homing arm -> joint1 %.3f  joint2 %.3f rad (tol %.3f) ...",
+                      q1, q2, tol)
+        rate = rospy.Rate(5.0)
+        t0 = rospy.get_time()
+        while not rospy.is_shutdown():
+            # gate on _last_joints_t, NOT on _joint_pos: the latter is initialised to
+            # zeros(2) (:151), so "is not None" is true before any sample arrives and
+            # a home target of (0, 0) would report success against stale zeros.
+            if self._last_joints_t is not None:
+                d1 = abs(float(self._joint_pos[0]) - q1)
+                d2 = abs(float(self._joint_pos[1]) - q2)
+                if d1 < tol and d2 < tol:
+                    rospy.loginfo("homing done: joint1 %.3f  joint2 %.3f rad",
+                                  float(self._joint_pos[0]), float(self._joint_pos[1]))
+                    return True
+                rospy.loginfo_throttle(
+                    2.0, "  homing: at (%.3f, %.3f) err (%.3f, %.3f)",
+                    float(self._joint_pos[0]), float(self._joint_pos[1]), d1, d2)
+            elapsed = rospy.get_time() - t0
+            if elapsed > timeout_s:
+                where = ("no /albc/joint_states yet -- is joint_angle_command running?"
+                         if self._last_joints_t is None
+                         else "at (%.3f, %.3f)" % (float(self._joint_pos[0]),
+                                                   float(self._joint_pos[1])))
+                rospy.logwarn("homing TIMEOUT after %.1f s (%s) -- starting anyway. "
+                              "The policy will seed _joint_target from wherever the "
+                              "arm actually is; treat this run's initial condition "
+                              "as unknown.", elapsed, where)
+                return False
+            self._pub_j1.publish(Float64(q1))
+            self._pub_j2.publish(Float64(q2))
+            rate.sleep()
+        return False
 
     # ------------------------------------------------------------- startup
     def _log_startup_banner(self, weights_dir, student_npz, teacher_npz):
@@ -220,8 +284,18 @@ class RLInferenceNode(object):
     def _on_reconfigure(self, config, level):
         # live-tune the IMU mounting yaw offset (euler + gyro share this).
         self.imu_yaw_offset = float(np.deg2rad(config.imu_yaw_offset_deg))
-        rospy.loginfo("reconfigure: imu_yaw_offset = %.2f deg",
-                      config.imu_yaw_offset_deg)
+        # policy setpoint (obs 0:3). The /rl/command topic writes the same field;
+        # last writer wins, both log, and the log line says which. See GyroOffset.cfg
+        # for why there is no hidden precedence rule.
+        self._command = np.array([
+            np.deg2rad(config.cmd_roll_deg),
+            np.deg2rad(config.cmd_pitch_deg),
+            config.cmd_yaw_rate,
+        ], dtype=np.float32)
+        rospy.loginfo("reconfigure: imu_yaw_offset %.2f deg | cmd roll %.1f deg "
+                      "pitch %.1f deg yawrate %.3f rad/s",
+                      config.imu_yaw_offset_deg, config.cmd_roll_deg,
+                      config.cmd_pitch_deg, config.cmd_yaw_rate)
         return config
 
     def _on_sensor(self, msg):

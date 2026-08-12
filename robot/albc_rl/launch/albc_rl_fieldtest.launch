@@ -23,6 +23,14 @@
   <arg name="encoder_type"        default="gru" />   <!-- shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />
+  <arg name="home_on_start"       default="true" />   <!-- ramp the arm to
+       joint1 0, joint2 pi/2 before the policy starts, so every run has the same initial
+       condition and the operator does not have to launch-albc + press 3 + Ctrl-C. -->
+  <arg name="joint_loop_hz"       default="10.0" />   <!-- Dynamixel driver read
+       rate. Must be >= control_hz or the policy integrates across repeats of the same
+       measurement: at 10 vs 50 that mismatch was 4.6x and the arm oscillated even with
+       the per-second gain matched. Raise together with control_hz; watch the driver log
+       for read failures, the 1 Mbps bus has to sustain it. -->
   <arg name="joint_delta_scale"   default="0.10" />   <!-- per-TICK joint-target gain.
        Confounded with control_hz (per-second rate = gain x hz). Diagnostic sweep:
        control_hz:=50 joint_delta_scale:=0.02 matches the 10 Hz run's per-second gain
@@ -76,7 +84,9 @@
   <arg name="thruster_deadband"   default="0.15" />
 
   <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
-  <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen" />
+  <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen">
+    <param name="loop_hz" value="$(arg joint_loop_hz)" />
+  </node>
 
   <!-- 2) RL student-policy inference node (reuse albc_rl.launch node def via include) -->
   <include file="$(find albc_rl)/launch/albc_rl.launch">
@@ -84,6 +94,7 @@
     <arg name="control_hz"         value="$(arg control_hz)" />
     <arg name="use_board_rates"    value="$(arg use_board_rates)" />
     <arg name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
+    <arg name="home_on_start"      value="$(arg home_on_start)" />
     <arg name="thruster_scale"     value="$(arg thruster_scale)" />
     <arg name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
