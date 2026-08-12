@@ -87,7 +87,23 @@ avrdude 시그니처 read로 칩이 직접 답함: **`Device signature = 0x1e980
 | 링크 | `avr-gcc -w -Os -Wl,--gc-sections -mmcu=atmega2560 -o .elf {objs} core.a -lm` |
 | objcopy | `avr-objcopy -O ihex -R .eeprom agent.elf agent.hex` (`avr-objcopy`는 `/usr/bin/` 또는 `/usr/share/arduino/hardware/tools/avr/bin/`) |
 
-**빌드 검증**(byte-identical은 컴파일러 함수배치 비결정성으로 불가 — 기능적 동등으로 판정): 직전 정상 flash본과 hex *크기*가 ±수십 바이트(0.13%) 이내인지, `avr-objdump -d`로 새 로직이 기계어에 있는지 확인. 추측 hex는 flash 금지.
+**빌드 검증 — 이 빌드는 재현 가능하다 (2026-08-12 실측으로 정정).** 이전 판(*"byte-identical은 컴파일러 함수배치 비결정성으로 불가"*)은 **틀렸다.** 같은 커밋(`af3b3da`)의 `firmware/agent`를 2026-07-03 과 2026-08-12 에 빌드한 결과가 **md5 까지 동일**했다 (`5f20e09b35909ea1167a47e0c91dd13e`, flash 38124 bytes 양쪽). 이 문장 때문에 정확 대조를 포기하고 크기 비교로 물러섰던 적이 있으니 다시 후퇴하지 말 것.
+
+따라서 검증은 **대조군 빌드**로 한다 — 이게 훨씬 강하다:
+
+    # 1) 변경 직전 커밋을 지금 툴체인으로 빌드 (대조군)
+    git archive <이전커밋> firmware/agent | tar -x -C /tmp/fwctl
+    bash firmware/build_firmware.sh /tmp/fwctl/firmware/agent ctl
+    # 2) 대조군이 직전 flash 본과 md5 일치하는지 → 툴체인 드리프트 0 확인
+    # 3) 그러면 새 빌드와의 크기 차이는 전부 내 diff 다
+
+`flash bytes` 는 hex 텍스트 크기가 아니라 데이터 레코드(`:` + type `00`) 길이의 합으로 세라 — 텍스트 크기는 레코드 분할에 따라 흔들린다.
+
+**칩이 그 커밋인지 확인**(7월 "칩이 git 보다 앞서감" 사고의 재발 검사)은 대조군 hex 에 대고 **avrdude verify** 로 한다. 쓰기가 아니라 read-only 비교다:
+
+    avrdude -C "$CONF" -p atmega2560 -c arduino -P /dev/ttyUSB1 -b 115200 -U flash:v:/tmp/ctl.hex:i
+
+추측 hex 는 여전히 flash 금지.
 
 **3. flash (비가역)**:
 
