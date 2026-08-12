@@ -24,4 +24,14 @@
     <param name="joint_timeout_s"    value="$(arg joint_timeout_s)" />
     <!-- weights_dir defaults to ../numpy_port relative to the node file -->
   </node>
+
+  <!-- The mixer is NOT optional. rl_inference_node publishes sim-ordered commands on
+       /albc/thruster_cmd, and nothing else in the graph subscribes to that topic, so
+       without this node the thrusters sit silently at neutral and the run reads as a
+       policy failure. This launch shipped without it and reproduced exactly that.
+       No <param> overrides on purpose: thruster_order / thruster_sign / thruster_deadband
+       come from thruster_mixer.py's own defaults, which test_deploy_constants.py pins
+       against deployed_tam.json. A second copy of those constants in a launch file is a
+       second thing to keep in sync, and that is the drift this repo keeps paying for. -->
+  <node pkg="albc_rl" name="thruster_mixer" type="thruster_mixer.py" output="screen" />
 </launch>

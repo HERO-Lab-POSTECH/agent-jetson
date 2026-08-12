@@ -90,6 +90,27 @@ def test_euler_block_3_6():
     np.testing.assert_allclose(out[3:6], [0.1, -0.2, 1.5], atol=ATOL)
 
 
+def test_euler_yaw_is_wrapped_to_pi_the_board_publishes_cumulative():
+    # The firmware unwraps yaw across +-pi and keeps accumulating 2*pi*n (ahrs.cpp), but
+    # the sim wraps to (-pi, pi]. Without the wrap obs[5] and its three history copies
+    # leave the training distribution. 12.5 rad was the measured live value (7.71 sigma).
+    b = ProprioBuilder()
+    for raw in (12.5, -12.5, 3.2, np.pi + 1e-3, 100 * np.pi + 0.4):
+        out = b.build(_sensors(euler=(0.1, -0.2, raw)))
+        assert -np.pi < out[5] <= np.pi, (raw, out[5])
+        # same angle, not merely in range
+        assert np.sin(out[5]) == pytest.approx(np.sin(raw), abs=1e-5)
+        assert np.cos(out[5]) == pytest.approx(np.cos(raw), abs=1e-5)
+
+
+def test_build_does_not_mutate_the_callers_euler_array():
+    # the wrap writes into euler[2]; s["euler"] may be the node's own live array
+    b = ProprioBuilder()
+    caller = np.array([0.1, -0.2, 12.5], dtype=np.float32)
+    b.build(_sensors(euler=caller))
+    assert caller[2] == pytest.approx(12.5, abs=ATOL)
+
+
 def test_joint_pos_block_9_11():
     b = ProprioBuilder()
     out = b.build(_sensors(joint_pos=(0.5, 0.7)))

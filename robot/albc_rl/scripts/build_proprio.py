@@ -200,7 +200,14 @@ class ProprioBuilder:
         Optional: thruster(6) -- if absent, echoes set_last_action()[2:8] (the
         runtime path; explicit injection is for bench tests / golden replays).
         """
-        euler = np.asarray(s["euler"], dtype=np.float32).reshape(3)
+        euler = np.asarray(s["euler"], dtype=np.float32).reshape(3).copy()
+        # The board publishes CUMULATIVE yaw -- the firmware unwraps across +-pi and keeps
+        # adding 2*pi*n forever (ahrs.cpp, YAW_WRAP_THRESH). The sim's euler_xyz_from_quat
+        # wraps to (-pi, pi], so left raw this leaves the training distribution within a
+        # minute of yawing (measured 12.5 rad = 7.71 sigma out). Wrapping HERE fixes all
+        # four sites at once: proprio obs[5] plus its three history copies obs[29,39,49],
+        # which carry `euler` whole. .copy() because s["euler"] may be the caller's array.
+        euler[2] = _wrap(euler[2])
         jpos = np.asarray(s["joint_pos"], dtype=np.float32).reshape(2)
 
         # angular velocity (obs 6:9): prefer the firmware raw gyro (sim root_ang_vel_b
