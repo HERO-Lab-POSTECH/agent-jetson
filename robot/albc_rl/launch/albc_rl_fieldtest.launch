@@ -23,6 +23,10 @@
   <arg name="encoder_type"        default="gru" />   <!-- shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />
+  <arg name="joint_delta_scale"   default="0.10" />   <!-- per-TICK joint-target gain.
+       Confounded with control_hz (per-second rate = gain x hz). Diagnostic sweep:
+       control_hz:=50 joint_delta_scale:=0.02 matches the 10 Hz run's per-second gain
+       while keeping the 50 Hz delay. Calm there means gain, noisy means delay. -->
   <arg name="thruster_scale"      default="0.0" />
   <arg name="thruster_max_s"      default="0.0" />
   <arg name="imu_yaw_offset_deg"  default="102.0" />
@@ -79,6 +83,7 @@
     <arg name="encoder_type"       value="$(arg encoder_type)" />
     <arg name="control_hz"         value="$(arg control_hz)" />
     <arg name="use_board_rates"    value="$(arg use_board_rates)" />
+    <arg name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <arg name="thruster_scale"     value="$(arg thruster_scale)" />
     <arg name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />

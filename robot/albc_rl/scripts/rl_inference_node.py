@@ -88,7 +88,7 @@ sys.path.insert(0, _HERE)                                   # build_proprio
 sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforward
 
 from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
-from np_policy import NumpyStudentPolicy              # noqa: E402
+from np_policy import NumpyStudentPolicy, DELTA_SCALE  # noqa: E402
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
 
@@ -131,6 +131,16 @@ class RLInferenceNode(object):
         student_npz = os.path.join(weights_dir, "weights_%s.npz" % self.encoder_type)
         teacher_npz = os.path.join(weights_dir, "weights_teacher.npz")
         self.policy = NumpyStudentPolicy(student_npz, teacher_npz, self.encoder_type)
+
+        # Per-TICK joint-target gain. Exposed because it and control_hz both scale
+        # the per-SECOND wind rate, so changing control_hz alone cannot tell you
+        # whether an instability is observation delay or gain. Hold this at
+        # DELTA_SCALE/5 while running at the full 50 Hz to isolate delay.
+        # DIAGNOSTIC KNOB: any value other than the default is a deliberate
+        # departure from what the checkpoint trained with. Do not ship one without
+        # a decision recorded next to deployed_tam.json.
+        self.policy.delta_scale = float(
+            rospy.get_param("~joint_delta_scale", DELTA_SCALE))
         self.policy.reset()
         self.builder = ProprioBuilder()
         self.builder.reset()
@@ -182,6 +192,11 @@ class RLInferenceNode(object):
         rospy.loginfo("=============================================")
         rospy.loginfo(" RL inference node  (69D attitude-only)")
         rospy.loginfo("  encoder      : %s   control: %.0f Hz", self.encoder_type, self.hz)
+        rospy.loginfo("  joint gain   : delta_scale %.4f/tick -> %.3f rad/s at full "
+                      "action%s", self.policy.delta_scale,
+                      self.policy.delta_scale * self.hz,
+                      "" if abs(self.policy.delta_scale - DELTA_SCALE) < 1e-9
+                      else "   *** NOT the trained default %.4f ***" % DELTA_SCALE)
         rospy.loginfo("  weights_dir  : %s", os.path.abspath(weights_dir))
         rospy.loginfo("  student npz  : %s  md5 %s", os.path.basename(student_npz),
                       _md5_8(student_npz))

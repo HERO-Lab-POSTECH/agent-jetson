@@ -106,6 +106,17 @@ class NumpyStudentPolicy:
                 "encoder_type must be 'tcn' or 'gru', got %r" % (encoder_type,))
         self.encoder_type = encoder_type
 
+        # Per-tick joint-target integration gain. An instance attribute rather than
+        # the bare module constant so the node can expose it as ~joint_delta_scale.
+        # WHY: the 2026-08-13 tank runs showed control_hz and this gain are
+        # CONFOUNDED. Dropping control_hz 50 -> 10 calmed the arm 250x, but it also
+        # divided the per-second wind rate by 5, because this scale is per TICK
+        # (:253) while CONTROL_DT (:65) is hardcoded and does not follow control_hz.
+        # So "10 Hz is stable" could not be attributed to observation delay rather
+        # than to gain. Separating them needs exactly one knob. Default unchanged --
+        # leaving the param unset reproduces the deployed behaviour byte for byte.
+        self.delta_scale = float(DELTA_SCALE)
+
         try:
             sw = np.load(student_npz)
         except (IOError, OSError) as e:
@@ -250,7 +261,7 @@ class NumpyStudentPolicy:
         #   1) accumulate joint PD target with this step's arm action
         #   2) clamp joint1 to +-6*pi (hardware cable-wrap protection, 3 turns)
         #   3) remember this action as prev_action for the next history feature
-        self._joint_target = self._joint_target + DELTA_SCALE * action[:2]
+        self._joint_target = self._joint_target + self.delta_scale * action[:2]
         np.clip(self._joint_target, -JOINT_TARGET_CLAMP, JOINT_TARGET_CLAMP,
                 out=self._joint_target)
         self._prev_action = action.copy()

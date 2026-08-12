@@ -6,6 +6,11 @@
   <arg name="encoder_type"        default="gru" />    <!-- tcn | gru; shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />  <!-- true=trust /albc_status angvel -->
+  <arg name="joint_delta_scale"   default="0.10" />   <!-- per-TICK joint-target gain,
+       np_policy.DELTA_SCALE. Per-second wind rate = this x control_hz, so the two are
+       confounded: the 2026-08-13 tank runs calmed 250x at control_hz 10, but that also
+       cut the gain 5x. Hold 0.02 at control_hz 50 to isolate observation delay.
+       Anything but 0.10 departs from what the checkpoint trained with. -->
   <arg name="thruster_scale"      default="0.0" />    <!-- 0.0=joint-only surface test, 1.0=live -->
   <arg name="thruster_max_s"      default="0.0" />    <!-- >0 => thrusters latch to 0 after N sec -->
   <arg name="imu_yaw_offset_deg"  default="102.0" /> <!-- CONFIRMED 2026-08-12 (was -78.0, itself 180 deg out; before that 45.0). albc_controller.yaml carries the solve -->
@@ -21,6 +26,7 @@
     <param name="encoder_type"       value="$(arg encoder_type)" />
     <param name="control_hz"         value="$(arg control_hz)" />
     <param name="use_board_rates"    value="$(arg use_board_rates)" />
+    <param name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <param name="thruster_scale"     value="$(arg thruster_scale)" />
     <param name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <param name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
