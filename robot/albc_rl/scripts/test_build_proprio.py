@@ -98,9 +98,11 @@ def test_euler_yaw_is_wrapped_to_pi_the_board_publishes_cumulative():
     for raw in (12.5, -12.5, 3.2, np.pi + 1e-3, 100 * np.pi + 0.4):
         out = b.build(_sensors(euler=(0.1, -0.2, raw)))
         assert -np.pi < out[5] <= np.pi, (raw, out[5])
-        # same angle, not merely in range
-        assert np.sin(out[5]) == pytest.approx(np.sin(raw), abs=1e-5)
-        assert np.cos(out[5]) == pytest.approx(np.cos(raw), abs=1e-5)
+        # same angle, not merely in range. Plain abs() rather than pytest.approx so this
+        # test also runs on the board, whose pytest predates approx (py2.7). The wrap is
+        # board-side logic, so the board should be able to check it.
+        assert abs(np.sin(out[5]) - np.sin(raw)) < 1e-5, (raw, out[5])
+        assert abs(np.cos(out[5]) - np.cos(raw)) < 1e-5, (raw, out[5])
 
 
 def test_build_does_not_mutate_the_callers_euler_array():
@@ -108,7 +110,7 @@ def test_build_does_not_mutate_the_callers_euler_array():
     b = ProprioBuilder()
     caller = np.array([0.1, -0.2, 12.5], dtype=np.float32)
     b.build(_sensors(euler=caller))
-    assert caller[2] == pytest.approx(12.5, abs=ATOL)
+    assert abs(caller[2] - 12.5) < ATOL, caller[2]
 
 
 def test_joint_pos_block_9_11():
