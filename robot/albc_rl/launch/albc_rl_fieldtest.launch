@@ -43,12 +43,18 @@
        (Identity itself replaced [4,0,1,5,2,3] earlier the same day, which had applied
        the sim's own column reorder a SECOND time and routed horizontal commands into
        the vertical motors.) Verify the startup log prints
-       order(fw from sim)=[3, 5, 4, 0, 1, 2] before any thrust.
-       2026-08-12: corrected from [3, 2, 4, 0, 5, 1]. That value was derived from a
-       mis-recalled _ESC_CHANNEL_ORDER (4,1,3,5,2,0); the repo value is (4,0,1,5,2,3),
-       unchanged since 2026-07-03 and therefore what the deployed teacher trained on.
-       Only the three horizontal sources moved (m1, m4, m5); verticals were right. -->
-  <arg name="thruster_order"      default="[3, 5, 4, 0, 1, 2]" />
+       order(fw from sim)=[3, 2, 4, 0, 5, 1] before any thrust.
+       2026-08-12 evening: RESTORED to [3, 2, 4, 0, 5, 1]. Earlier the same day it
+       had been "corrected" to [3, 5, 4, 0, 1, 2] on the grounds that
+       _ESC_CHANNEL_ORDER is (4,0,1,5,2,3) "unchanged since 2026-07-03", which is
+       false. 3bb042b (2026-07-14) replaced it with (4,1,3,5,2,0), and the deployed
+       teacher trained 2026-08-05, after. The stale tuple was read off a month-old
+       container checkout. The restored value is no longer derived from any tuple:
+       it comes from inverting the DEPLOYED CHECKPOINT'S OWN allocation matrix
+       (M = r x F on params/env.yaml:303) and matching each sim column to the
+       measured firmware channel by physical position. Full derivation and the
+       three independent position records are in thruster_mixer.py's header. -->
+  <arg name="thruster_order"      default="[3, 2, 4, 0, 5, 1]" />
   <!-- B1 per-OUTPUT-channel sign table [m0..m5], MEASURED in a restrained tank
        test (indexed by FIRMWARE channel, NOT sim channel, so it stays valid if
        thruster_order is edited). Identity (+1) until measured; keep

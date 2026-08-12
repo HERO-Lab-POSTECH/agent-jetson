@@ -8,13 +8,14 @@ Bridges the RL policy's thruster output to the firmware ESC subscriber.
 
 WHAT THIS NODE OWNS (and, deliberately, what it does NOT):
   * per-output-channel PERMUTATION (~thruster_order) -- the SIM numbers its
-        thrusters differently from the firmware's ESC channels. The sim's TAM
-        (constrained-albc config.py) puts the two VERTICAL (heave) thrusters at
-        sim indices 4,5; the firmware wires its two vertical motors to channels
-        m0,m3 (pid.cpp PID_control_depth drives only m0,m3). So a straight
-        pass-through (identity) sends the policy's depth-hold thrust to the
-        physically HORIZONTAL motors -> uncommanded dive. This node permutes sim
-        channels into firmware-channel order so vertical-stays-vertical.
+        thrusters differently from the firmware's ESC channels. In the DEPLOYED
+        matrix the two vertical columns are 0 and 3 (Fz row = 1,0,0,1,0,0), which
+        happens to match the firmware's vertical channels m0,m3 by index -- but
+        NOT by position: sim col0 sits at 9h and col3 at 3h, while the measured
+        m0 is at 3h and m3 at 9h, so the vertical pair is swapped and identity
+        would invert every depth correction. The four horizontals are rotated
+        90 deg besides. This node permutes sim channels into firmware-channel
+        order so vertical-stays-vertical AND each corner gets its own column.
         ~thruster_order[j] = which SIM index feeds firmware output channel j.
         A startup axis-assertion forbids any order that crosses the axis split
         (that is the one mis-edit that dives the boat); the within-axis
@@ -84,40 +85,76 @@ FW_HORZ_CH = (1, 2, 4, 5)
 SIM_VERT = frozenset((0, 3))
 SIM_HORZ = frozenset((1, 2, 4, 5))
 
-# Default order MEASURED 2026-08-11 (dry, one channel at a time via
-# b1_channel_probe, gripper at 12 o'clock on the observer's clock face):
-#     m0 = 3h vertical    m1 = 1.5h    m2 = 4.5h
-#     m3 = 9h vertical    m4 = 7.5h    m5 = 10.5h        (m3's motor is DEAD)
-# Sim side from actuators.xacro: T0..T3 at the four diagonals (+-0.102, +-0.102),
-# T4/T5 on +-x at 0.1445 m. Those coordinates reproduce the TAM's Mz=+-0.144 and
-# My=+-0.145 to four decimals, so the sim geometry is exact, and with +x=3h,
-# +y=12h (agent.urdf puts the gripper at +y) the LIVE columns land at
-#     col0=T4 9h    col1=T0 7.5h   col2=T1 10.5h
-#     col3=T5 3h    col4=T2 4.5h   col5=T3 1.5h
-# (col_k = T[_ESC_CHANNEL_ORDER[k]] with the tuple (4,0,1,5,2,3) -- recompute this
-#  block from the tuple, never from memory; a mis-recalled tuple is what produced
-#  the previous wrong default.)
-# Matching fw channel to live column BY PHYSICAL POSITION gives the order below.
+# Order DERIVED 2026-08-12 from the DEPLOYED CHECKPOINT'S OWN allocation matrix.
 #
-# THREE earlier defaults were wrong; this is the fourth. [4,0,1,5,2,3] applied the
-# sim's own column reorder a SECOND time and routed horizontal commands into the
-# vertical motors (an uncommanded dive the axis assert could not catch while
-# SIM_VERT was the stale {4,5}). Identity assumed the sim-side _ESC_CHANNEL_ORDER
-# already matched the wiring. [3,2,4,0,5,1] (2026-08-11) had the right METHOD but
-# read _ESC_CHANNEL_ORDER as (4,1,3,5,2,0) -- a value that is not in the repo. The
-# live tuple is (4,0,1,5,2,3), introduced 2026-07-03 (constrained-albc 238932c) and
-# UNCHANGED since; every later config.py commit is DR/latency work. The deployed
-# teacher trained 2026-08-05, so that tuple is what the policy learned. Verified by
-# git log, not by reading the working tree -- the working tree cannot tell you what
-# a checkpoint was trained with.
-# None of the wrong orders was ever exercised in the water: thruster_scale defaults
-# to 0.0 and the field-test bags (fieldtest_2026-07-06-*) carry thruster_pwm == 0.
+# METHOD (this is the part that matters -- three earlier derivations went wrong by
+# reading a constant instead of the artifact):
+#   Do NOT read _ESC_CHANNEL_ORDER out of the sim working tree. A working tree
+#   cannot tell you what a checkpoint was trained with, and this constant has in
+#   fact changed under us. Read the matrix the policy actually trained on, out of
+#   the run's own params/env.yaml, and invert it geometrically:
+#       M = r x F   =>   Mz = x*Fy - y*Fx,  My = z*Fx - x*Fz,  Mx = y*Fz - z*Fy
+#   On the +-0.102 diagonal grid each column's position is a UNIQUE solution, and
+#   the tiny Mx/My terms cross-check it (they all resolve to z = -+0.0099).
 #
-# Per-channel SIGNS remain placeholders until the tank measurement. NOTE the tank
-# YAW test cannot validate this order: Mz = +0.144 for ALL FOUR horizontals, so any
-# permutation of them yaws identically. Only Fx/Fy (translation direction) separates
-# them, which is why the order is fixed from geometry and the water only confirms.
-DEFAULT_ORDER = [3, 5, 4, 0, 1, 2]  # index = fw channel j, value = sim source
+# DEPLOYED TEACHER: logs/rsl_rl/albc_trpo_teacher/teacher_iter_budget/
+#   trpo_iterbudget_s30_260805_012813/model_9998.pt -- named as `teacher` by BOTH
+#   MANIFEST.tcn.json and MANIFEST.gru.json on this board, so it is the matrix the
+#   shipped weights learned. Its allocation_matrix (params/env.yaml:303):
+#       Fx [ 0.000,  0.707, -0.707,  0.000, -0.707,  0.707]
+#       Fy [ 0.000,  0.707,  0.707,  0.000, -0.707, -0.707]
+#       Fz [ 1.000,  0.000,  0.000,  1.000,  0.000,  0.000]
+#       Mz [ 0.000, -0.144,  0.144,  0.000, -0.144,  0.144]
+#   Inverting gives, per SIM column:
+#       col0 vertical @ 9h    col1 @ 10.5h   col2 @ 1.5h
+#       col3 vertical @ 3h    col4 @ 4.5h    col5 @ 7.5h
+#
+# MEASURED firmware channels (b1_channel_probe, dry, one channel at a time, on the
+# clock face whose 12 is the GRIPPER):
+#       m0 = 3h vertical   m1 = 1.5h   m2 = 4.5h
+#       m3 = 9h vertical   m4 = 7.5h   m5 = 10.5h        (m3's motor is DEAD)
+#   Three independent records agree on this: the 2026-07-05 B1 verbal record
+#   (m1=rear-left, m2=front-left, m4=front-right, m5=rear-right -- which lands on
+#   exactly these four clock positions once you read its "front" as the 6h side,
+#   i.e. opposite the gripper, with left=3h, a consistent right-handed frame), the
+#   2026-08-11 probe, and a 2026-08-12 re-probe of m1 and m2.
+#
+# Matching fw channel to sim column BY PHYSICAL POSITION gives the order below.
+# Note what that means: the sim's horizontal columns sit 90 deg rotated from the
+# real robot, and its two vertical columns are swapped. The vertical swap is not
+# news -- constrained-albc 3bb042b says so itself ("STILL OPEN ... vertical Fz/My
+# row redesign"). The horizontal 90 deg is: 3bb042b mapped m1<-T1, but T1 is at
+# 10.5h while m1 is measured at 1.5h.
+#
+# WHAT THE PREVIOUS WRONG VALUES GOT WRONG (four of them, all the same class):
+#   [4,0,1,5,2,3]   applied the sim's own column reorder a SECOND time.
+#   identity        assumed the sim-side reorder already matched the wiring.
+#   [3,5,4,0,1,2]   (2026-08-12 afternoon) was derived from _ESC_CHANNEL_ORDER =
+#                   (4,0,1,5,2,3). That tuple is REAL but STALE: it was introduced
+#                   2026-07-03 (238932c) and REPLACED by (4,1,3,5,2,0) on
+#                   2026-07-14 (3bb042b, "rewrite horizontal TAM rows + ESC
+#                   permutation to 2026-07-06 B1 measurement"). The teacher trained
+#                   2026-08-05, i.e. AFTER. The claim that every post-238932c
+#                   config.py commit was "DR/latency work" was simply false, and it
+#                   was read off a month-stale container checkout.
+#   [3,2,4,0,5,1]   (2026-08-11) was RIGHT and was discarded on wrong grounds.
+#                   It is restored here, now backed by the checkpoint artifact
+#                   rather than by any constant.
+#
+# YAW IS NOT PERMUTATION-INVARIANT HERE. An earlier note in this file claimed the
+# four horizontals all carry Mz = +0.144 so any permutation yaws identically. That
+# was true of the PRE-3bb042b matrix only. The deployed matrix has a 2-2 split
+# (cols 1,4 = -0.144; cols 2,5 = +0.144), so a wrong horizontal permutation yaws
+# wrong as well as translating wrong.
+#
+# OPEN, and deliberately left to ~thruster_sign: matching by position puts a sim
+# Mz sign on each corner OPPOSITE to the rotation direction recorded on 2026-07-05
+# (m1,m4 = CW; m2,m5 = CCW). A permutation cannot flip a sign, but the per-channel
+# sign table can, and a consistent solution provably exists because each horizontal
+# thruster is tangential to its own radius -- flipping its sign points the thrust
+# along the opposite tangent, which fixes position and Mz together. That is the
+# restrained-tank measurement (Phase 2b-0), not something to guess here.
+DEFAULT_ORDER = [3, 2, 4, 0, 5, 1]  # index = fw channel j, value = sim source
 
 # ESC deadband, normalized to the action range, for the 2026-08-12 firmware.
 DEFAULT_DEADBAND = 0.15

@@ -28,12 +28,17 @@ MIXER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thruster_mixer
 
 IDENTITY = [0, 1, 2, 3, 4, 5]
 DOUBLE_PERMUTED = [4, 0, 1, 5, 2, 3]  # the pre-2026-08-11 dive default
-# Physical positions from the dry channel probe (2026-08-11 evening) matched to the
-# live sim columns, which come from _ESC_CHANNEL_ORDER = (4,0,1,5,2,3) -- in the repo
-# since 2026-07-03 and unchanged, so it is what the deployed teacher trained on.
-# The 2026-08-11 value [3,2,4,0,5,1] used a mis-recalled tuple (4,1,3,5,2,0).
-GEOMETRIC = [3, 5, 4, 0, 1, 2]
-MISRECALLED = [3, 2, 4, 0, 5, 1]  # superseded 2026-08-12; axis-legal but wrong sources
+# Physical positions from the dry channel probe matched to the live sim columns.
+# 2026-08-12 evening: the sim columns are NOT taken from _ESC_CHANNEL_ORDER any more.
+# That constant is not a reliable witness -- it was read as (4,0,1,5,2,3) "unchanged
+# since 2026-07-03", but 3bb042b (2026-07-14) replaced it with (4,1,3,5,2,0) and the
+# deployed teacher trained 2026-08-05, after. The columns below come from inverting
+# the DEPLOYED CHECKPOINT'S OWN allocation matrix (M = r x F on params/env.yaml:303):
+#     col0 vert @9h   col1 @10.5h   col2 @1.5h   col3 vert @3h   col4 @4.5h   col5 @7.5h
+# against the measured firmware map (m0 @3h vert, m1 @1.5h, m2 @4.5h, m3 @9h vert,
+# m4 @7.5h, m5 @10.5h), which three independent records agree on.
+GEOMETRIC = [3, 2, 4, 0, 5, 1]
+STALE_TUPLE_DERIVED = [3, 5, 4, 0, 1, 2]  # 2026-08-12 afternoon; from the stale tuple
 
 
 def _constants():
@@ -89,20 +94,25 @@ def test_geometric_order_is_the_default_and_is_accepted():
     assert _accepts(c, IDENTITY), "identity is axis-legal; only the default changed"
 
 
-def test_misrecalled_order_is_axis_legal_but_is_not_the_default():
-    """[3,2,4,0,5,1] passes the axis assert yet routes three horizontals wrongly.
+def test_stale_tuple_order_is_axis_legal_but_is_not_the_default():
+    """[3,5,4,0,1,2] passes the axis assert yet routes three horizontals wrongly.
 
     This is the whole reason the default needs pinning by a test: the startup
     assertion only guards the vertical/horizontal split, and this order keeps that
     split intact (m0<-3, m3<-0). It differs from the correct one by a 3-cycle among
-    the horizontal sources, which in the water shows up as translation in the wrong
-    direction -- and NOT as a yaw error, because Mz is identical for all four
-    horizontals. Nothing downstream would have complained.
+    the horizontal sources.
+
+    In the water that shows up as translation in the wrong direction AND as a yaw
+    error. An earlier version of this test asserted the opposite -- "Mz is identical
+    for all four horizontals, so yaw is permutation-invariant". That was true of the
+    PRE-3bb042b matrix only. The deployed matrix carries a 2-2 split
+    (cols 1,4 = -0.144; cols 2,5 = +0.144), so nothing about a wrong horizontal
+    permutation is silent in yaw either.
     """
     c = _constants()
-    assert _accepts(c, MISRECALLED), "it was axis-legal, which is why it survived"
-    assert c["DEFAULT_ORDER"] != MISRECALLED
-    moved = [j for j in range(6) if MISRECALLED[j] != GEOMETRIC[j]]
+    assert _accepts(c, STALE_TUPLE_DERIVED), "it was axis-legal, which is why it survived"
+    assert c["DEFAULT_ORDER"] != STALE_TUPLE_DERIVED
+    moved = [j for j in range(6) if STALE_TUPLE_DERIVED[j] != GEOMETRIC[j]]
     assert moved == [1, 4, 5], "only the three horizontal sources moved"
 
 
