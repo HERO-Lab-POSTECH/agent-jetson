@@ -28,15 +28,27 @@
 //     - velocity differentiation uses the measured loop dt (ros::Time), not 1/LOOP_HZ
 //     - Dynamixel hardware error byte surfaced (WARN_THROTTLE) on read/write
 //     - one-shot "First command received" INFO so the operator sees cmd flow
+//   + (2026-08-17 cable-break fix — see joint_unwrap.h for the derivation)
+//     - unwrap is now NEAREST-equivalent, not single-step. The old rule leaked
+//       (k-1) whole turns on the first command whenever the arm started more
+//       than one turn from zero, which broke the J1->J2 cable on 2026-08-13.
+//     - joint1 cable guard: ~joint1_abort_rad (default 6pi = 3 turns) ABORTS the
+//       run — latches, stops applying commands, holds the last goal, leaves
+//       torque ON. Checked on BOTH the commanded and the MEASURED angle.
+//     - constraint metering on /albc/joint_guard. Counted, never enforced: a
+//       silent clamp would destroy the quantity used to compare TDC / classic
+//       PID / RL, and all four entry points drive the arm through this node.
 // Everything else is byte-identical to the board original (verified @ 2026-06-07).
 // ------------------------------------------------------------------------------
 #include "ros/ros.h"
 #include "std_msgs/Float64.h"
 #include "std_msgs/Float32MultiArray.h"
+#include "std_msgs/Float64MultiArray.h"      // RL-DEPLOY 2026-08-17 (/albc/joint_guard)
 #include "sensor_msgs/JointState.h"          // RL-DEPLOY
 #include "dynamixel_sdk/dynamixel_sdk.h"
 
 #include "albc_control/dynamixel_config.h"
+#include "albc_control/joint_unwrap.h"       // RL-DEPLOY 2026-08-17 (cable-break fix)
 
 #include <cmath>
 
@@ -53,6 +65,33 @@
 static double g_loop_hz         = 10.0;
 static int    g_startup_ticks   = STARTUP_TICKS;   // 50 = 5 s at 10 Hz
 static int    g_read_fail_limit = 10;              // 10 = ~1 s at 10 Hz
+
+// RL-DEPLOY 2026-08-17: joint1 cable guard + constraint metering.
+// Three bands, and only the outermost one intervenes:
+//   |theta1| <= 4pi   free. This is the TRAINING constraint band
+//                     (joint1_position_cost, limit_rad 4pi, budget 0.01).
+//   4pi .. 6pi        free, but METERED -- see g_j1_over_count.
+//   |theta1| >  6pi   ABORT (operator decision 2026-08-17: 3 turns is the last
+//                     line, 4 turns is dangerous).
+//
+// Metering, not clamping, is the point. A silent clamp rewrites the commanded
+// value, which destroys the very quantity we want to compare across TDC,
+// classic PID and RL -- how far the controller actually tried to go. And the
+// old policy-side clamp is what turned a seed outside the band into a
+// multi-radian step command. So: count inside the band, abort at the ceiling,
+// never truncate.
+//
+// The guard watches the MEASURED angle as well as the commanded one, because
+// on 2026-08-13 the command stream stayed inside +-3 turns (max |cmd| 18.755)
+// while the arm was driven to -35.54. A command-side-only guard misses exactly
+// the failure this exists to prevent.
+static double g_j1_abort_rad   = 6.0 * M_PI;   // 3 turns -- cable ceiling, ABORTS
+static double g_j1_count_rad   = 4.0 * M_PI;   // 2 turns -- training limit, COUNTS
+static bool   g_abort_latched  = false;
+static double g_j1_over_count  = 0.0;          // ticks with |measured theta1| > count_rad
+static double g_j2_over_pi     = 0.0;          // ticks with |measured theta2| > pi
+static double g_j1_abs_max     = 0.0;
+static double g_j2_abs_max     = 0.0;
 
 // ==============================
 // Joint State
@@ -193,9 +232,10 @@ bool updateMeasured(MeasuredState& m, uint8_t id, double dt) {
         m.init = true;
         return true;
     }
-    double delta = w - m.prev_meas_wrapped;
-    if (delta > M_PI) delta -= 2.0 * M_PI;             // unwrap, same rule as updateJoint()
-    else if (delta <= -M_PI) delta += 2.0 * M_PI;
+    // same rule as updateJoint(). Consecutive readings are always well under pi
+    // apart (OPERATING_VELOCITY caps the joint near 2.4 rad/s, so <=0.24 rad per
+    // 10 Hz tick), which is the region where nearest and single-step agree.
+    double delta = albc::unwrapNearest(w - m.prev_meas_wrapped);
     m.abs_meas += delta;
     m.vel = delta / dt;
     m.prev_meas_wrapped = w;
@@ -206,15 +246,58 @@ bool updateMeasured(MeasuredState& m, uint8_t id, double dt) {
 // Callback (DRY: handles both joints)
 // ==============================
 
-void updateJoint(JointState& joint, double commanded_angle) {
-    double delta = commanded_angle - joint.prev_commanded;
+// RL-DEPLOY 2026-08-17: latch the cable guard. Deliberately does NOT disable
+// torque -- underwater a limp arm falls, which is worse than a held one. The arm
+// keeps its last written goal, commands stop being applied, and the operator
+// decides. Unwinding J1 is a manual step before the next run.
+void tripAbort(const char* what, double value) {
+    if (g_abort_latched) return;
+    g_abort_latched = true;
+    ROS_ERROR("JOINT GUARD TRIPPED: %s = %.3f rad (%.2f turns) exceeds the "
+              "%.2f-turn cable ceiling (~joint1_abort_rad). Commands are now "
+              "IGNORED and the arm HOLDS its last goal; torque stays ON. "
+              "Unwind J1 before restarting.",
+              what, value, value / (2.0 * M_PI), g_j1_abort_rad / (2.0 * M_PI));
+}
 
-    // Unwrap angle (handle 2pi wraparound)
-    if (delta > M_PI) delta -= 2 * M_PI;
-    else if (delta <= -M_PI) delta += 2 * M_PI;
+void updateJoint(JointState& joint, double commanded_angle) {
+    // Guard latched: stop following the topic. Holding the last goal is the
+    // abort behaviour -- see tripAbort().
+    if (g_abort_latched) return;
+
+    double raw_delta = commanded_angle - joint.prev_commanded;
+
+    // Unwrap to the NEAREST equivalent angle, removing however many whole turns
+    // separate the command from the running baseline. The former rule removed at
+    // most one 2pi, so a cumulative-vs-wrapped baseline mismatch of k turns
+    // leaked (k-1) turns into absolute_angle on the first command -- the
+    // 2026-08-13 cable break. Identical to the old rule for |delta| < pi, which
+    // is every steady-state tick. See joint_unwrap.h for the full derivation.
+    double delta = albc::unwrapNearest(raw_delta);
+
+    // Say so when a fold actually happens. A per-tick request more than pi away
+    // from the baseline is never legitimate here (the RL accumulator moves at
+    // most DELTA_SCALE = 0.10 rad/tick; the classic publisher is continuous), so
+    // it means either a representation mismatch or a truncated policy seed.
+    // Folding it silently is what kept the old bug invisible.
+    if (std::fabs(raw_delta - delta) > 1e-9) {
+        ROS_WARN_THROTTLE(1.0,
+            "joint ID %d: command %.3f rad is %.2f turns from baseline %.3f -- "
+            "folded to a %.3f rad step. Representation mismatch or clipped seed.",
+            joint.dxl_id, commanded_angle,
+            (raw_delta - delta) / (2.0 * M_PI), joint.prev_commanded, delta);
+    }
 
     joint.absolute_angle += delta;
     joint.prev_commanded = commanded_angle;
+
+    // Command-side ceiling: catches intent one tick early. The measured-side
+    // check in the main loop is the one that catches a driver/arm divergence.
+    if (joint.dxl_id == JOINT1_ID &&
+        albc::overGuard(joint.absolute_angle, g_j1_abort_rad)) {
+        tripAbort("joint1 commanded", joint.absolute_angle);
+        return;                    // never write the offending goal
+    }
 
     setPosition(joint.dxl_id, static_cast<int32_t>(RAD_TO_DXL(joint.absolute_angle)));
 }
@@ -250,6 +333,20 @@ int main(int argc, char **argv) {
     ros::Publisher current_pub = nh.advertise<std_msgs::Float32MultiArray>("/joint_currents", 10);
     // RL-DEPLOY: arm state for the RL inference node (pos = measured, vel = differentiated here)
     ros::Publisher joint_state_pub = nh.advertise<sensor_msgs::JointState>("/albc/joint_states", 10);
+    // RL-DEPLOY 2026-08-17: constraint metering + guard state. Every controller
+    // (TDC, classic PID, RL, B1 probe) drives the arm through THIS node, so a
+    // counter here measures all of them on one instrument and they stay
+    // comparable. Counting per-controller would give each its own definition.
+    //
+    // CONTRACT -- 5 fields, fixed order, never reorder (consumers index by position):
+    //   0 j1_over_count : ticks with |measured theta1| > ~joint1_count_rad (4pi)
+    //                     == the training constraint joint1_position_cost
+    //   1 j1_abs_max    : max |measured theta1| this run (rad)
+    //   2 j2_over_pi    : ticks with |measured theta2| > pi (manipulability
+    //                     singularity side; metered only, never enforced)
+    //   3 j2_abs_max    : max |measured theta2| this run (rad)
+    //   4 abort_flag    : 1.0 once the cable guard has latched, else 0.0
+    ros::Publisher guard_pub = nh.advertise<std_msgs::Float64MultiArray>("/albc/joint_guard", 10);
 
     // RL-DEPLOY: queue_size 1 -- the RL node publishes at 50 Hz but this loop drains
     // callbacks at 10 Hz; with queue 10 every cycle replayed ~5 stale commands per
@@ -288,13 +385,23 @@ int main(int argc, char **argv) {
     double angle1 = DXL_TO_RAD(pos1);
     double angle2 = DXL_TO_RAD(pos2);
 
+    // The two halves are in DIFFERENT representations of the same angle:
+    // absolute_angle is cumulative (multi-turn, operating mode 4), prev_commanded
+    // is wrapped into [0, 2pi). That is deliberate -- this topic has publishers in
+    // BOTH conventions (rl_inference_node sends cumulative, status_publisher.h
+    // sends mapTo2Pi wrapped) and a wrapped baseline is the one that suits both.
+    //
+    // It was only ever safe once updateJoint started unwrapping to the NEAREST
+    // equivalent (2026-08-17). Under the old single-step unwrap this pairing
+    // leaked (k-1) whole turns into absolute_angle on the first cumulative
+    // command and broke the J1->J2 cable on 2026-08-13. Do not "fix" this to a
+    // cumulative baseline: that merely moves the same defect onto the classic
+    // publisher. joint_unwrap.h carries the derivation.
     joint1.absolute_angle = angle1;
-    joint1.prev_commanded = fmod(angle1, 2.0 * M_PI);
-    if (joint1.prev_commanded < 0.0) joint1.prev_commanded += 2.0 * M_PI;
+    joint1.prev_commanded = albc::wrapTo2Pi(angle1);
 
     joint2.absolute_angle = angle2;
-    joint2.prev_commanded = fmod(angle2, 2.0 * M_PI);
-    if (joint2.prev_commanded < 0.0) joint2.prev_commanded += 2.0 * M_PI;
+    joint2.prev_commanded = albc::wrapTo2Pi(angle2);
 
     // Slow startup: limit servo speed until first command + ramp duration
     // (STARTUP_VELOCITY / STARTUP_TICKS defined in dynamixel_config.h)
@@ -329,6 +436,16 @@ int main(int argc, char **argv) {
              "read-fail alarm %d ticks = %.1f s)",
              g_loop_hz, g_startup_ticks, g_startup_ticks / g_loop_hz,
              g_read_fail_limit, g_read_fail_limit / g_loop_hz);
+
+    // RL-DEPLOY 2026-08-17: cable guard band. Defaults are the operator's
+    // 2026-08-17 decision (3 turns is the last line, 4 turns is dangerous) and
+    // the training constraint (joint1_position_cost limit_rad = 4pi). Set
+    // ~joint1_abort_rad <= 0 to disable the abort entirely -- metering stays on.
+    pnh.param("joint1_abort_rad", g_j1_abort_rad, 6.0 * M_PI);
+    pnh.param("joint1_count_rad", g_j1_count_rad, 4.0 * M_PI);
+    ROS_INFO("  joint1 guard: count > %.2f turns, ABORT > %.2f turns%s",
+             g_j1_count_rad / (2.0 * M_PI), g_j1_abort_rad / (2.0 * M_PI),
+             g_j1_abort_rad > 0.0 ? "" : "  (abort DISABLED)");
 
     ros::Rate loop_rate(g_loop_hz);
     // RL-DEPLOY: differentiate with the MEASURED loop period, not 1/LOOP_HZ -- when
@@ -372,6 +489,20 @@ int main(int argc, char **argv) {
             js.position = {meas1.abs_meas, meas2.abs_meas};   // measured, raw-cumulative (matches sim)
             js.velocity = {meas1.vel, meas2.vel};             // differentiated at the true rate
             joint_state_pub.publish(js);
+
+            // RL-DEPLOY 2026-08-17: meter on the MEASURED angle, and guard on it.
+            // This is the check that would have caught 2026-08-13: the command
+            // stream never left +-3 turns while the arm was driven to -35.54 rad,
+            // so watching only what was commanded misses a driver/arm divergence.
+            const double a1 = std::fabs(meas1.abs_meas);
+            const double a2 = std::fabs(meas2.abs_meas);
+            if (a1 > g_j1_abs_max) g_j1_abs_max = a1;
+            if (a2 > g_j2_abs_max) g_j2_abs_max = a2;
+            if (a1 > g_j1_count_rad) g_j1_over_count += 1.0;   // counted, NOT enforced
+            if (a2 > M_PI)           g_j2_over_pi    += 1.0;   // counted, NOT enforced
+            if (albc::overGuard(meas1.abs_meas, g_j1_abort_rad)) {
+                tripAbort("joint1 measured", meas1.abs_meas);
+            }
         } else {
             // skip the publish: the RL node's staleness gate handles a long outage,
             // and a single glitch must not reach the observation as fake state.
@@ -385,8 +516,20 @@ int main(int argc, char **argv) {
             }
         }
 
+        // RL-DEPLOY 2026-08-17: guard/metering state, every cycle (5 fields, see
+        // the guard_pub advertise above for the field contract).
+        std_msgs::Float64MultiArray guard_msg;
+        guard_msg.data = {g_j1_over_count, g_j1_abs_max,
+                          g_j2_over_pi,    g_j2_abs_max,
+                          g_abort_latched ? 1.0 : 0.0};
+        guard_pub.publish(guard_msg);
+
         // [BUG FIX T1] Throttled logging (was unthrottled at 10 Hz)
         ROS_INFO_THROTTLE(2.0, "Joint Currents - J1: %.1f mA, J2: %.1f mA", current1_mA, current2_mA);
+        ROS_INFO_THROTTLE(5.0,
+            "joint1 |theta| max %.2f turns, %d ticks past the %.1f-turn training "
+            "limit%s", g_j1_abs_max / (2.0 * M_PI), static_cast<int>(g_j1_over_count),
+            g_j1_count_rad / (2.0 * M_PI), g_abort_latched ? "  [GUARD LATCHED]" : "");
 
         ros::spinOnce();
         loop_rate.sleep();

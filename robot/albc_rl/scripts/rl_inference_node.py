@@ -122,10 +122,15 @@ class RLInferenceNode(object):
         self.thruster_scale = float(rospy.get_param("~thruster_scale", 0.0))
         self.thruster_max_s = float(rospy.get_param("~thruster_max_s", 0.0))
         # No homing / HOLDING phase: the policy runs from the first valid tick.
-        # joint1 multi-turn excursions are bounded by an explicit +-6*pi clamp in
-        # the policy runtime (np_policy._joint_target), a HARDWARE-PROTECTION limit
-        # (3 turns) for cable wrapping -- the policy itself learns to stay near
-        # nominal via the training-side constraint, not via a node-side homing pass.
+        # joint1 multi-turn excursions are NOT bounded here, and no longer bounded
+        # in the policy runtime either (the np_policy +-6*pi clamp was removed
+        # 2026-08-17). The cable ceiling is a DRIVER-layer abort --
+        # joint_angle_command ~joint1_abort_rad, default 6*pi = 3 turns -- because
+        # a policy-layer rail never reaches the hardware: on 2026-08-13 the arm
+        # was driven to -35.54 rad while the policy's own targets stayed inside
+        # +-18.85. Excursions past the 4*pi training constraint are COUNTED on
+        # /albc/joint_guard rather than clipped, so the number stays comparable
+        # across TDC, classic PID and RL.
         self._first_tick_t = None   # set on the first published tick (thruster_max_s)
 
         student_npz = os.path.join(weights_dir, "weights_%s.npz" % self.encoder_type)

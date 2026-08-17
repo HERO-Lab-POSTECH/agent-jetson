@@ -79,11 +79,25 @@ BIAS_EMA_ALPHA = 0.99       # cfg.reward.bias_ema_alpha (incumbent env.yaml:389)
 NOMINAL_JOINT_POS = np.array([0.0, np.pi / 2.0], dtype=np.float32)
 DELTA_SCALE = 0.10
 TCN_HISTORY = 9
-# Hardware-protection clamp on joint1's accumulated target: +-6*pi = +-3 turns,
-# the cable-wrap limit. This is a SAFETY rail, not a control law -- the policy is
-# expected to stay near nominal on its own (training-side constraint). joint2 has
-# no physical wrap limit, so it is left unclamped (np.inf).
-JOINT_TARGET_CLAMP = np.array([6.0 * np.pi, np.inf], dtype=np.float32)
+# Reference band on joint1's accumulated target, for documentation and tests.
+# 4*pi is the TRAINING constraint (joint1_position_cost, limit_rad = 4*pi,
+# budget 0.01 in the deployed run's params/env.yaml). It is NOT enforced here.
+#
+# 2026-08-17: the former np.clip at 6*pi is REMOVED, deliberately.
+#   1. It hid the metric. Truncating the target destroys "how far did this
+#      controller actually try to go", which is exactly the quantity used to
+#      compare TDC / classic PID / RL. The driver now COUNTS it instead, on
+#      /albc/joint_guard, where all controllers pass through one instrument.
+#   2. It manufactured a step command. On a seed already outside the band the
+#      clip turned the first published target into a multi-radian jump
+#      (measured 2026-08-13: seed -21.953 -> first command -18.755, a 3.2 rad
+#      step), and no unwrap rule can absorb a jump larger than pi.
+#   3. The sim has no clamp either (albc_env.py _joint_pos_targets), so this was
+#      a deploy-only divergence from training.
+# The physical ceiling now lives one layer down, in joint_angle_command
+# (~joint1_abort_rad, default 6*pi = 3 turns), which ABORTS the run rather than
+# silently truncating it -- and checks the measured angle, not just the command.
+JOINT1_TRAIN_LIMIT = 4.0 * np.pi
 
 
 def _wrap_angle(a):
@@ -259,11 +273,12 @@ class NumpyStudentPolicy:
 
         # update buffers for the NEXT step (order mirrors the sim step):
         #   1) accumulate joint PD target with this step's arm action
-        #   2) clamp joint1 to +-6*pi (hardware cable-wrap protection, 3 turns)
-        #   3) remember this action as prev_action for the next history feature
+        #   2) remember this action as prev_action for the next history feature
+        # No clamp -- byte-for-byte what the sim does (albc_env.py
+        # _joint_pos_targets += delta). The cable ceiling is enforced by the
+        # driver, which aborts; see JOINT1_TRAIN_LIMIT above for why truncating
+        # here was both a metric loss and a source of step commands.
         self._joint_target = self._joint_target + self.delta_scale * action[:2]
-        np.clip(self._joint_target, -JOINT_TARGET_CLAMP, JOINT_TARGET_CLAMP,
-                out=self._joint_target)
         self._prev_action = action.copy()
         return action
 

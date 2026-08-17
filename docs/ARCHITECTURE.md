@@ -524,15 +524,30 @@ joint_target += DELTA_SCALE * action[0:2]
 // NOMINAL_JOINT_POS = [0, π/2], DELTA_SCALE = 0.10
 ```
 
-joint_angle_command (Dynamixel 드라이버)는 unwrap-follow:
+joint_angle_command (Dynamixel 드라이버)는 unwrap-follow. 2026-08-17 이후
+**최근접(nearest) 감음** — 몇 바퀴가 벌어져 있든 한 번에 접는다:
 ```
-if (target - prev_target) > π:
-    target -= 2π  // wrapping
-else if (target - prev_target) < -π:
-    target += 2π
-current_angle = unwrap(measured_encoder_position)
-error = target - current_angle
+delta = unwrapNearest(cmd - prev_commanded)   // joint_unwrap.h
+absolute_angle += delta
+setPosition(RAD_TO_DXL(absolute_angle))
 ```
+이 토픽에는 **표현이 다른 발행자가 둘** 붙는다 — `rl_inference_node` 는 누적
+절대각, `status_publisher.h` 는 `mapTo2Pi` 래핑값. 최근접 감음은 양쪽 모두에
+대해 잔차 0 이다. 옛 규칙은 2π 를 **한 번만** 뺐고, 그래서 팔이 한 바퀴 넘게
+감긴 상태에서 첫 명령에 `(k−1)` 바퀴가 통째로 들어갔다 — 2026-08-13 J1→J2
+케이블 단선의 근인. 유도와 실측은 `albc_control/include/albc_control/joint_unwrap.h`.
+
+**joint1 케이블 가드** (같은 노드): `~joint1_abort_rad` 기본 `6π`(3바퀴)를
+**명령각 또는 실측각** 중 하나라도 넘으면 래치하고 명령 적용을 멈춘다(토크는 켠 채
+마지막 goal 유지 — 수중에서 늘어지면 더 위험). 자르지 않고 **중단**하는 이유는
+자르는 순간 "제어기가 실제로 얼마나 가려 했나"가 사라지기 때문이다. 실측각까지 보는
+이유는 08-13 에 명령 스트림은 ±3바퀴 안에 있었는데 팔은 −35.54 rad 로 갔기 때문.
+
+**`/albc/joint_guard`** (`Float64MultiArray`, 5필드 고정 순서): `[j1_over_count,
+j1_abs_max, j2_over_pi, j2_abs_max, abort_flag]`. `j1_over_count` 는 학습 제약
+(`joint1_position_cost`, `limit_rad = 4π`) 초과 틱수로, **막지 않고 세기만** 한다.
+TDC·클래식 PID·RL·B1 probe 가 전부 이 노드를 거치므로 세 제어기가 같은 계기로
+측정된다.
 
 ### 4.4 /albc_status 11-Field ABI
 
