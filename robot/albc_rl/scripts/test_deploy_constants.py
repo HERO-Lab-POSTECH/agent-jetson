@@ -234,6 +234,96 @@ def test_exactly_one_thruster_mixer_per_launch():
         "launch_mixer:=false -> duplicate node name: %s" % ", ".join(bad))
 
 
+# --------------------------------------------------------------- start-pose gate
+# RL-DEPLOY 2026-08-17. The 2026-08-13 cable break began with the policy winding J1
+# past 2*pi from a start sim never shows it: randomize_joint_positions writes theta1
+# to uniform(-pi, pi) at EVERY episode reset, so the trained +-2-turn budget is
+# measured from near zero. On the real arm nothing resets it. Two defences ship
+# together and both are easy to un-ship by editing one default, which is what these
+# tests watch.
+
+NODE_REL = "albc_rl/scripts/rl_inference_node.py"
+RL_LAUNCHES = ("albc_rl.launch", "albc_rl_fieldtest.launch")
+
+
+def _launch_arg(fn, name):
+    root = ET.parse(os.path.join(LAUNCH_DIR, fn)).getroot()
+    for a in root.findall("arg"):
+        if a.get("name") == name:
+            return (a.get("default") or "").strip()
+    raise AssertionError("%s declares no <arg name=%r>" % (fn, name))
+
+
+def test_home_on_start_defaults_to_false_everywhere():
+    """Homing COMMANDS the arm and cannot unwind a wound one.
+
+    _home_arm drives toward joint1 0, which the driver reaches at the NEAREST
+    0-equivalent -- so from -11 rad it does not unwind, it just stops somewhere and,
+    on timeout, warns and proceeds anyway. Until the restart round-trip regression
+    test passes, arm motion before the policy is opt-in. Three sites carry the
+    default and a run picks up whichever one is nearest, so all three must agree.
+    """
+    bad = [fn for fn in RL_LAUNCHES if _launch_arg(fn, "home_on_start").lower() != "false"]
+    assert not bad, "home_on_start must default to false in: %s" % ", ".join(bad)
+    m = re.search(r'get_param\("~home_on_start",\s*(\w+)\)', _read(NODE_REL))
+    assert m and m.group(1) == "False", (
+        "rl_inference_node's own default must be False too -- a bare rosrun does not "
+        "read the launch file (found %s)" % (m.group(1) if m else "no call"))
+
+
+def test_joint1_start_gate_default_is_pi():
+    """pi, because that is the band sim actually trained over.
+
+    Not a safety margin picked by feel: uniform(-pi, pi) is literally the reset
+    distribution. Widening this is a deliberate experiment, so it must be a per-run
+    override, never a committed default.
+    """
+    m = re.search(r'get_param\("~joint1_start_max_rad",\s*([^)]+)\)', _read(NODE_REL))
+    assert m, "rl_inference_node no longer reads ~joint1_start_max_rad"
+    assert "np.pi" in m.group(1), "node default must be np.pi, found %s" % m.group(1)
+    for fn in RL_LAUNCHES:
+        v = float(_launch_arg(fn, "joint1_start_max_rad"))
+        assert abs(v - math.pi) < 1e-9, "%s defaults to %s, not pi" % (fn, v)
+
+
+def test_start_pose_gate_is_wired_not_decorative():
+    """An <arg> nobody passes down is a comment with XML syntax.
+
+    albc_rl.launch must turn the arg into a <param> on the node; the fieldtest parent
+    must forward it through the <include>. Either half missing and the gate silently
+    runs on its code default while the launch file advertises a knob.
+    """
+    child = ET.parse(os.path.join(LAUNCH_DIR, "albc_rl.launch")).getroot()
+    params = {p.get("name") for n in child.iter("node") for p in n.iter("param")}
+    assert "joint1_start_max_rad" in params, (
+        "albc_rl.launch declares the arg but never sets it as a <param> on the node")
+
+    parent = ET.parse(os.path.join(LAUNCH_DIR, "albc_rl_fieldtest.launch")).getroot()
+    fwd = [a for i in parent.iter("include")
+           if "albc_rl.launch" in (i.get("file") or "")
+           for a in i.iter("arg") if a.get("name") == "joint1_start_max_rad"]
+    assert fwd, ("albc_rl_fieldtest.launch does not forward joint1_start_max_rad "
+                 "through its <include> -- launch-rl would ignore the arg")
+
+
+def test_gate_runs_before_homing_and_before_the_timer():
+    """Order is the whole defence, and nothing at runtime would complain about it.
+
+    Homing below the gate would command a wound arm; the Timer below neither would
+    let the policy tick from a wound start. Both reorderings launch cleanly and look
+    correct in the log, which is why this is pinned in a test rather than a comment.
+    """
+    src = _read(NODE_REL)
+    body = src[src.index("def __init__"):src.index("def _gate_start_pose")]
+    for marker in ("self._gate_start_pose()", '"~home_on_start"', "rospy.Timer("):
+        assert marker in body, "%s left __init__ -- this test no longer guards it" % marker
+    gate = body.index("self._gate_start_pose()")
+    assert gate < body.index('"~home_on_start"'), "start-pose gate must run BEFORE homing"
+    assert gate < body.index("rospy.Timer("), "start-pose gate must run BEFORE the timer"
+    assert "rospy.signal_shutdown" in body, (
+        "a failed gate must stop the node, not just log")
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):

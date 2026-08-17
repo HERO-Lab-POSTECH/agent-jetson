@@ -6,10 +6,18 @@
   <arg name="encoder_type"        default="gru" />    <!-- tcn | gru; shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />  <!-- true=trust /albc_status angvel -->
-  <arg name="home_on_start"       default="true" />   <!-- ramp the arm to joint1 0,
+  <arg name="home_on_start"       default="false" />  <!-- ramp the arm to joint1 0,
        joint2 pi/2 before the policy starts. np_policy seeds its accumulator from the
        MEASURED angles, so the starting pose is an initial condition of the run, not a
-       detail. Set false only when you deliberately want to start from where it sits. -->
+       detail, which is why true is the better experiment and false is the safer
+       default. FAIL-SAFE default since 2026-08-17: homing COMMANDS the arm and cannot
+       unwind it (it stops at the nearest 0-equivalent, then warns and proceeds), so it
+       stays opt-in until the restart round-trip regression test passes. Pass
+       home_on_start:=true per run once the arm is known unwound. -->
+  <arg name="joint1_start_max_rad" default="3.14159265358979" /> <!-- refuse to start
+       the policy if |joint1| exceeds this; <= 0 disables. Sim resets theta1 to
+       uniform(-pi, pi) EVERY episode, so the trained +-2-turn budget is measured from
+       a near-zero start the real arm does not get for free. -->
   <arg name="joint_delta_scale"   default="0.10" />   <!-- per-TICK joint-target gain,
        np_policy.DELTA_SCALE. Per-second wind rate = this x control_hz, so the two are
        confounded: the 2026-08-13 tank runs calmed 250x at control_hz 10, but that also
@@ -32,6 +40,7 @@
     <param name="use_board_rates"    value="$(arg use_board_rates)" />
     <param name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <param name="home_on_start"      value="$(arg home_on_start)" />
+    <param name="joint1_start_max_rad" value="$(arg joint1_start_max_rad)" />
     <param name="thruster_scale"     value="$(arg thruster_scale)" />
     <param name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <param name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />

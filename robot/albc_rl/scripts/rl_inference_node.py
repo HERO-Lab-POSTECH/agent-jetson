@@ -59,6 +59,11 @@ ROSPARAMS (all defaults are field-safe)
                                 itself 180 deg out; before that 45.0.
   ~sensor_timeout_s   : 0.2    IMU staleness gate: hold (no publish) + warn
   ~joint_timeout_s    : 0.5    /albc/joint_states staleness gate (driver = 10 Hz)
+  ~joint1_start_max_rad : pi   refuse to start if |joint1| exceeds this. <= 0
+                               disables. See _gate_start_pose.
+  ~home_on_start      : false  FAIL-SAFE default. Homing commands the arm and
+                               cannot unwind it, so it stays opt-in until the
+                               restart round-trip regression test passes.
   ~thruster_scale     : 0.0    gain on the 6 thruster channels. FAIL-SAFE default:
                                0.0 = surface test (thrusters held at 0). Live
                                thrusters must be requested EXPLICITLY (1.0). The
@@ -191,6 +196,14 @@ class RLInferenceNode(object):
 
         self._log_startup_banner(weights_dir, student_npz, teacher_npz)
 
+        # RL-DEPLOY 2026-08-17: refuse to start from an already-wound joint1.
+        # This runs BEFORE homing on purpose -- homing commands the arm and cannot
+        # unwind it (it stops at the nearest 0-equivalent), so a wound arm must not
+        # reach it. Do not move this below _home_arm or the Timer.
+        if not self._gate_start_pose():
+            rospy.signal_shutdown("joint1 start-pose gate")
+            return
+
         # Home the arm BEFORE the policy starts, so every run begins from the same
         # pose. Without this the operator had to launch-albc, press 3 (FIXED ramps
         # to FK(90,90)), then Ctrl-C -- and that Ctrl-C kills joint_angle_command,
@@ -201,7 +214,7 @@ class RLInferenceNode(object):
         # condition of the experiment, not a detail. On 2026-08-13 a run started at
         # joint2 = 2.985 rad, 0.157 from the pi abort threshold and at 8 % of the
         # available moment arm.
-        if rospy.get_param("~home_on_start", True):
+        if rospy.get_param("~home_on_start", False):
             self._home_arm(
                 float(rospy.get_param("~home_joint1", 0.0)),
                 float(rospy.get_param("~home_joint2", np.pi / 2.0)),
@@ -209,6 +222,59 @@ class RLInferenceNode(object):
                 float(rospy.get_param("~home_timeout_s", 25.0)))
 
         self._timer = rospy.Timer(rospy.Duration(1.0 / self.hz), self._tick)
+
+    def _gate_start_pose(self):
+        """Refuse to start the policy from an already-wound joint1.
+
+        WHY. The 2026-08-13 cable break was two-stage: the policy itself wound J1
+        past 2*pi (measured cmd_trav up to -31.89 rad in 13.3 s), and only then did
+        the driver's restart ratchet push the arm beyond the policy's own rail. The
+        trained constraint was never breached -- Constraint/margin/joint1_pos =
+        0.99875 -- because sim writes theta1 to uniform(-pi, pi) at EVERY episode
+        reset, so "+-2 turns" is measured from a start that is always near zero.
+        The real arm has no such reset. |theta1| <= pi at launch is therefore the
+        precondition under which the trained limit means anything here.
+
+        WHY HERE AND NOT IN THE DRIVER. joint_angle_command (`run-joint`) is the
+        tool the operator uses to unwind a wound arm, and it is the only publisher
+        of /albc/joint_states. A driver-side refusal would block the recovery
+        procedure and blind the operator to the very angle being gated. The driver
+        keeps the guard that matters there -- the 3-turn abort on commanded AND
+        measured angle -- and this node keeps the one about how a run may begin.
+
+        ~joint1_start_max_rad is a knob, not a wall: raise it to start deliberately
+        from a wound pose. <= 0 disables the check, matching the driver's
+        overGuard(limit > 0) convention.
+        """
+        limit = float(rospy.get_param("~joint1_start_max_rad", np.pi))
+        if limit <= 0.0:
+            rospy.logwarn("start-pose gate DISABLED (~joint1_start_max_rad = %.3f)", limit)
+            return True
+        try:
+            msg = rospy.wait_for_message("/albc/joint_states", JointState, timeout=5.0)
+        except rospy.ROSException:
+            # Not a reason to abort: the driver being down is a different failure,
+            # and _tick already HOLDs while joint_states is stale.
+            rospy.logwarn("start-pose gate: no /albc/joint_states in 5 s -- is "
+                          "joint_angle_command running? Check SKIPPED.")
+            return True
+        if len(msg.position) < 1 or not np.isfinite(msg.position[0]):
+            rospy.logwarn("start-pose gate: joint1 unreadable -- check SKIPPED.")
+            return True
+
+        theta1 = float(msg.position[0])
+        if abs(theta1) > limit:
+            rospy.logerr("START REFUSED: joint1 is at %.3f rad (%.2f turns), past the "
+                         "%.3f rad start limit. The arm is still wound -- unwind it "
+                         "before running the policy (`run-joint`, or by hand with "
+                         "torque off). Starting here would spend the trained +-2-turn "
+                         "budget from an offset sim never showed the policy. Override "
+                         "with _joint1_start_max_rad:=<rad> if that is deliberate.",
+                         theta1, theta1 / (2.0 * np.pi), limit)
+            return False
+        rospy.loginfo("start-pose gate OK: joint1 %.3f rad (%.2f turns) within %.3f",
+                      theta1, theta1 / (2.0 * np.pi), limit)
+        return True
 
     def _home_arm(self, q1, q2, tol, timeout_s):
         """Drive the arm to (q1, q2) and block until it arrives or times out.

@@ -549,6 +549,24 @@ j1_abs_max, j2_over_pi, j2_abs_max, abort_flag]`. `j1_over_count` 는 학습 제
 TDC·클래식 PID·RL·B1 probe 가 전부 이 노드를 거치므로 세 제어기가 같은 계기로
 측정된다.
 
+**기동 자세 게이트** (RL 노드, 드라이버 **아님**): `rl_inference_node` 는 시작 시
+`/albc/joint_states` 를 한 번 받아 `|θ1| > ~joint1_start_max_rad`(기본 `π`)면
+`signal_shutdown` 으로 **기동을 거부**한다. `π` 인 이유는 sim 이 매 에피소드
+`randomize_joint_positions` 로 θ1 을 `uniform(−π, π)` 에 **절대 write** 하기
+때문 — 학습된 ±2바퀴 예산은 항상 0 근처에서 재는 값이고 실기엔 그 리셋이 없다.
+
+이 게이트가 드라이버가 아니라 RL 노드에 있는 것은 의도적이다: `joint_angle_command`
+(`run-joint`)은 **감긴 팔을 푸는 도구**이자 `/albc/joint_states` 의 **유일한 발행자**라,
+드라이버가 기동을 거부하면 복구 절차가 막히고 게이트가 보는 각도 자체를 못 읽는다.
+드라이버는 "런 중 어디까지 가도 되나"(3바퀴 중단)를, RL 노드는 "어디서 시작해도
+되나"(π)를 맡는다.
+
+순서가 방어의 전부다 — 게이트는 homing **앞**에서 돈다. `_home_arm` 은 팔을
+**명령**하지 되감지 못하고(가장 가까운 0 등가에서 멈춘 뒤 타임아웃 경고 후 그냥 진행),
+따라서 감긴 팔이 homing 에 도달하면 안 된다. `~home_on_start` 는 같은 이유로 기본
+`false`(2026-08-17) — **재시작 왕복 회귀 테스트 통과가 이 기본값의 만료 조건**이다.
+순서·기본값·배선은 `albc_rl/scripts/test_deploy_constants.py` 4건이 고정한다.
+
 ### 4.4 /albc_status 11-Field ABI
 
 Float64MultiArray, 고정 순서 (스키마 검증 없음 — 취약):

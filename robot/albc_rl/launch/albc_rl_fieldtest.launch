@@ -23,9 +23,14 @@
   <arg name="encoder_type"        default="gru" />   <!-- shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />
-  <arg name="home_on_start"       default="true" />   <!-- ramp the arm to
+  <arg name="home_on_start"       default="false" />  <!-- ramp the arm to
        joint1 0, joint2 pi/2 before the policy starts, so every run has the same initial
-       condition and the operator does not have to launch-albc + press 3 + Ctrl-C. -->
+       condition and the operator does not have to launch-albc + press 3 + Ctrl-C.
+       FAIL-SAFE default since 2026-08-17: homing COMMANDS the arm and cannot unwind a
+       wound one, so it stays opt-in until the restart round-trip regression test passes.
+       Pass home_on_start:=true per run once the arm is known unwound. -->
+  <arg name="joint1_start_max_rad" default="3.14159265358979" /> <!-- refuse to start
+       the policy if |joint1| exceeds this; <= 0 disables. See albc_rl.launch. -->
   <arg name="joint_loop_hz"       default="10.0" />   <!-- Dynamixel driver read
        rate. Must be >= control_hz or the policy integrates across repeats of the same
        measurement: at 10 vs 50 that mismatch was 4.6x and the arm oscillated even with
@@ -95,6 +100,7 @@
     <arg name="use_board_rates"    value="$(arg use_board_rates)" />
     <arg name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <arg name="home_on_start"      value="$(arg home_on_start)" />
+    <arg name="joint1_start_max_rad" value="$(arg joint1_start_max_rad)" />
     <arg name="thruster_scale"     value="$(arg thruster_scale)" />
     <arg name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
