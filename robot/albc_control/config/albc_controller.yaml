@@ -78,6 +78,14 @@ seed_timeout_s: 3.0
 # bracket it at 0.0161 frozen / 0.1252 responding. Set to 0 to disable.
 min_ee_radius_m: 0.05
 
+# Allow falling back to initial_theta{1,2}_deg when /albc/joint_states does not
+# arrive. FALSE on the robot, and that is the point: a silent joint_states is a
+# MEASURED failure mode here (Dynamixel bus read failure, 2026-08-24), so a
+# constant fallback would turn a dead sensor path into a blind arm command.
+# start_tdc_dryrun.sh passes _allow_yaml_seed:=true because it runs with no
+# driver by design and its outputs are remapped to dummy topics.
+allow_yaml_seed: false
+
 # Control mode (1=TDC, 2=PID, 3=Fixed, 4=Manual)
 control_mode: 1
 

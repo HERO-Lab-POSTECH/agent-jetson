@@ -36,6 +36,7 @@
 #include "albc_control/albc_kinematics.h"
 #include <cstdio>
 #include <cmath>
+#include <limits>
 
 using albc::forwardKinematics;
 using albc::mapTo2Pi;
@@ -167,6 +168,31 @@ int main()
                     "13 deg off the fold passes");
         expect_true(ee_radius(0.0, (180.0 - 11.0) * PI / 180.0) < MIN_EE_RADIUS_M,
                     "11 deg off the fold still refuses");
+    }
+
+    // ---------------------------------------------------------------------
+    // CLAIM 3 — the guard comparison must be NaN-safe.
+    // A NaN joint angle propagates into FK and out as a NaN radius. Written the
+    // obvious way (r < min) the guard WAVES IT THROUGH, because every ordered
+    // comparison against NaN is false. albc_controller.cpp therefore writes it
+    // as !(r >= min) AND rejects a non-finite seed before the kinematics.
+    // ---------------------------------------------------------------------
+    {
+        const double nan_r = std::numeric_limits<double>::quiet_NaN();
+        expect_true(!(nan_r < MIN_EE_RADIUS_M),
+                    "the naive form (r < min) FAILS to refuse NaN — this is the trap");
+        expect_true(!(nan_r >= MIN_EE_RADIUS_M),
+                    "the shipped form !(r >= min) refuses NaN");
+        // The same holds for the value that actually reaches the guard.
+        expect_true(!(ee_radius(nan_r, PI / 2.0) >= MIN_EE_RADIUS_M),
+                    "a NaN joint angle produces a radius the guard refuses");
+        // Infinity is the other non-finite input the seed check rejects: FK of
+        // an infinite angle is NaN (inf * cos(inf) is undefined), not a big radius.
+        const double inf = std::numeric_limits<double>::infinity();
+        expect_true(!(ee_radius(inf, PI / 2.0) >= MIN_EE_RADIUS_M),
+                    "an infinite joint angle does not sneak past as a large radius");
+        expect_true(!std::isfinite(inf) && !std::isfinite(nan_r),
+                    "isfinite() is the seed-side check that rejects both");
     }
 
     std::printf("%s: %d checks, %d failures\n",

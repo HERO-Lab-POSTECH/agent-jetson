@@ -187,6 +187,8 @@ int main(int argc, char **argv) {
     double seed_timeout_s, min_ee_radius_m;
     nh.param<double>("seed_timeout_s", seed_timeout_s, 3.0);
     nh.param<double>("min_ee_radius_m", min_ee_radius_m, 0.05);
+    bool allow_yaml_seed;
+    nh.param<bool>("allow_yaml_seed", allow_yaml_seed, false);
 
     double manual_theta1_deg, manual_theta2_deg, manual_x, manual_y;
     nh.param<double>("manual/theta1", manual_theta1_deg, 90.0);
@@ -230,25 +232,60 @@ int main(int argc, char **argv) {
     // representation this node actually publishes; the math is unchanged either
     // way, but the logged and reconfigured values stay readable.
     //
-    // No message inside the timeout -> yaml fallback with a WARN. That is the
-    // start_tdc_dryrun.sh path by design: it refuses to run while the driver is
-    // alive, so the topic is absent there and the bench seed sweep still works.
+    // Wrapping here does NOT lose the winding count, and the division of labour
+    // is worth stating so nobody re-opens it: the turn counter, the 6pi abort and
+    // the cable guard all live in the DRIVER (joint_unwrap.h, 6b85836) and watch
+    // the commanded AND measured angle. updateJoint() re-accumulates a wrapped
+    // command through unwrapNearest(), so a wrapped command is not a reset.
+    //
+    // A TIMEOUT IS A MEASURED FAILURE, NOT A NEUTRAL DEFAULT. The 2026-08-24
+    // handover records /albc/joint_states going silent on a real Dynamixel bus
+    // read failure, so a constant fallback would auto-degrade a dead sensor path
+    // into exactly the blind jump this change exists to prevent. Timeout
+    // therefore REFUSES unless ~allow_yaml_seed is set, which is the bench opt-in
+    // that start_tdc_dryrun.sh passes (it runs with no driver by design).
     double theta1 = DEG2RAD(initial_theta1_deg);
     double theta2 = DEG2RAD(initial_theta2_deg);
     {
         sensor_msgs::JointStateConstPtr js =
             ros::topic::waitForMessage<sensor_msgs::JointState>(
                 "/albc/joint_states", nh, ros::Duration(seed_timeout_s));
-        if (js && js->position.size() >= 2) {
+        // A NaN would pass every ordered comparison downstream (NaN < x is false,
+        // so the singularity guard would wave it through), so an unusable message
+        // is rejected HERE rather than after the kinematics.
+        const bool usable = js && js->position.size() >= 2 &&
+                            std::isfinite(js->position[0]) &&
+                            std::isfinite(js->position[1]);
+        if (usable) {
             theta1 = mapTo2Pi(js->position[0]);
             theta2 = mapTo2Pi(js->position[1]);
-            ROS_INFO("Seeded from MEASURED arm: theta1 = %.2f deg, theta2 = %.2f deg",
+            // MANUAL (mode 4) steps from its own baseline, which the yaml leaves
+            // at 90/90. Fixing only the TDC seed would leave that path intact:
+            // switching to mode 4 at runtime would still command the pose that
+            // broke arm1 on 2026-08-22. The manual baseline follows the
+            // measurement for the same reason the TDC seed does.
+            manual_theta1_deg = RAD2DEG(theta1);
+            manual_theta2_deg = RAD2DEG(theta2);
+            forwardKinematics(theta1, theta2, manual_x, manual_y);
+            mode_mgr.setManualState(manual_theta1_deg, manual_theta2_deg,
+                                    manual_x, manual_y);
+            ROS_INFO("Seeded from MEASURED arm: theta1 = %.2f deg, theta2 = %.2f deg "
+                     "(MANUAL baseline follows the measurement)",
                      RAD2DEG(theta1), RAD2DEG(theta2));
-        } else {
-            ROS_WARN("No /albc/joint_states within %.1f s -- seeding from yaml "
-                     "(theta1 = %.1f, theta2 = %.1f deg). The FIRST command will "
-                     "move the arm from wherever it is to that pose.",
+        } else if (allow_yaml_seed) {
+            ROS_WARN("No usable /albc/joint_states within %.1f s -- ~allow_yaml_seed "
+                     "is set, so seeding from yaml (theta1 = %.1f, theta2 = %.1f deg). "
+                     "The FIRST command will move the arm from wherever it is to that "
+                     "pose. This is the BENCH path; it must never be set on the robot.",
                      seed_timeout_s, initial_theta1_deg, initial_theta2_deg);
+        } else {
+            ROS_FATAL("No usable /albc/joint_states within %.1f s -- the arm state is "
+                      "UNKNOWN. Seeding from the yaml constants would command "
+                      "theta2 = %.1f deg blind, which is the 2026-08-22 arm1 break. "
+                      "Start the joint driver (run-joint) and check the Dynamixel bus "
+                      "before retrying. Bench sweeps only: _allow_yaml_seed:=true.",
+                      seed_timeout_s, initial_theta2_deg);
+            return 1;
         }
     }
 
@@ -271,12 +308,24 @@ int main(int argc, char **argv) {
     // two bench points bracket that -- 0.0161 m frozen, 0.1252 m responding.
     // Set the param to 0 to disable the guard.
     const double ee_radius = std::sqrt(current_x * current_x + current_y * current_y);
-    if (ee_radius < min_ee_radius_m) {
+    // !(r >= min), NOT (r < min). The two differ on NaN: `NaN < min` is false, so
+    // the naive form waves a NaN radius straight through the guard it exists to
+    // enforce. The seed is already checked for finiteness above; this keeps the
+    // property when the yaml path or a future caller supplies the angles.
+    if (!(ee_radius >= min_ee_radius_m)) {
+        // How far the operator has to move J2, computed from the live threshold
+        // rather than hard-coded, so a retuned param cannot make the message lie.
+        const double clear_deg =
+            (min_ee_radius_m < 2.0 * L1)
+                ? 180.0 - 2.0 * std::acos(min_ee_radius_m / (2.0 * L1)) * 180.0 / M_PI
+                : 180.0;
         ROS_FATAL("Arm is inside the folded singularity: theta2 = %.2f deg gives an "
                   "EE radius of %.4f m (< %.4f m). The IK cannot move from here and "
-                  "the controller would hold a frozen command. Move the arm out of "
-                  "the fold, then restart.",
-                  RAD2DEG(theta2), ee_radius, min_ee_radius_m);
+                  "the controller would hold a frozen command -- it would not error, "
+                  "it would simply never move. Move J2 more than %.1f deg away from "
+                  "180 deg first; run-joint is the tool for that (do NOT run it "
+                  "alongside launch-albc, which starts its own driver). Then restart.",
+                  RAD2DEG(theta2), ee_radius, min_ee_radius_m, clear_deg);
         return 1;
     }
     ROS_INFO("EE seed: x = %.4f, y = %.4f (radius %.4f m)",

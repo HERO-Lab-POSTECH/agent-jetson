@@ -77,6 +77,11 @@ echo "   keys work as usual (cycle, 1-4 mode select, manual w/s/a/d/m)"
 echo ""
 
 # --- Layer 1: remap the outputs. Foreground so stdin still drives the keys. ---
+# _allow_yaml_seed: this tool runs with NO driver (it refuses to start when one
+# is alive), so /albc/joint_states is absent BY DESIGN and the controller would
+# otherwise refuse to seed. The bench seed sweep is the whole point of this tool,
+# and the joint outputs are remapped below, so the yaml seed cannot reach the arm.
 exec rosrun albc_control albc_controller __name:=albc_controller_dryrun \
+    _allow_yaml_seed:=true \
     "$J1_REAL:=$J1_FAKE" \
     "$J2_REAL:=$J2_FAKE"
