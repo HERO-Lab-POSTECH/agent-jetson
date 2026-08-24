@@ -324,6 +324,210 @@ def test_gate_runs_before_homing_and_before_the_timer():
         "a failed gate must stop the node, not just log")
 
 
+# ------------------------------------------------------- classic 3-channel mixing
+# CLASSIC 2026-08-24. m4 (7.5 o'clock) has an open/intermittent phase and its
+# connector cannot be reached, so pid.cpp was cut down to m1, m2 and m5. Three
+# channels still span (Fx, Fy, Mz), so the DIRECTION is recoverable exactly and
+# only the authority halves -- but only if each mode drops the right channel.
+#
+# The property pinned here is deliberately sign-hypothesis-FREE. Which channel a
+# mode drops is set by the geometry, so it is the same under all eight sign
+# hypotheses for (m1, m2, m5); only the polarity of the two survivors moves, and
+# polarity is one tank run per axis to settle. So the tests below assert
+# COLLINEARITY with the named axis (not its sign) and purity (no cross-coupling),
+# under every hypothesis. A coefficient edited by hand breaks these; a polarity
+# flip decided in the tank does not.
+#
+# Derivation: code/classic_allocation_analysis.py --m4-dead
+_ASSIGN = re.compile(r"pwm_(m[0-9])\s*=\s*([^;]+);")
+_TERM = re.compile(r"([+-]?)\s*([A-Za-z_][A-Za-z_0-9]*)")
+
+# cont_direc -> the horizontal unit vector the operator SAW on 2026-08-24.
+# +x = 3 o'clock, +y = 12 o'clock (gripper), looking down.
+_BRANCH_AXIS = {1: (0.0, 1.0),    # s backward -> 12 o'clock
+                2: (0.0, -1.0),   # w forward  ->  6 o'clock
+                3: (-1.0, 0.0),   # d right    ->  9 o'clock
+                4: (1.0, 0.0)}    # a left     ->  3 o'clock
+_LIVE = ("m1", "m2", "m5")
+
+
+def _linear(rhs):
+    """{symbol: signed int coefficient} for a plain sum of symbols."""
+    out = {}
+    for sign, name in _TERM.findall(rhs):
+        out[name] = out.get(name, 0) + (-1 if sign == "-" else 1)
+    return out
+
+
+def _yaw_mixing():
+    """cont_direc -> {channel -> {symbol: coeff}} parsed out of PID_control_yaw."""
+    src = _read(os.path.join("..", "firmware", "agent", "pid.cpp"))
+    body = src[src.index("void PID_control_yaw()"):]
+    body = body[:body.index("pwm_m1 = constrain(")]      # stop before the clamps
+    body = re.sub(r"//[^\n]*", "", body)                 # comments carry example arithmetic
+    marks = [(int(m.group(1)), m.start(), m.end())
+             for m in re.finditer(r"if \(cont_direc == ([0-4])\)", body)]
+    assert len(marks) == 5, "expected 5 cont_direc branches, found %d" % len(marks)
+    common = dict((ch, _linear(r)) for ch, r in _ASSIGN.findall(body[:marks[0][1]]))
+    out = {}
+    for i, (k, _, start) in enumerate(marks):
+        end = marks[i + 1][1] if i + 1 < len(marks) else len(body)
+        chans = dict(common)
+        for ch, rhs in _ASSIGN.findall(body[start:end]):
+            chans[ch] = _linear(rhs)
+        out[k] = chans
+    return out
+
+
+def _fw_horizontal_columns():
+    """firmware channel -> (Fx, Fy, Mz) of the deployed matrix, m1/m2/m5 only."""
+    tam = _tam()
+    order = _derive_order(tam)
+    A = tam["allocation_matrix"]
+    return dict((ch, (A["Fx"][order[j]], A["Fy"][order[j]], A["Mz"][order[j]]))
+                for ch, j in zip(_LIVE, (1, 2, 5)))
+
+
+def _wrench(cols, signs, coeffs):
+    w = [0.0, 0.0, 0.0]
+    for ch, s in zip(_LIVE, signs):
+        c = coeffs.get(ch, 0)
+        for i in range(3):
+            w[i] += s * c * cols[ch][i]
+    return w
+
+
+def _sign_hypotheses():
+    import itertools
+    return list(itertools.product((1, -1), repeat=3))
+
+
+def test_m4_is_excluded_from_every_classic_branch():
+    """m4 must be pinned at neutral -- no yaw, no throttle, no move_speed term."""
+    for k, chans in _yaw_mixing().items():
+        c = chans.get("m4")
+        assert c is not None, "cont_direc %d never assigns pwm_m4" % k
+        assert c.get("ESC_NEUTRAL") == 1, \
+            "cont_direc %d: pwm_m4 is not ESC_NEUTRAL (%s)" % (k, c)
+        for sym in ("PID_yaw", "throttle", "move_speed"):
+            assert sym not in c, \
+                "cont_direc %d: m4 still carries %s -- it is excluded" % (k, sym)
+
+
+def test_throttle_is_gone_from_the_horizontal_mixing():
+    """With four channels throttle was a null-space term (exactly zero wrench).
+
+    With m4 gone the 3x3 is regular, so the null space is {0}: any nonzero
+    throttle is a pure disturbance (4.5 o'clock, |F| = 1.0 per unit) with no
+    channel left to cancel it. Its default 40 sat inside the +-45 ESC deadband,
+    which is why nothing complained for months.
+    """
+    for k, chans in _yaw_mixing().items():
+        for ch, c in chans.items():
+            assert "throttle" not in c, \
+                "cont_direc %d: %s still mixes throttle" % (k, ch)
+
+
+def test_each_mode_drops_exactly_one_live_channel():
+    dropped = {1: "m2", 2: "m2", 3: "m5", 4: "m5"}
+    mix = _yaw_mixing()
+    for k, want in dropped.items():
+        zeros = [ch for ch in _LIVE if mix[k][ch].get("move_speed", 0) == 0]
+        assert zeros == [want], \
+            "cont_direc %d should translate on the two channels that are not %s, " \
+            "but move_speed is absent from %s" % (k, want, zeros)
+        for ch in _LIVE:
+            if ch != want:
+                assert abs(mix[k][ch]["move_speed"]) == 1, \
+                    "cont_direc %d: %s move_speed coefficient is not +-1" % (k, ch)
+    for k in mix:
+        assert mix[k]["m1"].get("PID_yaw", 0) == 0, \
+            "cont_direc %d: yaw must run on m2/m5 only, m1 still carries PID_yaw" % k
+
+
+def _workable_drops(cols, signs, pure):
+    """Which single channel can be dropped so the other two realise `pure`?
+
+    `pure(fx, fy, mz)` is the mode's own purity test. Tries both relative signs
+    of the surviving pair, so the answer is about the GEOMETRY, not polarity.
+    """
+    out = []
+    for drop in _LIVE:
+        keep = [c for c in _LIVE if c != drop]
+        for rel in (1, -1):
+            u = {keep[0]: 1, keep[1]: rel}
+            if pure(*_wrench(cols, signs, u)):
+                out.append(drop)
+                break
+    return out
+
+
+def test_which_channel_each_mode_drops_is_geometry_not_polarity():
+    """THE claim the firmware rests on, and it holds for all 8 sign hypotheses.
+
+    For each mode there is exactly ONE of m1/m2/m5 whose removal still lets the
+    remaining pair produce a pure result, and it is the same channel under every
+    sign hypothesis. So dropping m2 for fore/aft, m5 for left/right and m1 for
+    yaw is settled without knowing the physical signs -- only the POLARITY of the
+    two survivors depends on them, and that is one tank run per axis.
+    """
+    cols = _fw_horizontal_columns()
+    mix = _yaw_mixing()
+    scale = max(abs(v) for c in cols.values() for v in c)
+    for signs in _sign_hypotheses():
+        for k, axis in _BRANCH_AXIS.items():
+            ax, ay = axis
+
+            def translation(fx, fy, mz, ax=ax, ay=ay):
+                return (abs(mz) < 1e-9 and math.hypot(fx, fy) > 0.5 * scale
+                        and abs(fx * ay - fy * ax) < 1e-9)
+
+            got = _workable_drops(cols, signs, translation)
+            want = [ch for ch in _LIVE if mix[k][ch].get("move_speed", 0) == 0]
+            assert got == want, \
+                "signs %s cont_direc %d: geometry allows dropping %s, pid.cpp drops %s" \
+                % (signs, k, got, want)
+
+        def yaw(fx, fy, mz):
+            return abs(fx) < 1e-9 and abs(fy) < 1e-9 and abs(mz) > 1e-6
+
+        assert _workable_drops(cols, signs, yaw) == ["m1"], \
+            "signs %s: pure yaw does not uniquely require dropping m1" % (signs,)
+
+
+def test_classic_mixing_is_pure_under_the_measured_sign_set():
+    """The DEPLOYED claim -- and it does carry an assumption, stated here.
+
+    pid.cpp uses the SAME sign for the two survivors in every mode, which encodes
+    "m1, m2 and m5 share one physical sign". That is what the 2026-08-24 desk
+    derivation concluded, (m1,m2,m4,m5) = (-1,-1,+1,-1), but its input premise was
+    later shaken: the four tank observations it scored assumed m4 failed
+    deterministically by direction, and the same evening's dry probe re-read m4 as
+    an intermittent open phase. So treat this test as pinning the assumption, not
+    proving it. If a tank run shows an axis reversed, flip that branch's two
+    coefficients together -- purity survives, only the direction flips.
+    """
+    signs = (-1, -1, -1)                       # (m1, m2, m5)
+    cols = _fw_horizontal_columns()
+    mix = _yaw_mixing()
+    for k, axis in _BRANCH_AXIS.items():
+        ax, ay = axis
+        u = dict((ch, mix[k][ch].get("move_speed", 0)) for ch in _LIVE)
+        fx, fy, mz = _wrench(cols, signs, u)
+        assert abs(mz) < 1e-9, \
+            "cont_direc %d: translation leaks yaw (Mz=%+.4f)" % (k, mz)
+        assert abs(fx * ay - fy * ax) < 1e-9, \
+            "cont_direc %d: force is off the named axis" % k
+        assert fx * ax + fy * ay > 0, \
+            "cont_direc %d: force points opposite the direction the operator saw" % k
+    for k in mix:
+        u = dict((ch, mix[k][ch].get("PID_yaw", 0)) for ch in _LIVE)
+        fx, fy, mz = _wrench(cols, signs, u)
+        assert abs(fx) < 1e-9 and abs(fy) < 1e-9, \
+            "cont_direc %d: yaw leaks translation (%+.4f, %+.4f)" % (k, fx, fy)
+        assert abs(mz) > 1e-6, "cont_direc %d: yaw produces no moment" % k
+
+
 if __name__ == "__main__":
     fails = 0
     for name, fn in sorted(globals().items()):
