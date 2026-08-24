@@ -31,7 +31,19 @@ WHAT THIS NODE OWNS (and, deliberately, what it does NOT):
         but a garbage/NaN upstream value must never reach the firmware mapping.
   * Float32MultiArray -> hero_agent_thruster_cmd conversion.
 
+  * FAULT REALLOCATION, opt-in via ~fault_reallocate (DEFAULT OFF, 2026-08-24).
+        A disabled channel (~thruster_sign[j] = 0) is otherwise only MUTED: the
+        policy's intended wrench then loses that column, so the response does not
+        merely weaken, it points elsewhere. With this on, the node reads the
+        intended wrench off the DEPLOYED matrix (deployed_tam.json) and re-solves
+        it onto the live channels -- the RL-side counterpart of what pid.cpp
+        3771674 already does for the classic path. See reallocate(). It is off by
+        default because it changes deployed behaviour and needs a tank re-check.
+
   ORDER OF OPERATIONS (per output channel j): permute -> sign -> deadband -> clamp.
+        With ~fault_reallocate on, REALLOCATE REPLACES PERMUTE (it consumes
+        `order` itself and returns fw-indexed values); the other three stages are
+        identical, so the two paths differ in exactly one step.
         out[j] = clamp( undeadband( sign[j] * in[ order[j] ] ) )
         permute picks the source, sign corrects that physical channel (0 = DISABLED,
         pinned to exact neutral -- see normalize_sign), undeadband
@@ -62,7 +74,9 @@ TEMPORARY ADAPTER: this permutation is a deployment-side workaround for the
 sim<->firmware channel-order mismatch. The permanent fix is to reorder the sim
 TAM to match the firmware wiring and re-train; until then this node is the bridge.
 """
+import json
 import math
+import os
 
 import rospy
 from std_msgs.msg import Float32MultiArray
@@ -218,6 +232,141 @@ def undeadband(a, deadband):
     return s * (deadband + (1.0 - deadband) * abs(a))
 
 
+def solve3x3(a, b):
+    """Cramer's rule. `a` is 3 rows of 3, `b` is 3. None if singular.
+
+    Stdlib only on purpose -- this runs on the board's python2.7 inside a 50 Hz
+    callback, and pulling numpy in for one 3x3 would be the heaviest thing in
+    the node. Cramer is fine at this size and has no pivoting to get wrong.
+    """
+    def det(m):
+        return (m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]))
+
+    d = det(a)
+    if abs(d) < 1e-9:
+        return None
+    out = []
+    for c in range(3):
+        m = [[b[r] if k == c else a[r][k] for k in range(3)] for r in range(3)]
+        out.append(det(m) / d)
+    return out
+
+
+def reallocate(action, order, sign, alloc):
+    """Re-solve the policy's INTENDED wrench onto the channels that still work.
+
+    WHAT PROBLEM THIS SOLVES
+    ------------------------
+    `normalize_sign`'s 0 only TURNS A CHANNEL OFF. The policy asked for a wrench
+    and got that wrench minus one column, so a dead m4 does not just weaken the
+    response -- it points it somewhere else. The classic firmware path already
+    fixed this on its side (pid.cpp 3771674 drops one channel per mode and the
+    remaining two reproduce the heading exactly); this is the same idea for RL.
+
+    WHY THIS IS NOT "the policy is now out of distribution"
+    ------------------------------------------------------
+    The policy learned action <-> wrench on the SIM TAM. Reallocation makes the
+    realised wrench match that learned relation again, so it moves the plant
+    TOWARDS the training distribution, not away. This is also why the answer to
+    "do we retrain" is no: fault DR trained a single effectively-dead channel at
+    ~0.5% per episode, two simultaneously at 1/30,000, and
+    `use_privileged_fault_obs: false` means the policy cannot even see which
+    channel died. That coverage is too thin to lean on -- deployment-side
+    reallocation restores the plant the policy already knows.
+
+    WHAT IT CAN AND CANNOT RECOVER
+    ------------------------------
+    Horizontal: three live channels, three axes (Fx, Fy, Mz) -> regular 3x3
+        (det 0.288, cond 7.02 on the deployed matrix). Direction is recovered
+        EXACTLY; the cost is magnitude, capped near 50% of the 4-channel reach.
+    Vertical:   m3 is dead, so (Fz, My) collapses to rank 1. Fz and My CANNOT be
+        separated -- one has to be abandoned. Fz wins here: depth is the control
+        objective and attitude is the arm's job in the ALBC design. Every heave
+        command therefore carries My = -0.145 per unit Fz as an unavoidable
+        pitch disturbance. Say so out loud rather than pretending it is solved.
+
+    ARGUMENTS
+    ---------
+    action : 6 policy values in [-1,1], SIM action index order (msg.data as-is).
+    order  : ~thruster_order. order[j] = which sim index feeds fw channel j.
+    sign   : normalised sign table. 0 marks a channel DEAD (see normalize_sign).
+    alloc  : allocation_matrix from deployed_tam.json -- the DEPLOYED checkpoint's
+             own matrix. Read the artifact, never a source-tree constant: that
+             single habit is what four wrong thruster_order values came from.
+
+    RETURNS a list of 6 SIM-FRAME values already indexed by FIRMWARE channel, so
+    the caller must NOT apply `order` again -- sign, undeadband and clamp still
+    run exactly as they do on the plain path.
+
+    Module-level and pure so it is testable without rospy (see
+    test_thruster_reallocation.py, which parses this file rather than importing).
+    """
+    fx, fy, fz, mz = alloc["Fx"], alloc["Fy"], alloc["Fz"], alloc["Mz"]
+
+    a = []
+    for i in range(NUM_THR):
+        v = float(action[i])
+        a.append(0.0 if (math.isnan(v) or math.isinf(v)) else v)
+
+    # The wrench the policy MEANT, over all six sim columns.
+    w_fx = sum(fx[i] * a[i] for i in range(NUM_THR))
+    w_fy = sum(fy[i] * a[i] for i in range(NUM_THR))
+    w_fz = sum(fz[i] * a[i] for i in range(NUM_THR))
+    w_mz = sum(mz[i] * a[i] for i in range(NUM_THR))
+
+    out = [0.0] * NUM_THR
+    horz = [j for j in FW_HORZ_CH if sign[j] != 0.0]
+    vert = [j for j in FW_VERT_CH if sign[j] != 0.0]
+
+    # --- horizontal ---------------------------------------------------------
+    if len(horz) == len(FW_HORZ_CH):
+        for j in FW_HORZ_CH:          # nothing is broken; do not disturb anything
+            out[j] = a[order[j]]
+    elif len(horz) == 3:
+        cols = [order[j] for j in horz]
+        v = solve3x3([[fx[c] for c in cols],
+                      [fy[c] for c in cols],
+                      [mz[c] for c in cols]], [w_fx, w_fy, w_mz])
+        if v is None:                 # singular: no 3-channel solution exists
+            for j in FW_HORZ_CH:
+                out[j] = a[order[j]] if sign[j] != 0.0 else 0.0
+        else:
+            for k, j in enumerate(horz):
+                out[j] = v[k]
+    else:
+        # 2 or fewer live horizontals: (Fx,Fy,Mz) is rank-deficient and there is
+        # no honest re-solve. Pass through and let the caller's warning stand.
+        for j in FW_HORZ_CH:
+            out[j] = a[order[j]] if sign[j] != 0.0 else 0.0
+
+    # --- vertical -----------------------------------------------------------
+    if len(vert) == len(FW_VERT_CH):
+        for j in FW_VERT_CH:
+            out[j] = a[order[j]]
+    elif len(vert) == 1:
+        j = vert[0]
+        c = order[j]
+        if fz[c] != 0.0:
+            out[j] = w_fz / fz[c]     # My is abandoned -- see the docstring
+
+    # --- saturation ---------------------------------------------------------
+    # Scale the whole GROUP down, never clamp a single channel: clamping one
+    # channel of a solved set rotates the realised wrench, which is the exact
+    # failure reallocation exists to prevent. The two groups scale independently
+    # because they no longer share an axis (My is already abandoned), so a
+    # saturated turn must not throttle depth.
+    for group in (horz, vert):
+        peak = 0.0
+        for j in group:
+            peak = max(peak, abs(out[j]))
+        if peak > 1.0:
+            for j in group:
+                out[j] /= peak
+    return out
+
+
 class ThrusterMixer(object):
     def __init__(self):
         order = rospy.get_param("~thruster_order", DEFAULT_ORDER)
@@ -238,6 +387,17 @@ class ThrusterMixer(object):
             if sj == 0.0:
                 rospy.logwarn("thruster m%d is DISABLED (~thruster_sign[%d]=0) -- "
                               "it will be held at exact neutral", j, j)
+
+        # Fault-tolerant reallocation. DEFAULT OFF -- it changes what the ESCs
+        # receive for the same policy output, so it is a deployment behaviour
+        # change and needs an operator decision plus a tank re-verification, not
+        # a quiet default flip. Turn on with ~fault_reallocate:=true once that
+        # has happened. See reallocate() for what it does and does not recover.
+        self.alloc = None
+        if bool(rospy.get_param("~fault_reallocate", False)):
+            self.alloc = self._load_alloc()
+        rospy.loginfo("fault reallocation: %s",
+                      "ON" if self.alloc else "off (channels are only muted, not redistributed)")
 
         # ESC deadband, normalized to the action range. See undeadband().
         # 0.0 disables the compensation (use that on pre-2026-08-12 firmware).
@@ -265,6 +425,43 @@ class ThrusterMixer(object):
                       "/albc/thruster_cmd -> /hero_agent/thruster_pwm "
                       "(NO scale here -- RL node owns scale)",
                       self.order, [int(s) for s in self.sign])
+
+    def _load_alloc(self):
+        """The DEPLOYED checkpoint's own allocation matrix, from the artifact.
+
+        Refuses to start rather than falling back: a mixer that silently runs
+        WITHOUT reallocation after being asked for it looks identical to one that
+        is working, and that silent-success class is exactly how four wrong
+        thruster_order values survived for weeks.
+
+        Also cross-checks the sign table against the artifact's measured channel
+        health. Marking only m4 dead while m3 is recorded DEAD would leave the
+        vertical solve splitting Fz across a motor that does not turn -- half the
+        heave, no error anywhere.
+        """
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "deployed_tam.json")
+        try:
+            with open(path) as f:
+                tam = json.load(f)
+            alloc = tam["allocation_matrix"]
+            for row in ("Fx", "Fy", "Fz", "Mz"):
+                if len(alloc[row]) != NUM_THR:
+                    raise ValueError("allocation_matrix.%s is not %d wide" % (row, NUM_THR))
+        except Exception as exc:       # noqa: BLE001 -- refuse loudly, whatever broke
+            rospy.logfatal("~fault_reallocate is set but %s is unusable (%s) -- "
+                           "refusing to start rather than silently running without "
+                           "reallocation", path, exc)
+            raise rospy.ROSInitException("deployed_tam.json unusable")
+
+        health = tam.get("measured_channel_map", {})
+        for j in range(NUM_THR):
+            status = health.get("m%d" % j, {}).get("status", "ok")
+            if status != "ok" and self.sign[j] != 0.0:
+                rospy.logwarn("m%d is recorded %s in deployed_tam.json but "
+                              "~thruster_sign[%d] still ENABLES it -- reallocation "
+                              "will hand it thrust it cannot deliver", j, status, j)
+        return alloc
 
     def _validate_order(self, order):
         """Enforce the axis invariant: fw vertical channels (m0,m3) MUST source
@@ -306,13 +503,21 @@ class ThrusterMixer(object):
                                    len(msg.data), NUM_THR)
             return
         out = hero_agent_thruster_cmd()
+        # Reallocation REPLACES the permute step (it returns fw-indexed values and
+        # has already consumed `order`); sign, undeadband and clamp are unchanged
+        # either way, so the two paths differ in exactly one line below.
+        realloc = (reallocate(msg.data, self.order, self.sign, self.alloc)
+                   if self.alloc else None)
         for j in range(NUM_THR):
-            # permute: fw output channel j sources sim index order[j]
-            a = float(msg.data[self.order[j]])
-            # drop a non-finite value to 0 (safe neutral) rather than pass garbage.
-            # NOTE: math.isfinite is py3-only; on ROS-lunar python2 use isnan/isinf.
-            if math.isnan(a) or math.isinf(a):
-                a = 0.0
+            if realloc is not None:
+                a = realloc[j]
+            else:
+                # permute: fw output channel j sources sim index order[j]
+                a = float(msg.data[self.order[j]])
+                # drop a non-finite value to 0 (safe neutral) rather than pass garbage.
+                # NOTE: math.isfinite is py3-only; on ROS-lunar python2 use isnan/isinf.
+                if math.isnan(a) or math.isinf(a):
+                    a = 0.0
             a *= self.sign[j]                 # sign per PHYSICAL channel -- NO scale
             a = undeadband(a, self.deadband)  # invert the ESC deadband (plant inverse)
             a = max(-1.0, min(1.0, a))        # defensive clamp to policy contract
