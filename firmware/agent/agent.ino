@@ -484,7 +484,11 @@ void setup()
 
   nh.advertise(pub_state);
   nh.advertise(pub_sensors);
-  nh.advertise(pub_result);
+  // pub_result NOT advertised (2026-08-25). /hero_agent/result had ZERO
+  // subscribers on the live graph (measured) and hero_agent_position_result.msg
+  // has carried a DEPRECATED banner since 2026-06-14. At 24 B payload x 22.6 Hz
+  // it was 724 B/s -- 13 % of the 57600-baud link -- spent on nothing, and that
+  // budget is exactly what the loop-rate sensors publish above needs.
   nh.subscribe(sub_command);
   nh.subscribe(sub_thruster);
   nh.subscribe(sub_cont_xy_darknet);
@@ -580,6 +584,34 @@ void loop()
     rl_active = 0;  // one-shot NEUTRAL; re-arms on the next RL msg
   }
 
+  // --- Attitude publish, EVERY loop iteration (2026-08-25) ----------------
+  // This used to sit inside the depth_count == 3 branch below, so it fired once
+  // per FOUR loop iterations -- each carrying its own delay(9) for the MS5837
+  // conversion staging. Measured: loop_speed 91 Hz, /hero_agent/sensors 22.6 Hz,
+  // exactly 91/4. There is no data dependency justifying that: sensors_msg.DEPTH
+  // carries loop_speed, NOT depth, and roll/pitch/yaw/acc_* are written by the
+  // USART1 RX ISR (agent.ino:429), which preempts delay() and therefore updates
+  // at the AHRS stream rate regardless of where this publish sits.
+  //
+  // WHY IT MATTERS. The RL policy's constants are all per-TICK -- CONTROL_DT
+  // (np_policy.py:65) is hardcoded 0.02, so control_hz 50 is the trained rate.
+  // At 50 Hz control against a 22.6 Hz observation, 55 % of ticks re-read the
+  // same IMU frame. The 2026-08-25 tank runs bracketed that: control_hz 50 gave
+  // a yaw runaway in 13 s, control_hz 20 (fresh frames, but every tick constant
+  // 2.5x off) held 22 s then grew a roll oscillation. Neither rate is right;
+  // raising the observation rate is what removes the trade.
+  // Duplicate-frame rate measured on the bag was 0.2 % at 22.6 Hz, so the AHRS
+  // streams well above that -- the gating was here, not in the sensor.
+  sensors_msg.ROLL = roll;
+  sensors_msg.PITCH = pitch;
+  sensors_msg.YAW = yaw;
+  sensors_msg.DEPTH = loop_speed;
+  sensors_msg.GYRO_X = acc_roll;    // 이미 파싱된 자이로 진값 p (sensor frame)
+  sensors_msg.GYRO_Y = acc_pitch;   // q
+  sensors_msg.GYRO_Z = acc_yaw;     // r
+
+  pub_sensors.publish(&sensors_msg);
+
   if (depth_count == 0)
   {
     DEPTH_Sensor.read2();
@@ -610,24 +642,8 @@ void loop()
     // DEPTH_Sensor.read();
     // depth = DEPTH_Sensor.depth();
 
-    sensors_msg.ROLL = roll;
-    sensors_msg.PITCH = pitch;
-    sensors_msg.YAW = yaw;
-    sensors_msg.DEPTH = loop_speed;
-    sensors_msg.GYRO_X = acc_roll;    // 이미 파싱된 자이로 진값 p (sensor frame)
-    sensors_msg.GYRO_Y = acc_pitch;   // q
-    sensors_msg.GYRO_Z = acc_yaw;     // r
-
-    pub_sensors.publish(&sensors_msg);
-
-    result_msg.TARGET_X = TARGET_X;
-    result_msg.TARGET_Y = TARGET_Y;
-    result_msg.TARGET_Z = TARGET_Z;
-    result_msg.X = X;
-    result_msg.Y = Y;
-    result_msg.Z = depth - temp_depth;
-
-    pub_result.publish(&result_msg);
+    // sensors_msg moved OUT of this branch (2026-08-25) -- see the block above
+    // the depth state machine. result_msg dropped entirely; both are why.
 
     state_msg.Yaw = yaw;
     state_msg.Target_yaw = desired_angle_yaw;
