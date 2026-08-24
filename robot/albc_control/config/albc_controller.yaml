@@ -53,9 +53,30 @@ ik:
 # Loop rate
 loop_rate_hz: 50
 
-# Initial joint angles (degrees)
+# Initial joint angles (degrees) -- FALLBACK ONLY since 2026-08-24.
+# The controller now seeds theta1/theta2 from the MEASURED arm state on
+# /albc/joint_states, so the first command equals the present position and the
+# first-tick jump is zero by construction. These constants are used only when no
+# joint_states message arrives inside seed_timeout_s (i.e. the driver is not
+# running -- the start_tdc_dryrun.sh bench path, where the sweep needs them).
+# Do NOT treat them as the start pose: 90.0 against the ~180 deg parked pose was
+# a 90 deg J2 jump into the pose that broke arm1 on 2026-08-22.
 initial_theta1_deg: 90.0
 initial_theta2_deg: 90.0
+
+# How long to wait for /albc/joint_states before falling back to the constants
+# above. joint_angle_command publishes at ~10 Hz and launch_albc.sh starts it
+# first, so 3 s is ~30 missed cycles of margin.
+seed_timeout_s: 3.0
+
+# Refuse to start when the seeded pose puts the end effector inside the folded
+# singularity. L1 == L2 == 0.233, so the EE radius is 2*L1*|cos(theta2/2)| and
+# is 0 at theta2 = pi -- the parked pose, where the DLS step is pure damping and
+# the command freezes (bench 2026-08-24: seed 180 deg held bit-identical for
+# 10 s with a 1.19 deg roll error standing). 0.05 sits just inside the
+# damping-dominance point (~0.068 m, theta2 ~ 163 deg); the bench points
+# bracket it at 0.0161 frozen / 0.1252 responding. Set to 0 to disable.
+min_ee_radius_m: 0.05
 
 # Control mode (1=TDC, 2=PID, 3=Fixed, 4=Manual)
 control_mode: 1

@@ -2,6 +2,8 @@
 #include <cmath>
 #include <cstdio>
 #include "hero_msgs/hero_agent_sensor.h"
+#include <ros/topic.h>                // waitForMessage (measured-angle seed)
+#include <sensor_msgs/JointState.h>   // /albc/joint_states (measured arm state)
 #include "albc_control/albc_kinematics.h"
 #include "albc_control/inverse_kinematics.h"
 #include "albc_control/imu_processor.h"
@@ -180,6 +182,12 @@ int main(int argc, char **argv) {
     nh.param<double>("initial_theta1_deg", initial_theta1_deg, 90.0);
     nh.param<double>("initial_theta2_deg", initial_theta2_deg, 90.0);
 
+    // Measured-angle seeding (2026-08-24). initial_theta{1,2}_deg above are now
+    // only the FALLBACK used when /albc/joint_states never arrives.
+    double seed_timeout_s, min_ee_radius_m;
+    nh.param<double>("seed_timeout_s", seed_timeout_s, 3.0);
+    nh.param<double>("min_ee_radius_m", min_ee_radius_m, 0.05);
+
     double manual_theta1_deg, manual_theta2_deg, manual_x, manual_y;
     nh.param<double>("manual/theta1", manual_theta1_deg, 90.0);
     nh.param<double>("manual/theta2", manual_theta2_deg, 90.0);
@@ -200,19 +208,87 @@ int main(int argc, char **argv) {
                       kp_pitch_base, ki_pitch_base, kd_pitch_base,
                       gain_mult);
 
-    // Start in the param-selected mode (control_mode); switch STDIN to raw
-    // non-blocking mode for runtime keys. No longer blocks on a startup keypress.
-    mode_mgr.initInteractive();
-    atexit(restoreKeyboardAtExit);  // restore terminal on any exit path
-
-    // Initial joint angles and end-effector position
+    // ---- Seed the joint state from the MEASURED arm -----------------------
+    // Until 2026-08-24 this seeded theta1/theta2 from the yaml constants and
+    // published that on the FIRST tick, without ever reading where the arm is.
+    // The deployed default (90 deg) against the parked pose (~180 deg) is a
+    // 90 deg J2 jump into the "large force x max lever" pose that broke arm1 on
+    // 2026-08-22 -- and it fires before any runtime key can be pressed, so no
+    // operator action avoided it and no control_mode was exempt.
+    //
+    // joint_angle_command already publishes the MEASURED angle on
+    // /albc/joint_states (position[0]=joint1, position[1]=joint2, rad). Seeding
+    // from it makes the first command equal the present position, so the
+    // first-tick delta is zero BY CONSTRUCTION rather than by a matched constant.
+    //
+    // mapTo2Pi() on the way in is deliberate, not cosmetic. That topic is
+    // raw-CUMULATIVE (joint_angle_command.cpp: js.position = meas.abs_meas) and
+    // J1 has been tens of rad from zero in the field, while this node is in the
+    // WRAPPED convention: everything downstream touches theta only through
+    // sin/cos (forwardKinematics, calculateJacobian) and StatusPublisher applies
+    // the same mapTo2Pi on the way out. Wrapping here puts the seed in the
+    // representation this node actually publishes; the math is unchanged either
+    // way, but the logged and reconfigured values stay readable.
+    //
+    // No message inside the timeout -> yaml fallback with a WARN. That is the
+    // start_tdc_dryrun.sh path by design: it refuses to run while the driver is
+    // alive, so the topic is absent there and the bench seed sweep still works.
     double theta1 = DEG2RAD(initial_theta1_deg);
     double theta2 = DEG2RAD(initial_theta2_deg);
+    {
+        sensor_msgs::JointStateConstPtr js =
+            ros::topic::waitForMessage<sensor_msgs::JointState>(
+                "/albc/joint_states", nh, ros::Duration(seed_timeout_s));
+        if (js && js->position.size() >= 2) {
+            theta1 = mapTo2Pi(js->position[0]);
+            theta2 = mapTo2Pi(js->position[1]);
+            ROS_INFO("Seeded from MEASURED arm: theta1 = %.2f deg, theta2 = %.2f deg",
+                     RAD2DEG(theta1), RAD2DEG(theta2));
+        } else {
+            ROS_WARN("No /albc/joint_states within %.1f s -- seeding from yaml "
+                     "(theta1 = %.1f, theta2 = %.1f deg). The FIRST command will "
+                     "move the arm from wherever it is to that pose.",
+                     seed_timeout_s, initial_theta1_deg, initial_theta2_deg);
+        }
+    }
 
     double current_x, current_y;
     forwardKinematics(theta1, theta2, current_x, current_y);
 
+    // ---- Refuse to start inside the folded singularity --------------------
+    // L1 == L2 (0.233 m), so the EE radius is 2*L1*|cos(theta2/2)| and collapses
+    // to 0 at theta2 = pi -- which IS the parked pose. There the Jacobian loses
+    // the radial direction and the DLS damping lambda = lambda_base *
+    // (1 - sqrt(|sin theta2|)) is simultaneously at its MAXIMUM, so the step is
+    // pure damping. Measured on the bench 2026-08-24: seed 180 deg held the
+    // command bit-identical for 10 s while a 1.19 deg roll error stood. That is
+    // a deadlock, not a divergence -- nothing errors and nothing moves, so a wet
+    // test is spent discovering it.
+    //
+    // The 0.05 m default sits just inside the damping-dominance point: equating
+    // the smaller singular value (~L2*|sin theta2|) with lambda gives
+    // |sin theta2| ~ 0.29, i.e. theta2 ~ 163 deg and a radius of ~0.068 m. The
+    // two bench points bracket that -- 0.0161 m frozen, 0.1252 m responding.
+    // Set the param to 0 to disable the guard.
+    const double ee_radius = std::sqrt(current_x * current_x + current_y * current_y);
+    if (ee_radius < min_ee_radius_m) {
+        ROS_FATAL("Arm is inside the folded singularity: theta2 = %.2f deg gives an "
+                  "EE radius of %.4f m (< %.4f m). The IK cannot move from here and "
+                  "the controller would hold a frozen command. Move the arm out of "
+                  "the fold, then restart.",
+                  RAD2DEG(theta2), ee_radius, min_ee_radius_m);
+        return 1;
+    }
+    ROS_INFO("EE seed: x = %.4f, y = %.4f (radius %.4f m)",
+             current_x, current_y, ee_radius);
+
     attitude.setTarget(current_x, current_y);
+
+    // Start in the param-selected mode (control_mode); switch STDIN to raw
+    // non-blocking mode for runtime keys. No longer blocks on a startup keypress.
+    // AFTER the seed/guard above so a refusal never leaves the terminal raw.
+    mode_mgr.initInteractive();
+    atexit(restoreKeyboardAtExit);  // restore terminal on any exit path
 
     // Dynamic reconfigure server (syncs YAML-loaded values, then enables runtime tuning)
     dynamic_reconfigure::Server<albc_control::ALBCControllerConfig> dr_server(nh);
