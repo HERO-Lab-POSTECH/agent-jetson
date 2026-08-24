@@ -141,7 +141,12 @@ volatile double error_yaw;
 volatile double error_pid_yaw, error_pid_yaw1;
 volatile double P_angle_pid_yaw;
 volatile double P_yaw, I_yaw, D_yaw, PID_yaw;
-volatile double desired_angle_yaw = 1;
+// 2026-08-24: 부팅 기본값 1 rad(57.3°) -> 0. 이건 pid.cpp 의 불감대 FF 보다 **먼저**
+// 들어가야 하는 선결 항목이다. 지금까지는 불감대가 이 명령을 삼키고 있었을 뿐이고
+// (2026-08-24 세션 503 s 동안 Target_yaw 가 +1.00 이었다가 운영자가 'Z' 를 눌러서야
+// 0 이 됐다), FF 가 들어가면 전원 투입 + 'Y' 즉시 로봇이 57° 를 향해 돈다.
+// 분석: notes/2026-08-24-fault-tolerant-allocation-analysis.md §3-6 "부팅 setpoint"
+volatile double desired_angle_yaw = 0;
 
 double error_pid_depth, error_pid_depth1;
 double P_angle_pid_depth;
@@ -226,6 +231,11 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   {
     cont_yaw_on = !cont_yaw_on;
     cont_Yaw = cont_yaw_on;
+    // 2026-08-24: 상승엣지에서 적분기 리셋. I_yaw 는 그동안 **어디서도** 리셋되지
+    // 않아서(pid.cpp 의 클램프가 유일한 언급) 부팅 이후 누적분이 영원히 남았다.
+    // 불감대 FF 전에는 적분기가 출력에 닿지 않아 무증상이었다. 자세한 근거:
+    // notes/2026-08-24-fault-tolerant-allocation-analysis.md §3-6 "2순위 — 적분기"
+    if (cont_yaw_on) I_yaw = 0;
   }
   else if (Command == 'D') // Depth control
   {
@@ -241,6 +251,9 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   {
     desired_angle_yaw = 0;
     yaw_calid_command = 1;
+    // 2026-08-24: 'Z' 는 "yaw 리셋" 키인데 정작 적분기를 안 비웠다. 목표각과 기준각을
+    // 둘 다 0 으로 되돌리면서 누적분만 남겨두면 리셋 직후에 그 누적분이 그대로 밀어낸다.
+    I_yaw = 0;
 
     test_cont_set = 0;
   }

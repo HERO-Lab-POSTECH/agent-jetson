@@ -11,9 +11,15 @@ find_package(catkin REQUIRED COMPONENTS hero_agent albc_control)
 catkin_package()
 
 include_directories(
-  ${CMAKE_CURRENT_SOURCE_DIR}   # local "processkey_oracle.h"
+  ${CMAKE_CURRENT_SOURCE_DIR}   # local "processkey_oracle.h" + Arduino.h host shim
   ${catkin_INCLUDE_DIRS}
 )
+
+# test_yaw_deadband_ff.cpp reads agent.ino as TEXT (it cannot be linked on a host)
+# to pin the boot setpoint and the two I_yaw resets. run.sh chdir's to this
+# directory so the test's built-in relative default works there; ctest runs from
+# the build tree, so it needs the absolute path.
+add_definitions(-DAGENT_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../firmware/agent")
 
 # Standalone golden tests: each test_*.cpp is a self-contained int main() that
 # returns non-zero on divergence (CTest pass/fail contract). NOT gtest -- wrapped
