@@ -123,17 +123,22 @@ def _undeadband_fn():
     Pulling just this one pure function out of the AST keeps the test honest: a
     re-implementation would pass even if the shipped formula were wrong.
     """
+    return _pure_fn("undeadband")
+
+
+def _pure_fn(name):
+    """Exec one module-level pure function out of the shipped file, by name."""
     tree = ast.parse(open(MIXER).read())
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "undeadband":
+        if isinstance(node, ast.FunctionDef) and node.name == name:
             ns = {}
             try:                       # py3.8+ requires type_ignores; py2.7 rejects it
                 mod = ast.Module(body=[node], type_ignores=[])
             except TypeError:
                 mod = ast.Module(body=[node])
             exec(compile(mod, MIXER, "exec"), ns)
-            return ns["undeadband"]
-    raise AssertionError("undeadband() not found in thruster_mixer.py")
+            return ns[name]
+    raise AssertionError("%s() not found in thruster_mixer.py" % name)
 
 
 def test_deadband_inverse_preserves_zero_and_full_scale():
@@ -163,6 +168,36 @@ def test_deadband_zero_is_a_passthrough():
     f = _undeadband_fn()
     for a in (0.05, 0.5, -0.7, 1.0):
         assert f(a, 0.0) == a
+
+
+def test_sign_zero_disables_the_channel_exactly():
+    """sign[j]=0 pins channel j to exact neutral -- the m4 exclusion (2026-08-24).
+
+    m4 has an INTERMITTENT open-phase fault and cannot be unplugged on this
+    vehicle. Intermittent is worse than dead for the deployed policy: fault DR
+    trained effectively-dead channels at ~0.5%/episode and never trained one that
+    comes and goes, and use_privileged_fault_obs is false so the policy cannot
+    tell which channel misbehaved. This is the only path that makes the real
+    fault match the one the policy has seen.
+    """
+    norm, f = _pure_fn("normalize_sign"), _undeadband_fn()
+    s = norm([1, 1, 1, 1, 0, 1])
+    assert s == [1.0, 1.0, 1.0, 1.0, 0.0, 1.0], "0 must survive as 0, not become +1"
+    for a in (-1.0, -0.3, 0.0, 0.3, 1.0):      # whatever the policy asks of m4
+        assert f(a * s[4], 0.15) == 0.0, "disabled channel must stay at exact neutral"
+    # the live channels are untouched by a neighbour being disabled
+    assert f(0.3 * s[5], 0.15) > 0.15
+
+
+def test_sign_normalisation_still_collapses_to_plus_minus_one():
+    """Only 0 is new -- every other value must still become exactly +-1.
+
+    Guards the old `s >= 0` form, which mapped 0 to +1 and would silently ARM a
+    channel someone had tried to switch off.
+    """
+    norm = _pure_fn("normalize_sign")
+    assert norm([1, -1, 2, -3, 1, -1]) == [1.0, -1.0, 1.0, -1.0, 1.0, -1.0]
+    assert norm([1, 1, 1, 1, 1, 1]) == [1.0] * 6
 
 
 def test_double_permutation_is_refused():

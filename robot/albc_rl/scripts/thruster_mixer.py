@@ -33,7 +33,8 @@ WHAT THIS NODE OWNS (and, deliberately, what it does NOT):
 
   ORDER OF OPERATIONS (per output channel j): permute -> sign -> deadband -> clamp.
         out[j] = clamp( undeadband( sign[j] * in[ order[j] ] ) )
-        permute picks the source, sign corrects that physical channel, undeadband
+        permute picks the source, sign corrects that physical channel (0 = DISABLED,
+        pinned to exact neutral -- see normalize_sign), undeadband
         inverts the ESC's dead zone (see _undeadband), clamp is the last defensive
         gate. Deadband comes AFTER sign because the dead zone is a property of the
         physical channel, so it must act on the value that channel will actually
@@ -160,6 +161,31 @@ DEFAULT_ORDER = [3, 2, 4, 0, 5, 1]  # index = fw channel j, value = sim source
 DEFAULT_DEADBAND = 0.15
 
 
+def normalize_sign(sign):
+    """Per-OUTPUT-channel sign table -> floats. 0 means DISABLED, not +1.
+
+    +1/-1 pick the rotation direction of that physical channel. 0 pins the channel
+    to exactly neutral: `a *= 0.0` lands in undeadband()'s |a| < 1e-3 branch, which
+    returns 0.0, so the ESC sees dead centre rather than a deadband-lifted value.
+
+    Why a disable exists at all (2026-08-24): m4 has an intermittent open-phase
+    fault -- it bites at random rather than being reliably dead, and it cannot be
+    unplugged on this vehicle. An INTERMITTENT channel is worse for the deployed
+    policy than a dead one: fault DR trained effectively-dead channels at ~0.5%
+    per episode (PLAN 0i-3) and never trained a channel that comes and goes, and
+    `use_privileged_fault_obs: false` means the policy cannot see which channel
+    misbehaved. Pinning the channel makes the real fault match the one the policy
+    has actually seen.
+
+    Guard: `s >= 0` used to map 0 to +1, which silently ARMED a channel someone
+    had tried to switch off. Keep the `s == 0` branch first.
+
+    Module-level and pure so it is testable without rospy (see
+    test_thruster_mixer_axes.py, which parses this file rather than importing it).
+    """
+    return [0.0 if s == 0 else (1.0 if s > 0 else -1.0) for s in sign]
+
+
 def undeadband(a, deadband):
     """Map a policy action onto the ESC's LIVE range, skipping the deadband.
 
@@ -207,7 +233,11 @@ class ThrusterMixer(object):
             rospy.logwarn("~thruster_sign has %d entries (need %d) -- using identity",
                           len(sign), NUM_THR)
             sign = [1] * NUM_THR
-        self.sign = [1.0 if s >= 0 else -1.0 for s in sign]
+        self.sign = normalize_sign(sign)
+        for j, sj in enumerate(self.sign):
+            if sj == 0.0:
+                rospy.logwarn("thruster m%d is DISABLED (~thruster_sign[%d]=0) -- "
+                              "it will be held at exact neutral", j, j)
 
         # ESC deadband, normalized to the action range. See undeadband().
         # 0.0 disables the compensation (use that on pre-2026-08-12 firmware).
