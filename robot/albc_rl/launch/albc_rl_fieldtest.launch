@@ -98,10 +98,27 @@
        cannot express that, so set 0.0 until the board is reflashed. -->
   <arg name="thruster_deadband"   default="0.15" />
 
-  <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd) -->
-  <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen">
-    <param name="loop_hz" value="$(arg joint_loop_hz)" />
-  </node>
+  <!-- 1) Dynamixel joint driver (publishes arm state, receives absolute-angle cmd).
+       launch_driver:=false when a driver is ALREADY RUNNING and must stay that way.
+       Added 2026-08-25 because starting one here forces the running one to die first,
+       and joint_angle_command calls disableTorque() on exit; so every launch of this
+       file dropped arm torque, and every Ctrl-C dropped it again. Underwater that is
+       the exact first layer of the arm2 fracture (a 417 s torque-off handover let the
+       buoy drag joint2 by 160 deg and the vehicle pitch by 49 deg), and an E2 gain
+       sweep is THREE runs, i.e. three repetitions of it. With this gate the driver
+       never has to die: torque is continuous from launch-agent through every policy
+       run, and the operator needs one hand instead of two.
+       Same idiom as launch_mixer in albc_rl.launch, and for the same reason: two
+       nodes of one name means ROS silently kills one without saying so.
+       NOTE the loop rate then comes from the RUNNING driver, not joint_loop_hz here.
+       It must still be >= control_hz; the standalone driver this was written for
+       runs at 50. -->
+  <arg name="launch_driver"       default="true" />
+  <group if="$(arg launch_driver)">
+    <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="screen">
+      <param name="loop_hz" value="$(arg joint_loop_hz)" />
+    </node>
+  </group>
 
   <!-- 2) RL student-policy inference node (reuse albc_rl.launch node def via include) -->
   <include file="$(find albc_rl)/launch/albc_rl.launch">
