@@ -93,56 +93,12 @@ sys.path.insert(0, _HERE)                                   # build_proprio
 sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforward
 
 from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
+# pure predicates, deliberately rospy-free so test_arm_guard.py can run them
+# ANYWHERE rather than only on the board -- see arm_guard.py's header
+from arm_guard import j2_in_window, over_current_held  # noqa: E402
 from np_policy import NumpyStudentPolicy, DELTA_SCALE  # noqa: E402
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
-
-
-def j2_in_window(theta2_rad, lo_rad, hi_rad):
-    """Is joint2 inside the safe window? theta2 is WRAPPED to [0, 2*pi) first.
-
-    Shared by the start-state gate and the per-tick arm guard so the two can never
-    disagree about what "inside" means.
-
-    Wrapping is mandatory, not cosmetic. /albc/joint_states and the policy's own
-    joint-target accumulator use different representations of the same physical
-    pose -- the driver logged "command -0.061 rad is -1.00 turns from baseline
-    6.107" on the run that broke arm2, i.e. -0.061 and 6.222 are the same place.
-    Comparing an unwrapped accumulator against a fixed window would reject poses
-    physically identical to accepted ones, and would drift further out every turn.
-
-    hi <= lo disables the window (returns True), matching the driver's
-    overGuard(limit > 0) convention for "this check is off".
-    """
-    if hi_rad <= lo_rad:
-        return True
-    th = float(np.mod(float(theta2_rad), 2.0 * np.pi))
-    return lo_rad <= th <= hi_rad
-
-
-def over_current_held(prev_since, now, value, cap, stale):
-    """Accumulate how long the joint current has been over `cap`. Pure, so it is
-    testable -- this is the most intricate logic in the arm guard and the place a
-    defect hides best.
-
-    Returns (since, held): `since` is the timestamp the excess began (None = clear),
-    `held` the seconds it has lasted.
-
-    A SILENT signal is UNKNOWN, not CLEAR. The 2026-08-25 defect was upstream of
-    here: the driver published 0 mA on a failed Dynamixel read, so one bad read per
-    window reset the accumulator and the guard could never trip while the arm
-    stalled -- and a stall is exactly what jams that bus (295/572 read failures
-    measured 2026-08-20). The driver now skips the publish instead, and `stale`
-    carries that gap through: while it is set, an existing excess keeps counting.
-    Only a FRESH under-cap sample clears it.
-
-    `held` is clamped: this board restores its clock from a snapshot at boot, so a
-    jetson_clock_sync landing mid-run can jump the clock by days in either direction.
-    """
-    if value > cap or (stale and prev_since is not None):
-        since = now if prev_since is None else prev_since
-        return since, min(max(now - since, 0.0), 1e4)
-    return None, 0.0
 
 
 def _md5_8(path):
@@ -516,7 +472,15 @@ class RLInferenceNode(object):
         A missing /joint_currents WARNS and skips rather than halting: an absent
         signal is a different failure from an over-current one, and halting on it
         would brick every run against an older driver. That is a known gap -- the
-        current guard is only live once the driver is publishing.
+        current guard is only live once the driver is publishing. A signal that
+        STOPS after publishing also warns (throttled 2 s), and an excess already
+        accumulating keeps counting through the gap rather than clearing.
+
+        THE CURRENT GUARD IS ONE HALF OF A PAIR. Against a driver built before
+        2026-08-25 it is INERT no matter what this file does: that binary publishes
+        a fabricated 0 mA on a failed read, so `stale` is never true and every zero
+        clears the accumulator. Restart joint_angle_command -- out of the water --
+        or this guard is not running.
         """
         if self._halted:
             rospy.logerr_throttle(
@@ -566,12 +530,19 @@ class RLInferenceNode(object):
         if self.j2_max > self.j2_min:
             half = 0.5 * (self.j2_max - self.j2_min)
             mid = 0.5 * (self.j2_max + self.j2_min)
-            th2 = float(np.mod(float(self._joint_pos[1]), 2.0 * np.pi))
-            if abs(th2 - mid) > 0.9 * half:
+            # COMMANDED as well as measured: the command leads the measurement (by
+            # about 2 s on the break run), so watching only the measured angle
+            # spends that lead. Both are provably inside the window here -- the
+            # two trips above already returned otherwise.
+            meas = float(np.mod(float(self._joint_pos[1]), 2.0 * np.pi))
+            cmd = float(np.mod(float(target[1]), 2.0 * np.pi))
+            worst, label = ((meas, "measured") if abs(meas - mid) >= abs(cmd - mid)
+                            else (cmd, "COMMANDED"))
+            if abs(worst - mid) > 0.9 * half:
                 rospy.logwarn_throttle(
-                    1.0, "joint2 %.1f deg is within 10%% of the [%.1f, %.1f] window "
-                         "edge -- the guard latches the run past it"
-                    % (np.degrees(th2), np.degrees(self.j2_min),
+                    1.0, "joint2 %s %.1f deg is within 10%% of the [%.1f, %.1f] "
+                         "window edge -- the guard latches the run past it"
+                    % (label, np.degrees(worst), np.degrees(self.j2_min),
                        np.degrees(self.j2_max)))
 
         if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
@@ -584,6 +555,19 @@ class RLInferenceNode(object):
                 over = float(np.max(np.abs(self._joint_cur)))
                 stale = (self._last_cur_t is None
                          or (now - self._last_cur_t) > self.joint_timeout)
+                # A stale signal with nothing accumulating logs NOTHING otherwise:
+                # over_current_held correctly returns clear, and the branch below is
+                # gated on an accumulation. The fix that made the driver skip a failed
+                # publish DECOUPLED the two topics, so /albc/joint_states stays fresh,
+                # _tick_impl's staleness gate does not fire, and the node would run
+                # indefinitely with no over-current protection and no word about it.
+                if stale:
+                    rospy.logwarn_throttle(
+                        2.0, "/joint_currents STALE %.2f s -- the over-current guard "
+                             "is running on the last known value (J1 %.0f / J2 %.0f mA). "
+                             "The driver logs the read failure; check rosout."
+                        % (now - (self._last_cur_t or now),
+                           float(self._joint_cur[0]), float(self._joint_cur[1])))
                 self._over_cur_since, held = over_current_held(
                     self._over_cur_since, now, over, self.cur_max_ma, stale)
                 if self._over_cur_since is not None:

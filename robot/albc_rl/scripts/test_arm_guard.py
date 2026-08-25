@@ -25,8 +25,16 @@ WHAT IT CHECKS, and why each check earned its place:
      This repo's recurring failure is constants that drift away from the artifact
      they came from; the window is re-derived here and compared.
   4. The window predicate accepts/rejects the poses actually measured on the break
-     run. Skipped with a loud note when rospy is absent (i.e. off-board), because
-     importing the node module needs it.
+     run.
+  5. The sustained-current timer, including the injected-zero sequence that stands
+     in for the CRITICAL defect. Steps 4-5 import arm_guard.py, which pulls in numpy
+     and nothing else -- they used to live in rl_inference_node, and importing that
+     drags in rospy, so the most intricate logic in the change could only be tested
+     on the board.
+  6. The DRIVER half of the current guard, asserted on C++ source text. Step 5 alone
+     pins nothing: against a driver that still publishes a fabricated 0 on a failed
+     read, the node's stale handling is a no-op and every zero clears the timer. The
+     two halves only work as a pair, and C++ offers no other layer here.
 
 Usage:  python test_arm_guard.py        (exit 0 = pass)
 """
@@ -161,16 +169,14 @@ if m is not None:
           % (math.pi - node_mnp, launch_args['joint2_max_rad']))
 
 print('\n4. the window predicate on the poses measured during the fracture')
-try:
-    sys.path.insert(0, HERE)
-    from rl_inference_node import j2_in_window, over_current_held   # noqa: E402
-except ImportError as e:
-    print('  SKIP  cannot import rl_inference_node (%s).' % e)
-    print('        This step needs rospy, so run it ON THE BOARD:')
-    print('          source ~/catkin_ws/devel/setup.bash && python %s'
-          % os.path.basename(__file__))
-    print('        Steps 1-3 above ran; those are the ones that catch drift.')
-else:
+# These two live in arm_guard.py, which imports numpy and NOTHING else, precisely so
+# that the tests standing in for the CRITICAL current-read defect run off-board too.
+# They used to sit inside rl_inference_node, and importing that drags in rospy, so
+# steps 4-5 ran only on the board -- the most intricate logic in the change was
+# gated behind an import it does not need.
+sys.path.insert(0, HERE)
+from arm_guard import j2_in_window, over_current_held   # noqa: E402
+if True:
     lo = float(launch_args['joint2_min_rad'])
     hi = float(launch_args['joint2_max_rad'])
     # every value below is a MEASUREMENT off e2_run1_gain010_BREAK.bag
@@ -215,8 +221,9 @@ else:
     for i in range(50):
         injected.append((i * 0.02, 0.0 if i % 10 == 9 else 1300.0, False))
     check(run(injected) < HOLD,
-          'injected 0 mA DOES clear the timer -- this is why the driver must not '
-          'publish a failed read (regression pin, not a wish)')
+          'a FABRICATED fresh 0 defeats the timer -- this is WHY '
+          'joint_angle_command.cpp must SKIP the publish on a failed read. NOT a '
+          'node behaviour to preserve (narrative; the real pin is step 6)')
     gappy = []
     for i in range(50):
         gappy.append((i * 0.02, 1300.0, i % 10 == 9))   # value held, sample STALE
@@ -229,9 +236,50 @@ else:
     # first over sample must not trip instantly
     since, held = over_current_held(None, 10.0, 1300.0, CAP, False)
     check(since == 10.0 and held == 0.0, 'first over-cap sample starts at held = 0')
-    # clock jump: this board restores its clock from a snapshot at boot
-    check(over_current_held(100.0, 50.0, 1300.0, CAP, False)[1] == 0.0,
-          'a BACKWARD clock jump clamps held to 0 rather than going negative')
+    # Clock jump: this board restores its clock from a snapshot at boot and can
+    # move DAYS when jetson_clock_sync lands. held >= 0 is only the symptom -- what
+    # matters is that `since` RESTARTS. Preserving it would clamp held to 0 until
+    # wall time caught up, i.e. a guard inert for the whole jump during a stall.
+    since, held = over_current_held(100.0, 50.0, 1300.0, CAP, False)
+    check(since == 50.0 and held == 0.0,
+          'a BACKWARD clock jump RESTARTS the window (since 100 -> 50), not freezes it')
+    check(run([(100.0, 1300.0, False), (50.0, 1300.0, False),
+               (50.6, 1300.0, False)]) >= HOLD,
+          'and the restarted window still trips %.2f s after the jump' % HOLD)
+
+print('\n6. the DRIVER half of the current guard (the other half of step 5)')
+# The node's stale handling is a NO-OP against a driver that still publishes a
+# fabricated 0 on a failed read: _last_cur_t refreshes every cycle, `stale` is never
+# true, and every zero clears the accumulator -- the original defect, untouched. So
+# the two halves only work as a pair, and step 5 alone pins nothing. C++ offers no
+# other layer in this repo, so this asserts on source text. Crude, and it fails
+# loudly if anyone un-gates the publish, which is the whole job.
+DRIVER = os.path.join(HERE, '..', '..', 'albc_control', 'src',
+                      'joint_angle_command.cpp')
+try:
+    cpp_src = open(DRIVER).read()
+except IOError as e:
+    check(False, 'cannot read joint_angle_command.cpp (%s)' % e)
+else:
+    check('bool readCurrent(' in cpp_src,
+          'readCurrent reports success instead of returning a zero-initialised local')
+    check(re.search(r'cur_ok\s*=\s*readCurrent\([^;]*&&[^;]*readCurrent\(', cpp_src)
+          is not None,
+          'both channels are read and BOTH must succeed (max(|.|) consumer)')
+    # bounded non-greedy, NOT [^}]* -- the body contains a brace initialiser
+    # (current_msg.data = {a, b}) so a "no closing brace" class stops short of the
+    # publish and reports a false FAIL. Caught by this check failing on correct code.
+    check(re.search(r'if \(cur_ok\)\s*\{.{0,300}?current_pub\.publish', cpp_src, re.S)
+          is not None,
+          'the /joint_currents publish is GATED on that success')
+    check(re.search(r'return false;', cpp_src) is not None
+          and cpp_src.index('bool readCurrent(') < cpp_src.index('*out = current;'),
+          'readCurrent returns before touching *out on failure')
 
 print('\n%s  (%d failures)' % ('PASS' if not fails else 'FAIL', len(fails)))
+if not fails:
+    print('\nREMINDER: a green run does NOT mean the deployed system is covered.')
+    print('The over-current guard is INERT until joint_angle_command is restarted')
+    print('with this binary -- and that restart drops arm torque, so it happens OUT')
+    print('OF THE WATER. Steps 5-6 test the pair; only a restart deploys it.')
 sys.exit(1 if fails else 0)
