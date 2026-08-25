@@ -35,6 +35,16 @@ WHAT IT CHECKS, and why each check earned its place:
      pins nothing: against a driver that still publishes a fabricated 0 on a failed
      read, the node's stale handling is a no-op and every zero clears the timer. The
      two halves only work as a pair, and C++ offers no other layer here.
+  7. That rl_inference_node actually IMPORTS those predicates and keeps no local copy.
+     Steps 4-6 validate arm_guard.py; before the split they validated the node itself.
+     Without this, stubbing both guards out in the node leaves all six steps green.
+
+EVERY source-text assertion in here has been watched FAIL on a deliberate mutation.
+That is not ceremony: such an assertion has two failure modes and only one is loud.
+Written after the code, too-strict fails on correct input and costs minutes (step 6
+did, on a brace initialiser). Written before, too-loose passes on nothing and ships a
+check that asserts a string it never finds. A green run is evidence only if the red
+run was also seen.
 
 Usage:  python test_arm_guard.py        (exit 0 = pass)
 """
@@ -272,9 +282,39 @@ else:
     check(re.search(r'if \(cur_ok\)\s*\{.{0,300}?current_pub\.publish', cpp_src, re.S)
           is not None,
           'the /joint_currents publish is GATED on that success')
-    check(re.search(r'return false;', cpp_src) is not None
-          and cpp_src.index('bool readCurrent(') < cpp_src.index('*out = current;'),
-          'readCurrent returns before touching *out on failure')
+    # Scoped to readCurrent's OWN body, and ordered within it. The first version of
+    # this check asserted `'return false;' in cpp_src` (true of the whole file --
+    # readPosition has one) AND an index ordering that is trivially true whenever
+    # both strings exist, since `*out = current;` is inside the very function whose
+    # signature it was compared against. It read like a pin and pinned nothing: the
+    # same shape as old step 5. It also used str.index, which RAISES when the
+    # substring is absent -- and check() evaluates its argument before the call, so
+    # a mutated signature escaped as a ValueError, killing the summary line and any
+    # later step. .find() >= 0 fails closed instead.
+    body = cpp_src[cpp_src.find('bool readCurrent('):]
+    body = body[:body.find('\n}')] if body else ''
+    ret, assign = body.find('return false;'), body.find('*out = current;')
+    check(ret >= 0 and assign >= 0 and ret < assign,
+          'readCurrent returns false BEFORE assigning *out (ordered inside its own body)')
+
+print('\n7. the node actually USES arm_guard (the coupling the split broke)')
+# Steps 4-6 validate arm_guard.py. Before the 2026-08-25 split they imported from
+# rl_inference_node, so they validated the NODE. Moving the predicates out bought
+# off-board execution and PAID WITH THIS COUPLING: nothing downstream asserted the
+# node still imports them. MUTATION D, reproduced here before writing the fix --
+# replacing the import with local stubs (`j2_in_window -> True`,
+# `over_current_held -> (None, 0.0)`) neutered BOTH guards in the production file
+# and the suite still reported 6 steps, 0 failures. Third instance of the same
+# class as the XML bug and the two blind spots: only a mechanical check finds it.
+for fn in ('j2_in_window', 'over_current_held'):
+    check(re.search(r'from arm_guard import[^\n]*%s' % fn, node_src) is not None,
+          'rl_inference_node imports %s from arm_guard' % fn)
+# This is the half that catches Mutation D. An import the node then shadows with
+# its own definition is worse than no import: it reads as wired and is not.
+shadow = re.search(r'^def (j2_in_window|over_current_held)', node_src, re.M)
+check(shadow is None,
+      'and keeps NO local copy of either (found %s)'
+      % (shadow.group(1) if shadow else 'none'))
 
 print('\n%s  (%d failures)' % ('PASS' if not fails else 'FAIL', len(fails)))
 if not fails:
