@@ -31,12 +31,12 @@
        kinematic singularities. The break run started at joint2 -10.2 deg, OUTSIDE.
        max <= min disables the window.
 
-       EVERY NUMBER BELOW IS AN ANGLE, so all of them depend on the joint2 DATUM --
+       EVERY NUMBER BELOW IS AN ANGLE, so all of them depend on the joint2 DATUM:
        Homing Offset J2 = -61, EEPROM addr 20. That offset exists specifically to
        absorb a re-seating residual (5.36 deg on 2026-08-11), which means RE-SEATING
        THE ARM IS THE EVENT THAT MOVES IT. Verify the datum after any reassembly
        before treating these thresholds as meaningful: a 180 deg error trips loudly,
-       but a few degrees is SILENT -- it shifts every threshold together and every
+       but a few degrees is SILENT; it shifts every threshold together and every
        log line still reads normal. The defaults were calibrated on bag data from the
        old arm2 at the old datum (the 174.84 deg ceiling sits only 8.5 deg above the
        observed limit-cycle centre of 166.3 deg), so a small shift either nuisance-
