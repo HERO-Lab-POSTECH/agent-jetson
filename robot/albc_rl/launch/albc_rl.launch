@@ -7,13 +7,27 @@
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />  <!-- true=trust /albc_status angvel -->
   <arg name="home_on_start"       default="false" />  <!-- ramp the arm to joint1 0,
-       joint2 pi/2 before the policy starts. np_policy seeds its accumulator from the
-       MEASURED angles, so the starting pose is an initial condition of the run, not a
-       detail, which is why true is the better experiment and false is the safer
-       default. FAIL-SAFE default since 2026-08-17: homing COMMANDS the arm and cannot
-       unwind it (it stops at the nearest 0-equivalent, then warns and proceeds), so it
-       stays opt-in until the restart round-trip regression test passes. Pass
-       home_on_start:=true per run once the arm is known unwound. -->
+       joint2 home_joint2 before the policy starts. np_policy seeds its accumulator
+       from the MEASURED angles, so the starting pose is an initial condition of the
+       run, not a detail, which is why true is the better experiment and false is the
+       safer default. FAIL-SAFE default since 2026-08-17: homing COMMANDS the arm and
+       cannot unwind it (it stops at the nearest 0-equivalent, then warns and
+       proceeds), so it stays opt-in until the restart round-trip regression test
+       passes. Pass home_on_start:=true per run once the arm is known unwound. -->
+  <arg name="home_joint1"         default="0.0" />
+  <!-- 150 deg (2.6179938779914944 rad), NOT pi/2. decision/061 C, 2026-08-26: pi/2
+       is max lever (EE radius 0.3295 m, the pose that broke arm1 on 2026-08-22),
+       150 deg is 0.1206 m (2.73x less). This is a structural-safety DECISION, not a
+       measurement (arm2's allowable stress is still unmeasured), and it is NOT a
+       manipulability optimum either (w(150deg)=0.7071 < w(pi/2)=1.0). _home_arm()
+       has NO software current protection of its own: the node's over-current
+       guard only starts ticking after homing returns (review/058 section 5), so
+       this default is the only thing bounding load while homing runs. Previously
+       not exposed as a launch arg at all (hardcoded pi/2 in the node). -->
+  <arg name="home_joint2"         default="2.6179938779914944" />
+  <arg name="home_tol"            default="0.05" />   <!-- rad, _home_arm arrival tol -->
+  <arg name="home_timeout_s"      default="25.0" />   <!-- _home_arm gives up (warns,
+       proceeds) after this many seconds -->
   <arg name="joint1_start_max_rad" default="3.14159265358979" /> <!-- refuse to start
        the policy if |joint1| exceeds this; <= 0 disables. Sim resets theta1 to
        uniform(-pi, pi) EVERY episode, so the trained +-2-turn budget is measured from
@@ -23,29 +37,25 @@
        confounded: the 2026-08-13 tank runs calmed 250x at control_hz 10, but that also
        cut the gain 5x. Hold 0.02 at control_hz 50 to isolate observation delay.
        Anything but 0.10 departs from what the checkpoint trained with. -->
-  <!-- ARM PROTECTION, added 2026-08-25 after arm2 fractured. Defaults are calibrated
-       on the run that broke it (.community/posts/finding/047), not guessed, but they
-       are still DECISIONS: arm2's allowable stress has never been measured.
-       joint2 window = the manipulability cost the policy trained with,
-       w = sqrt|sin theta2| >= 0.3, so [asin(0.09), pi-asin(0.09)] rad. Both ends are
-       kinematic singularities. The break run started at joint2 -10.2 deg, OUTSIDE.
-       max <= min disables the window.
+  <!-- ARM PROTECTION, added 2026-08-25 after arm2 fractured, current cap + start
+       tilt REMAIN below. Defaults are calibrated on the run that broke it
+       (.community/posts/finding/047), not guessed, but they are still DECISIONS:
+       arm2's allowable stress has never been measured.
 
-       EVERY NUMBER BELOW IS AN ANGLE, so all of them depend on the joint2 DATUM:
-       Homing Offset J2 = -61, EEPROM addr 20. That offset exists specifically to
-       absorb a re-seating residual (5.36 deg on 2026-08-11), which means RE-SEATING
-       THE ARM IS THE EVENT THAT MOVES IT. Verify the datum after any reassembly
-       before treating these thresholds as meaningful: a 180 deg error trips loudly,
-       but a few degrees is SILENT; it shifts every threshold together and every
-       log line still reads normal. The defaults were calibrated on bag data from the
-       old arm2 at the old datum (the 174.84 deg ceiling sits only 8.5 deg above the
-       observed limit-cycle centre of 166.3 deg), so a small shift either nuisance-
-       trips on run 1 or opens a gap above the singularity. If it moved, fix the
-       DATUM, not this window: asin(0.09) is in true-angle coordinates and does not
-       change, and editing the window would mint a second coordinate system.
-       Method: rules-robot-code SKILL.md, rotation-calibration discipline. -->
-  <arg name="joint2_min_rad"      default="0.09016" />  <!-- 5.16 deg -->
-  <arg name="joint2_max_rad"      default="3.05143" />  <!-- 174.84 deg -->
+       2026-08-26 (decision/061 A1/A2, guard rollback): this block used to also
+       carry a joint2 hard window (manipulability threshold w >= 0.3 turned into a
+       clamp). REMOVED, not widened: this system is constrained RL and
+       singularity avoidance is already a TRAINED cost; the window LATCHED the
+       policy mid an ordinary move on 2026-08-25 and forbade half the workspace
+       with no argument beyond "unreviewed." See decision/061.
+
+       NOTE for what remains an ANGLE here (home_joint1/2 above): every joint2
+       angle in this file depends on the joint2 DATUM (Homing Offset J2 = -61,
+       EEPROM addr 20), which RE-SEATING THE ARM MOVES. A 180 deg datum error
+       trips loudly; a few degrees is SILENT and shifts every angle together
+       while every log line still reads normal. Verify the datum after any
+       reassembly (rules-robot-code SKILL.md, rotation-calibration discipline)
+       before trusting an angle default here. -->
   <!-- SUSTAINED over-current, not peak: breakaway from rest legitimately draws
        1.1-1.3 A, and the 2026-08-22 arm1 break was 1.0 A SUSTAINED. On the break run
        |I_J2| held above 900 mA for 1.240 s (first at t=4.77 s) while 1000 mA never
@@ -75,9 +85,11 @@
     <param name="use_board_rates"    value="$(arg use_board_rates)" />
     <param name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <param name="home_on_start"      value="$(arg home_on_start)" />
+    <param name="home_joint1"        value="$(arg home_joint1)" />
+    <param name="home_joint2"        value="$(arg home_joint2)" />
+    <param name="home_tol"           value="$(arg home_tol)" />
+    <param name="home_timeout_s"     value="$(arg home_timeout_s)" />
     <param name="joint1_start_max_rad" value="$(arg joint1_start_max_rad)" />
-    <param name="joint2_min_rad"     value="$(arg joint2_min_rad)" />
-    <param name="joint2_max_rad"     value="$(arg joint2_max_rad)" />
     <param name="joint_current_max_ma" value="$(arg joint_current_max_ma)" />
     <param name="joint_current_max_s" value="$(arg joint_current_max_s)" />
     <param name="start_att_max_deg"  value="$(arg start_att_max_deg)" />

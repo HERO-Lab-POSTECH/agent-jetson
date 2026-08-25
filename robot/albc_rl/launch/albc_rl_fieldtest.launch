@@ -24,11 +24,16 @@
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />
   <arg name="home_on_start"       default="false" />  <!-- ramp the arm to
-       joint1 0, joint2 pi/2 before the policy starts, so every run has the same initial
-       condition and the operator does not have to launch-albc + press 3 + Ctrl-C.
-       FAIL-SAFE default since 2026-08-17: homing COMMANDS the arm and cannot unwind a
-       wound one, so it stays opt-in until the restart round-trip regression test passes.
-       Pass home_on_start:=true per run once the arm is known unwound. -->
+       joint1 0, joint2 home_joint2 before the policy starts, so every run has the same
+       initial condition and the operator does not have to launch-albc + press 3 +
+       Ctrl-C. FAIL-SAFE default since 2026-08-17: homing COMMANDS the arm and cannot
+       unwind a wound one, so it stays opt-in until the restart round-trip regression
+       test passes. Pass home_on_start:=true per run once the arm is known unwound. -->
+  <arg name="home_joint1"         default="0.0" />
+  <arg name="home_joint2"         default="2.6179938779914944" />  <!-- 150 deg,
+       NOT pi/2: see albc_rl.launch (decision/061 C) for the full rationale. -->
+  <arg name="home_tol"            default="0.05" />
+  <arg name="home_timeout_s"      default="25.0" />
   <arg name="joint1_start_max_rad" default="3.14159265358979" /> <!-- refuse to start
        the policy if |joint1| exceeds this; <= 0 disables. See albc_rl.launch. -->
   <arg name="joint_loop_hz"       default="10.0" />   <!-- Dynamixel driver read
@@ -40,13 +45,14 @@
        Confounded with control_hz (per-second rate = gain x hz). Diagnostic sweep:
        control_hz:=50 joint_delta_scale:=0.02 matches the 10 Hz run's per-second gain
        while keeping the 50 Hz delay. Calm there means gain, noisy means delay. -->
-  <!-- ARM PROTECTION pass-through. Rationale and the measurements behind every
-       default live in albc_rl.launch next to the same names; they are repeated
-       here only so `launch-rl joint2_max_rad:=...` works from the CLI, which is
-       how an operator widens a guard deliberately rather than by editing a file.
-       Added 2026-08-25 after arm2 fractured. See .community/posts/finding/047. -->
-  <arg name="joint2_min_rad"      default="0.09016" />
-  <arg name="joint2_max_rad"      default="3.05143" />
+  <!-- ARM PROTECTION pass-through (current cap + start tilt). Rationale and the
+       measurements behind every default live in albc_rl.launch next to the same
+       names; they are repeated here only so `launch-rl joint_current_max_ma:=...`
+       works from the CLI, which is how an operator widens a guard deliberately
+       rather than by editing a file. Added 2026-08-25 after arm2 fractured. See
+       .community/posts/finding/047. The joint2 hard window this block used to
+       also pass through is REMOVED 2026-08-26: see albc_rl.launch and
+       decision/061 A1/A2. -->
   <arg name="joint_current_max_ma" default="900.0" />
   <arg name="joint_current_max_s"  default="0.5" />
   <arg name="start_att_max_deg"   default="30.0" />
@@ -127,9 +133,11 @@
     <arg name="use_board_rates"    value="$(arg use_board_rates)" />
     <arg name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <arg name="home_on_start"      value="$(arg home_on_start)" />
+    <arg name="home_joint1"        value="$(arg home_joint1)" />
+    <arg name="home_joint2"        value="$(arg home_joint2)" />
+    <arg name="home_tol"           value="$(arg home_tol)" />
+    <arg name="home_timeout_s"     value="$(arg home_timeout_s)" />
     <arg name="joint1_start_max_rad" value="$(arg joint1_start_max_rad)" />
-    <arg name="joint2_min_rad"     value="$(arg joint2_min_rad)" />
-    <arg name="joint2_max_rad"     value="$(arg joint2_max_rad)" />
     <arg name="joint_current_max_ma" value="$(arg joint_current_max_ma)" />
     <arg name="joint_current_max_s" value="$(arg joint_current_max_s)" />
     <arg name="start_att_max_deg"  value="$(arg start_att_max_deg)" />

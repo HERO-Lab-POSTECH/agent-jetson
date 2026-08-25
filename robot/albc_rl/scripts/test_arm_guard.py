@@ -20,24 +20,29 @@ WHAT IT CHECKS, and why each check earned its place:
      default that disagrees between the two launch files means the guard silently
      differs depending on which entry point the operator used. A knob the include
      forgets to forward is a knob that reads as working and does nothing.
-  3. The joint2 window is still DERIVED from the manipulability threshold the
-     policy trained with (w = sqrt|sin theta2| >= 0.3), not a number someone typed.
-     This repo's recurring failure is constants that drift away from the artifact
-     they came from; the window is re-derived here and compared.
-  4. The window predicate accepts/rejects the poses actually measured on the break
-     run.
   5. The sustained-current timer, including the injected-zero sequence that stands
-     in for the CRITICAL defect. Steps 4-5 import arm_guard.py, which pulls in numpy
-     and nothing else -- they used to live in rl_inference_node, and importing that
+     in for the CRITICAL defect. It imports arm_guard.py, which pulls in numpy
+     and nothing else -- it used to live in rl_inference_node, and importing that
      drags in rospy, so the most intricate logic in the change could only be tested
      on the board.
   6. The DRIVER half of the current guard, asserted on C++ source text. Step 5 alone
      pins nothing: against a driver that still publishes a fabricated 0 on a failed
      read, the node's stale handling is a no-op and every zero clears the timer. The
      two halves only work as a pair, and C++ offers no other layer here.
-  7. That rl_inference_node actually IMPORTS those predicates and keeps no local copy.
-     Steps 4-6 validate arm_guard.py; before the split they validated the node itself.
-     Without this, stubbing both guards out in the node leaves all six steps green.
+  7. That rl_inference_node actually IMPORTS that predicate and keeps no local copy.
+     Step 6 validates arm_guard.py; before the split it validated the node itself.
+     Without this, stubbing the guard out in the node leaves everything else green.
+  8. home_joint2's default (150 deg) agrees across the node and both launch files --
+     the same class of check as 2. See decision/061 C.
+
+  RETIRED 2026-08-26 (decision/061 A1/A2, guard rollback): steps 3-4 used to test
+  a joint2 HARD WINDOW (derivation from the manipulability threshold, and the
+  window predicate on the break-run poses). That window is gone -- it was a
+  hand-written clamp bolted onto a constrained-RL system whose singularity
+  avoidance is already a TRAINED cost (manipulability_cost), and it latched the
+  policy mid an ordinary attitude-lowering move on 2026-08-25 (policy lifetime
+  0.255 s -- notes/2026-08-25-guard-session-retraction-handoff.md). See
+  decision/061.
 
 EVERY source-text assertion in here has been watched FAIL on a deliberate mutation.
 That is not ceremony: such an assertion has two failure modes and only one is loud.
@@ -59,11 +64,7 @@ NODE = os.path.join(HERE, 'rl_inference_node.py')
 LAUNCH = os.path.join(HERE, '..', 'launch', 'albc_rl.launch')
 FIELD = os.path.join(HERE, '..', 'launch', 'albc_rl_fieldtest.launch')
 
-# The manipulability cost the policy trained with: manipulability_cost w_threshold.
-W_THRESHOLD = 0.3
-
-GUARDS = ['joint2_min_rad', 'joint2_max_rad', 'joint_current_max_ma',
-          'joint_current_max_s', 'start_att_max_deg']
+GUARDS = ['joint_current_max_ma', 'joint_current_max_s', 'start_att_max_deg']
 
 fails = []
 
@@ -147,115 +148,62 @@ for name in GUARDS:
             check(abs(literal - float(a)) < 1e-9,
                   '%s node default %s == launch default %s' % (name, raw, a))
 
-print('\n3. the joint2 window is still derived from w_threshold %.1f' % W_THRESHOLD)
-mnp = math.asin(W_THRESHOLD ** 2)
-check(abs(float(launch_args['joint2_min_rad']) - mnp) < 1e-4,
-      'joint2_min_rad %s == asin(%.2f) = %.5f rad (%.2f deg)'
-      % (launch_args['joint2_min_rad'], W_THRESHOLD ** 2, mnp, math.degrees(mnp)))
-check(abs(float(launch_args['joint2_max_rad']) - (math.pi - mnp)) < 1e-4,
-      'joint2_max_rad %s == pi - asin(%.2f) = %.5f rad (%.2f deg)'
-      % (launch_args['joint2_max_rad'], W_THRESHOLD ** 2, math.pi - mnp,
-         math.degrees(math.pi - mnp)))
-check(re.search(r'np\.arcsin\(_w_thresh \*\* 2\)', node_src) is not None,
-      'rl_inference_node derives the bound rather than hardcoding it')
-# Grepping for the EXPRESSION is not enough: _w_thresh itself can drift and every
-# other check stays green, so a bare `rosrun` of the node and a `roslaunch` would
-# run different guards, silently. VERIFIED BY MUTATION 2026-08-25: changing the node
-# to 0.4 moved its window to [0.16069, 2.98090] while the launch literal stayed at
-# [0.09016, 3.05143], and this file still reported 0 failures. Recompute the node's
-# OWN number and compare it numerically.
-m = re.search(r'_w_thresh\s*=\s*([0-9.]+)', node_src)
-check(m is not None, 'rl_inference_node states _w_thresh as a literal')
-if m is not None:
-    node_w = float(m.group(1))
-    node_mnp = math.asin(node_w ** 2)
-    check(abs(node_w - W_THRESHOLD) < 1e-9,
-          'node _w_thresh %s == the trained threshold %.1f' % (node_w, W_THRESHOLD))
-    check(abs(node_mnp - float(launch_args['joint2_min_rad'])) < 1e-4,
-          'node-computed min %.5f == launch joint2_min_rad %s'
-          % (node_mnp, launch_args['joint2_min_rad']))
-    check(abs((math.pi - node_mnp) - float(launch_args['joint2_max_rad'])) < 1e-4,
-          'node-computed max %.5f == launch joint2_max_rad %s'
-          % (math.pi - node_mnp, launch_args['joint2_max_rad']))
+# steps 3-4 (joint2 hard-window derivation + predicate) RETIRED 2026-08-26 --
+# decision/061 A1/A2, guard rollback. See the module docstring.
 
-print('\n4. the window predicate on the poses measured during the fracture')
-# These two live in arm_guard.py, which imports numpy and NOTHING else, precisely so
-# that the tests standing in for the CRITICAL current-read defect run off-board too.
-# They used to sit inside rl_inference_node, and importing that drags in rospy, so
-# steps 4-5 ran only on the board -- the most intricate logic in the change was
-# gated behind an import it does not need.
+print('\n5. the sustained-current timer, including the injected-zero sequence')
+# over_current_held lives in arm_guard.py, which imports numpy and NOTHING else,
+# precisely so that the tests standing in for the CRITICAL current-read defect run
+# off-board too. It used to sit inside rl_inference_node, and importing that drags
+# in rospy, so this test ran only on the board -- the most intricate logic in the
+# change was gated behind an import it does not need.
 sys.path.insert(0, HERE)
-from arm_guard import j2_in_window, over_current_held   # noqa: E402
-if True:
-    lo = float(launch_args['joint2_min_rad'])
-    hi = float(launch_args['joint2_max_rad'])
-    # every value below is a MEASUREMENT off e2_run1_gain010_BREAK.bag
-    cases = [
-        (math.radians(-10.20), False, 'joint2 the policy started from (bag t=0)'),
-        (math.radians(349.80), False, 'the same pose wrapped: -10.20 + 360'),
-        (math.radians(166.30), True, 'centre of the 0.623 Hz limit cycle'),
-        (math.radians(182.90), False, 'top of the limit cycle at t=90 s'),
-        (math.radians(221.04), False, 'peak of the startup slew'),
-        (math.radians(149.94), True, 'where park-only left the arm'),
-        (-0.061, False, 'the driver-logged command, unwrapped'),
-        (-0.061 + 2 * math.pi, False, 'the same command +1 turn: must agree'),
-        (2.900, True, 'a normal working pose, 166.2 deg'),
-    ]
-    for val, want, why in cases:
-        got = j2_in_window(val, lo, hi)
-        check(got == want, '%8.2f deg -> %-5s expected %-5s (%s)'
-              % (math.degrees(val), got, want, why))
-    check(j2_in_window(-0.061, lo, hi) == j2_in_window(-0.061 + 2 * math.pi, lo, hi),
-          'wrap equivalence: +-2*pi cannot change the verdict')
-    check(j2_in_window(99.0, 1.0, 1.0) is True,
-          'hi <= lo disables the window (overGuard convention)')
+from arm_guard import over_current_held   # noqa: E402
+CAP, HOLD = 900.0, 0.5
 
-    print('\n5. the sustained-current timer, including the injected-zero sequence')
-    CAP, HOLD = 900.0, 0.5
+def run(samples, cap=CAP):
+    """samples = [(t, mA, stale)] -> max held reached."""
+    since, worst = None, 0.0
+    for t, ma, st in samples:
+        since, held = over_current_held(since, t, ma, cap, st)
+        worst = max(worst, held)
+    return worst
 
-    def run(samples, cap=CAP):
-        """samples = [(t, mA, stale)] -> max held reached."""
-        since, worst = None, 0.0
-        for t, ma, st in samples:
-            since, held = over_current_held(since, t, ma, cap, st)
-            worst = max(worst, held)
-        return worst
-
-    steady = [(i * 0.02, 1300.0, False) for i in range(50)]     # 1 s at 1300 mA
-    check(run(steady) >= HOLD, 'a steady 1300 mA stall reaches the %.2f s trip' % HOLD)
-    # THE 2026-08-25 DEFECT, as a test. The driver used to publish 0 mA on a failed
-    # Dynamixel read; one per 0.5 s window reset the timer and the guard never fired.
-    # It is fixed upstream (the driver skips the publish), so a gap now arrives as
-    # STALE -- and stale must NOT clear an excess that is already accumulating.
-    injected = []
-    for i in range(50):
-        injected.append((i * 0.02, 0.0 if i % 10 == 9 else 1300.0, False))
-    check(run(injected) < HOLD,
-          'a FABRICATED fresh 0 defeats the timer -- this is WHY '
-          'joint_angle_command.cpp must SKIP the publish on a failed read. NOT a '
-          'node behaviour to preserve (narrative; the real pin is step 6)')
-    gappy = []
-    for i in range(50):
-        gappy.append((i * 0.02, 1300.0, i % 10 == 9))   # value held, sample STALE
-    check(run(gappy) >= HOLD,
-          'a STALE gap keeps the timer running (unknown != clear)')
-    check(run([(0.0, 500.0, False), (1.0, 500.0, True)]) == 0.0,
-          'stale with nothing accumulating stays clear')
-    check(run([(0.0, 1300.0, False), (0.02, 100.0, False), (1.0, 1300.0, False)]) < HOLD,
-          'a genuine fresh under-cap sample DOES clear it')
-    # first over sample must not trip instantly
-    since, held = over_current_held(None, 10.0, 1300.0, CAP, False)
-    check(since == 10.0 and held == 0.0, 'first over-cap sample starts at held = 0')
-    # Clock jump: this board restores its clock from a snapshot at boot and can
-    # move DAYS when jetson_clock_sync lands. held >= 0 is only the symptom -- what
-    # matters is that `since` RESTARTS. Preserving it would clamp held to 0 until
-    # wall time caught up, i.e. a guard inert for the whole jump during a stall.
-    since, held = over_current_held(100.0, 50.0, 1300.0, CAP, False)
-    check(since == 50.0 and held == 0.0,
-          'a BACKWARD clock jump RESTARTS the window (since 100 -> 50), not freezes it')
-    check(run([(100.0, 1300.0, False), (50.0, 1300.0, False),
-               (50.6, 1300.0, False)]) >= HOLD,
-          'and the restarted window still trips %.2f s after the jump' % HOLD)
+steady = [(i * 0.02, 1300.0, False) for i in range(50)]     # 1 s at 1300 mA
+check(run(steady) >= HOLD, 'a steady 1300 mA stall reaches the %.2f s trip' % HOLD)
+# THE 2026-08-25 DEFECT, as a test. The driver used to publish 0 mA on a failed
+# Dynamixel read; one per 0.5 s window reset the timer and the guard never fired.
+# It is fixed upstream (the driver skips the publish), so a gap now arrives as
+# STALE -- and stale must NOT clear an excess that is already accumulating.
+injected = []
+for i in range(50):
+    injected.append((i * 0.02, 0.0 if i % 10 == 9 else 1300.0, False))
+check(run(injected) < HOLD,
+      'a FABRICATED fresh 0 defeats the timer -- this is WHY '
+      'joint_angle_command.cpp must SKIP the publish on a failed read. NOT a '
+      'node behaviour to preserve (narrative; the real pin is step 6)')
+gappy = []
+for i in range(50):
+    gappy.append((i * 0.02, 1300.0, i % 10 == 9))   # value held, sample STALE
+check(run(gappy) >= HOLD,
+      'a STALE gap keeps the timer running (unknown != clear)')
+check(run([(0.0, 500.0, False), (1.0, 500.0, True)]) == 0.0,
+      'stale with nothing accumulating stays clear')
+check(run([(0.0, 1300.0, False), (0.02, 100.0, False), (1.0, 1300.0, False)]) < HOLD,
+      'a genuine fresh under-cap sample DOES clear it')
+# first over sample must not trip instantly
+since, held = over_current_held(None, 10.0, 1300.0, CAP, False)
+check(since == 10.0 and held == 0.0, 'first over-cap sample starts at held = 0')
+# Clock jump: this board restores its clock from a snapshot at boot and can
+# move DAYS when jetson_clock_sync lands. held >= 0 is only the symptom -- what
+# matters is that `since` RESTARTS. Preserving it would clamp held to 0 until
+# wall time caught up, i.e. a guard inert for the whole jump during a stall.
+since, held = over_current_held(100.0, 50.0, 1300.0, CAP, False)
+check(since == 50.0 and held == 0.0,
+      'a BACKWARD clock jump RESTARTS the window (since 100 -> 50), not freezes it')
+check(run([(100.0, 1300.0, False), (50.0, 1300.0, False),
+           (50.6, 1300.0, False)]) >= HOLD,
+      'and the restarted window still trips %.2f s after the jump' % HOLD)
 
 print('\n6. the DRIVER half of the current guard (the other half of step 5)')
 # The node's stale handling is a NO-OP against a driver that still publishes a
@@ -298,23 +246,56 @@ else:
           'readCurrent returns false BEFORE assigning *out (ordered inside its own body)')
 
 print('\n7. the node actually USES arm_guard (the coupling the split broke)')
-# Steps 4-6 validate arm_guard.py. Before the 2026-08-25 split they imported from
-# rl_inference_node, so they validated the NODE. Moving the predicates out bought
+# Steps 5-6 validate arm_guard.py. Before the 2026-08-25 split it imported from
+# rl_inference_node, so they validated the NODE. Moving the predicate out bought
 # off-board execution and PAID WITH THIS COUPLING: nothing downstream asserted the
-# node still imports them. MUTATION D, reproduced here before writing the fix --
-# replacing the import with local stubs (`j2_in_window -> True`,
-# `over_current_held -> (None, 0.0)`) neutered BOTH guards in the production file
-# and the suite still reported 6 steps, 0 failures. Third instance of the same
-# class as the XML bug and the two blind spots: only a mechanical check finds it.
-for fn in ('j2_in_window', 'over_current_held'):
+# node still imports it. MUTATION D, reproduced here before writing the fix --
+# replacing the import with a local stub (`over_current_held -> (None, 0.0)`)
+# neutered the guard in the production file and the suite still reported 0
+# failures. Third instance of the same class as the XML bug and the two blind
+# spots: only a mechanical check finds it.
+for fn in ('over_current_held',):
     check(re.search(r'from arm_guard import[^\n]*%s' % fn, node_src) is not None,
           'rl_inference_node imports %s from arm_guard' % fn)
 # This is the half that catches Mutation D. An import the node then shadows with
 # its own definition is worse than no import: it reads as wired and is not.
-shadow = re.search(r'^def (j2_in_window|over_current_held)', node_src, re.M)
-check(shadow is None,
-      'and keeps NO local copy of either (found %s)'
-      % (shadow.group(1) if shadow else 'none'))
+shadow = re.search(r'^def over_current_held', node_src, re.M)
+check(shadow is None, 'and keeps no local copy of it')
+
+print('\n8. home_joint2 (150 deg) agrees across the node and both launch files')
+# decision/061 C: home_joint2 was pi/2 (max lever, max load) and was not exposed
+# as a launch arg at all, so an operator could not lower it from the CLI without
+# editing the node source. C moved the default to 150 deg -- a control-response-
+# verified parking pose, NOT a stress measurement, see decision/061 C -- and
+# exposed it, along with the other three home_* knobs, the same way every guard
+# above already is.
+HOME_ARGS = ['home_joint1', 'home_joint2', 'home_tol', 'home_timeout_s']
+for name in HOME_ARGS:
+    a = launch_args.get(name)
+    b = field_args.get(name)
+    check(a is not None, '%s declared in albc_rl.launch' % name)
+    check(b is not None, '%s declared in albc_rl_fieldtest.launch' % name)
+    if a is not None and b is not None:
+        check(abs(float(a) - float(b)) < 1e-9,
+              '%s default matches: %s == %s' % (name, a, b))
+    check(name in forwarded, '%s is forwarded by the fieldtest include' % name)
+    check(bound.get(name) == '$(arg %s)' % name,
+          '%s is BOUND as <param value="$(arg %s)"> in the node block (got %r)'
+          % (name, name, bound.get(name)))
+    m = re.search(r'get_param\("~%s",\s*([^)]+)\)' % name, node_src)
+    check(m is not None, '%s is read by rl_inference_node' % name)
+    if m is not None and a is not None:
+        raw = m.group(1).strip()
+        try:
+            literal = float(raw)
+        except ValueError:
+            check(False, '%s node default %r is not a plain float literal' % (name, raw))
+        else:
+            check(abs(literal - float(a)) < 1e-9,
+                  '%s node default %s == launch default %s' % (name, raw, a))
+if launch_args.get('home_joint2') is not None:
+    check(abs(float(launch_args['home_joint2']) - math.radians(150.0)) < 1e-6,
+          'home_joint2 default %s rad == 150 deg' % launch_args['home_joint2'])
 
 print('\n%s  (%d failures)' % ('PASS' if not fails else 'FAIL', len(fails)))
 if not fails:

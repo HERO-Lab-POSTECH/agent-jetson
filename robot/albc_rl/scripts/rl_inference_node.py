@@ -64,6 +64,15 @@ ROSPARAMS (all defaults are field-safe)
   ~home_on_start      : false  FAIL-SAFE default. Homing commands the arm and
                                cannot unwind it, so it stays opt-in until the
                                restart round-trip regression test passes.
+  ~home_joint1        : 0.0
+  ~home_joint2        : 150 deg (2.6179938779914944 rad). decision/061 C: NOT
+                               pi/2 (max lever, the arm1-break pose) and NOT a
+                               manipulability optimum -- a structural-safety
+                               decision, still unmeasured against arm2's actual
+                               stress limit. _home_arm() has no current guard
+                               of its own; this default is the only bound.
+  ~home_tol           : 0.05   rad, arrival tolerance for _home_arm
+  ~home_timeout_s     : 25.0   _home_arm gives up (warns, proceeds) after this
   ~thruster_scale     : 0.0    gain on the 6 thruster channels. FAIL-SAFE default:
                                0.0 = surface test (thrusters held at 0). Live
                                thrusters must be requested EXPLICITLY (1.0). The
@@ -93,9 +102,9 @@ sys.path.insert(0, _HERE)                                   # build_proprio
 sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforward
 
 from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
-# pure predicates, deliberately rospy-free so test_arm_guard.py can run them
+# pure predicate, deliberately rospy-free so test_arm_guard.py can run it
 # ANYWHERE rather than only on the board -- see arm_guard.py's header
-from arm_guard import j2_in_window, over_current_held  # noqa: E402
+from arm_guard import over_current_held  # noqa: E402
 from np_policy import NumpyStudentPolicy, DELTA_SCALE  # noqa: E402
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
@@ -185,16 +194,17 @@ class RLInferenceNode(object):
         # limit have never been measured. Each cites the strongest thing that does
         # exist. Widen deliberately, never silently.
         #
-        # joint2 window: the manipulability cost the policy was TRAINED with,
-        # w = sqrt|sin(theta2)| >= w_threshold 0.3, i.e. |sin theta2| >= 0.09.
-        # Outside it the policy is in a region its own reward penalised, and both
-        # ends are kinematic singularities (0 = fully extended, pi = fully folded).
-        # On the break run 24.9 % of measured samples and 22.7 % of commanded ones
-        # were outside, starting at t = 0.00 s.
-        _w_thresh = 0.3
-        _mnp = float(np.arcsin(_w_thresh ** 2))          # 0.0901 rad = 5.16 deg
-        self.j2_min = float(rospy.get_param("~joint2_min_rad", _mnp))
-        self.j2_max = float(rospy.get_param("~joint2_max_rad", np.pi - _mnp))
+        # joint2 hard window REMOVED 2026-08-26 (decision/061 A1/A2, guard rollback):
+        # this system is constrained RL (ConstraintTRPO + IPO) and singularity
+        # avoidance is already a TRAINED cost (manipulability_cost,
+        # w = sqrt|sin theta2| >= 0.3); sim never clamps theta2 either. The window
+        # this replaced LATCHED the policy output during an ordinary attitude-
+        # lowering move on 2026-08-25 (policy lifetime 0.255 s, 6 commanded ticks --
+        # notes/2026-08-25-guard-session-retraction-handoff.md) and forbade the
+        # mirror branch [185.16, 354.84] deg with no argument beyond "unreviewed."
+        # Even the hand-written classic controller (TDC) only refuses a
+        # singularity as a START condition, never as a running constraint
+        # (albc_controller.cpp EE-radius gate). See decision/061.
         # Sustained current, not peak: breakaway from rest legitimately draws
         # 1.1-1.3 A (measured 2026-08-25 by e1_fold_sweep.py) and the 2026-08-22
         # arm1 break was 1.0 A SUSTAINED. On the break run |I_J2| stayed above
@@ -282,7 +292,16 @@ class RLInferenceNode(object):
         if rospy.get_param("~home_on_start", False):
             self._home_arm(
                 float(rospy.get_param("~home_joint1", 0.0)),
-                float(rospy.get_param("~home_joint2", np.pi / 2.0)),
+                # 150 deg (2.6179938779914944 rad), NOT pi/2. decision/061 C:
+                # pi/2 is max lever (EE radius 0.3295 m, the pose that broke arm1
+                # on 2026-08-22) while 150 deg is 0.1206 m (2.73x less). This is a
+                # structural-safety decision, NOT a measurement -- arm2's allowable
+                # stress is still unmeasured -- and it is NOT a manipulability
+                # optimum either (w(150deg)=0.7071 < w(pi/2)=1.0). _home_arm() has
+                # NO software current protection of its own (review/058 section 5): the
+                # node's over-current guard only starts ticking after this call
+                # returns, so this default is the only thing bounding load here.
+                float(rospy.get_param("~home_joint2", 2.6179938779914944)),
                 float(rospy.get_param("~home_tol", 0.05)),
                 float(rospy.get_param("~home_timeout_s", 25.0)))
 
@@ -342,32 +361,27 @@ class RLInferenceNode(object):
         return True
 
     def _gate_start_state(self):
-        """Refuse to start from a vehicle attitude or a joint2 pose the policy never saw.
+        """Refuse to start from a vehicle attitude the policy never saw.
 
         WHY, 2026-08-25. _gate_start_pose above passed this run -- "start-pose gate
         OK: joint1 0.276 rad (0.04 turns) within 3.142" -- while the vehicle sat at
-        pitch -50.4 deg and joint2 at -10.2 deg, both far outside anything the
-        policy trained on. It was watching the one axis that had bitten us before.
+        pitch -50.4 deg, far outside anything the policy trained on. It was
+        watching the one axis that had bitten us before.
 
-        Two independent checks, either of which alone would have stopped that run
-        BEFORE the first tick:
+          tilt = sqrt(roll^2 + pitch^2) vs ~start_att_max_deg. Measured 50.58 deg.
+                 sqrt(r^2+p^2) is invariant under rotate_imu (it is a rotation
+                 about z), so this threshold means the same thing in either frame
+                 and cannot be wrong-framed the way a bare roll or pitch can.
 
-          tilt  = sqrt(roll^2 + pitch^2) vs ~start_att_max_deg. Measured 50.58 deg.
-                  sqrt(r^2+p^2) is invariant under rotate_imu (it is a rotation
-                  about z), so this threshold means the same thing in either frame
-                  and cannot be wrong-framed the way a bare roll or pitch can.
-          theta2 wrapped to [0, 2*pi) vs [~joint2_min_rad, ~joint2_max_rad].
-                  Measured -10.2 deg -> wraps to 349.8 deg, outside.
+        A knob, not a wall: <= 0 on ~start_att_max_deg disables the check, matching
+        the driver's overGuard(limit > 0) convention.
 
-        joint2 is WRAPPED before the test because /albc/joint_states and the
-        policy's accumulator disagree on representation: the driver logged
-        "command -0.061 rad is -1.00 turns from baseline 6.107" on this very run.
-        Comparing an unwrapped accumulator against a window would reject poses that
-        are physically identical to accepted ones.
-
-        Both are knobs, not walls: <= 0 on ~start_att_max_deg disables the tilt
-        check, and max <= min disables the joint2 window, matching the driver's
-        overGuard(limit > 0) convention.
+        2026-08-26 (decision/061 A2, guard rollback): this gate used to also refuse
+        on a joint2 pose outside a hard window. That branch is REMOVED -- singularity
+        avoidance is already a TRAINED cost on this constrained-RL policy
+        (manipulability_cost), and the window was also the reason a run had to be
+        re-launched "every time depending on the buoy's initial position" (operator,
+        2026-08-25 23:20). See decision/061 A2.
         """
         ok = True
 
@@ -410,36 +424,6 @@ class RLInferenceNode(object):
                     rospy.loginfo("start-state gate OK: tilt %.2f deg within %.1f",
                                   tilt, self.start_att_max)
 
-        if self.j2_max > self.j2_min:
-            try:
-                msg = rospy.wait_for_message("/albc/joint_states", JointState,
-                                             timeout=5.0)
-            except rospy.ROSException:
-                rospy.logwarn("start-state gate: no /albc/joint_states in 5 s -- "
-                              "joint2 window check SKIPPED.")
-                msg = None
-            if msg is not None and len(msg.position) >= 2 \
-                    and np.isfinite(msg.position[1]):
-                th2 = float(np.mod(msg.position[1], 2.0 * np.pi))
-                if not j2_in_window(msg.position[1], self.j2_min, self.j2_max):
-                    rospy.logerr(
-                        "START REFUSED: joint2 is at %.3f rad (%.2f deg) , outside "
-                        "the [%.3f, %.3f] rad ([%.1f, %.1f] deg) window. Both ends "
-                        "are manipulability singularities (w = sqrt|sin theta2|, "
-                        "trained threshold 0.3) where the arm cannot move the buoy "
-                        "and the policy is in a region its own reward penalised. "
-                        "Park the arm inside the window first. Override with "
-                        "_joint2_min_rad / _joint2_max_rad if that is deliberate.",
-                        th2, np.degrees(th2), self.j2_min, self.j2_max,
-                        np.degrees(self.j2_min), np.degrees(self.j2_max))
-                    ok = False
-                else:
-                    rospy.loginfo("start-state gate OK: joint2 %.3f rad (%.1f deg) "
-                                  "within [%.1f, %.1f] deg", th2, np.degrees(th2),
-                                  np.degrees(self.j2_min), np.degrees(self.j2_max))
-            elif msg is not None:
-                rospy.logwarn("start-state gate: joint2 unreadable -- SKIPPED.")
-
         return ok
 
     def _arm_guard(self, target):
@@ -451,18 +435,24 @@ class RLInferenceNode(object):
         the moment the condition clears. Once tripped the node stops commanding the
         arm entirely and says so until the operator Ctrl-Cs.
 
-        Three conditions, all measured on the run that broke arm2 (finding/047):
+        One condition, measured on the run that broke arm2 (finding/047):
 
-          joint2 commanded  outside the window -- first at t = 2.13 s (22.7 % of ticks)
-          joint2 measured   outside the window -- first at t = 0.00 s (24.9 % of samples)
           max(|I_joint1|, |I_joint2|) above ~joint_current_max_ma continuously for
              ~joint_current_max_s. The cap was calibrated on J2, but J1 runs 5-59 mA
              in normal operation, so covering both costs nothing and catches a J1 stall
                             -- 900 mA held for 1.240 s starting t = 4.77 s
 
-        Commanded AND measured are both checked because they fail differently: a
-        commanded excursion is the policy asking for something forbidden, a measured
-        one is the arm already there (drift, a previous run, a hand-moved arm).
+        2026-08-26 (decision/061 A1, guard rollback): this used to also be a
+        per-tick joint2 hard-window check (policy commanded AND measured), which
+        LATCHED the policy output. It is REMOVED, not disabled -- this system is
+        constrained RL and singularity avoidance is already a TRAINED cost
+        (manipulability_cost, w = sqrt|sin theta2| >= 0.3), and the window forbade
+        the mirror branch [185.16, 354.84] deg with no argument beyond
+        "unreviewed." That window (not this current cap) is what actually LATCHED
+        a later 2026-08-25 tank run mid an ordinary attitude-lowering move --
+        policy lifetime 0.255 s, 6 commanded ticks
+        (notes/2026-08-25-guard-session-retraction-handoff.md). See decision/061
+        for the full argument.
 
         Current is checked as a SUSTAINED excess, not a peak. Breakaway from rest
         legitimately draws 1.1-1.3 A; the 2026-08-22 arm1 break was 1.0 A sustained.
@@ -512,38 +502,6 @@ class RLInferenceNode(object):
                 return trip("vehicle tilt %.2f deg at the FIRST control tick, past the "
                             "%.1f deg start limit -- the __init__ gate saw a different "
                             "attitude" % (tilt, self.start_att_max))
-
-        if not j2_in_window(target[1], self.j2_min, self.j2_max):
-            return trip("policy commanded joint2 to %.1f deg, outside [%.1f, %.1f]"
-                        % (np.degrees(np.mod(float(target[1]), 2.0 * np.pi)),
-                           np.degrees(self.j2_min), np.degrees(self.j2_max)))
-        if not j2_in_window(self._joint_pos[1], self.j2_min, self.j2_max):
-            return trip("joint2 MEASURED at %.1f deg, outside [%.1f, %.1f]"
-                        % (np.degrees(np.mod(float(self._joint_pos[1]), 2.0 * np.pi)),
-                           np.degrees(self.j2_min), np.degrees(self.j2_max)))
-
-        # Warning band. The ceiling sits INSIDE the observed operating swing -- the
-        # 2026-08-25 limit cycle centred at 166.3 deg, only 8.5 deg below it -- so a
-        # run that reads as nominal can latch with no prior indication, and a trip
-        # that looks arbitrary is a trip that gets the guard widened. Make the
-        # approach visible in rosout, which the fieldtest launch already bags.
-        if self.j2_max > self.j2_min:
-            half = 0.5 * (self.j2_max - self.j2_min)
-            mid = 0.5 * (self.j2_max + self.j2_min)
-            # COMMANDED as well as measured: the command leads the measurement (by
-            # about 2 s on the break run), so watching only the measured angle
-            # spends that lead. Both are provably inside the window here -- the
-            # two trips above already returned otherwise.
-            meas = float(np.mod(float(self._joint_pos[1]), 2.0 * np.pi))
-            cmd = float(np.mod(float(target[1]), 2.0 * np.pi))
-            worst, label = ((meas, "measured") if abs(meas - mid) >= abs(cmd - mid)
-                            else (cmd, "COMMANDED"))
-            if abs(worst - mid) > 0.9 * half:
-                rospy.logwarn_throttle(
-                    1.0, "joint2 %s %.1f deg is within 10%% of the [%.1f, %.1f] "
-                         "window edge -- the guard latches the run past it"
-                    % (label, np.degrees(worst), np.degrees(self.j2_min),
-                       np.degrees(self.j2_max)))
 
         if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
             if self._joint_cur is None:
@@ -646,12 +604,6 @@ class RLInferenceNode(object):
         # ARM PROTECTION, printed unconditionally. A guard that disables SILENTLY
         # leaves no artifact in the bag distinguishing a protected run from a bare
         # one -- and every one of these three is disabled by a value, not a flag.
-        if self.j2_max > self.j2_min:
-            rospy.loginfo("  joint2 window: [%.2f, %.2f] deg",
-                          np.degrees(self.j2_min), np.degrees(self.j2_max))
-        else:
-            rospy.logwarn("  joint2 window: *** DISABLED *** (max %.4f <= min %.4f rad)",
-                          self.j2_max, self.j2_min)
         if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
             rospy.loginfo("  current cap  : %.0f mA sustained %.2f s",
                           self.cur_max_ma, self.cur_max_s)

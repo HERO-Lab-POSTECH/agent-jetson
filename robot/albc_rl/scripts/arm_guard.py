@@ -1,48 +1,29 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Pure arm-protection predicates. NO rospy -- that is the whole point of the file.
+"""Pure arm-protection predicate. NO rospy -- that is the whole point of the file.
 
-WHY IT EXISTS. These two functions are the arithmetic behind the guards that were
-missing when arm2 fractured on 2026-08-25, and they are the most intricate logic in
-that change. While they lived inside rl_inference_node.py their tests could only run
-on the board, because importing them dragged in rospy -- so the regression test that
-stands in for the CRITICAL current-read defect ran nowhere else. Neither function
-needs ROS. Splitting them out is what lets test_arm_guard.py check them anywhere,
-which is where drift actually gets caught.
-
-Each is also shared by two call sites (the start-state gate and the per-tick guard),
-so keeping them in one place is what makes those call sites structurally incapable
-of disagreeing about what "unsafe" means.
+WHY IT EXISTS. This is the arithmetic behind the over-current guard that was
+missing when arm2 fractured on 2026-08-25, and it is the most intricate logic in
+that change. While it lived inside rl_inference_node.py its tests could only run
+on the board, because importing it dragged in rospy -- so the regression test that
+stands in for the CRITICAL current-read defect ran nowhere else. It does not need
+ROS. Splitting it out is what lets test_arm_guard.py check it anywhere, which is
+where drift actually gets caught.
 
 Incident and calibration: .community/posts/finding/047-e2-run1-arm2-fracture.md
+
+2026-08-26 (decision/061 A1/A2, guard rollback): this file used to also hold
+j2_in_window, the predicate behind a hard theta2 window checked at both the
+start-state gate and the per-tick guard. That window is REMOVED, not just moved --
+this system is constrained RL (ConstraintTRPO + IPO) and singularity avoidance is
+already a TRAINED cost (manipulability_cost, w = sqrt|sin theta2| >= 0.3); sim
+never clamps theta2 either. The hand-written clamp this replaced LATCHED the
+policy output during an ordinary attitude-lowering move on 2026-08-25 (policy
+lifetime 0.255 s, 6 commanded ticks -- notes/2026-08-25-guard-session-retraction-
+handoff.md, NOT finding/047, which decision/061 mis-cites for this figure) and
+forbade the mirror branch [185.16, 354.84] deg with no argument beyond
+"unreviewed." See decision/061.
 """
-import numpy as np
-
-
-def j2_in_window(theta2_rad, lo_rad, hi_rad):
-    """Is joint2 inside the safe window? theta2 is WRAPPED to [0, 2*pi) first.
-
-    Wrapping is mandatory, not cosmetic. /albc/joint_states and the policy's own
-    joint-target accumulator use different representations of the same physical
-    pose -- the driver logged "command -0.061 rad is -1.00 turns from baseline
-    6.107" on the run that broke arm2, i.e. -0.061 and 6.222 are the same place.
-    Comparing an unwrapped accumulator against a fixed window would reject poses
-    physically identical to accepted ones, and would drift further out every turn.
-
-    The window is ONE interval: the [0, pi] elbow branch, minus asin(w^2) at each
-    end. The stated premise |sin theta2| >= w^2 is satisfied on a second interval
-    too ([185.16, 354.84] deg, where |sin| is maximal at 270), and that mirror
-    branch is deliberately EXCLUDED -- it is the other elbow solution and out of
-    the trained distribution. Do not widen the window to it on the strength of the
-    manipulability argument alone.
-
-    hi <= lo disables the window (returns True), matching the driver's
-    overGuard(limit > 0) convention for "this check is off".
-    """
-    if hi_rad <= lo_rad:
-        return True
-    th = float(np.mod(float(theta2_rad), 2.0 * np.pi))
-    return lo_rad <= th <= hi_rad
 
 
 def over_current_held(prev_since, now, value, cap, stale):
@@ -80,8 +61,6 @@ def over_current_held(prev_since, now, value, cap, stale):
 
 if __name__ == "__main__":
     # smoke check: python arm_guard.py
-    assert j2_in_window(2.9, 0.09016, 3.05143)
-    assert not j2_in_window(-0.061, 0.09016, 3.05143)
     assert over_current_held(None, 1.0, 1300.0, 900.0, False) == (1.0, 0.0)
     assert over_current_held(1.0, 2.0, 1300.0, 900.0, False)[1] == 1.0
     assert over_current_held(1.0, 2.0, 100.0, 900.0, False) == (None, 0.0)

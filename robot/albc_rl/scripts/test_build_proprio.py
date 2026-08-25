@@ -271,9 +271,9 @@ def test_thruster_echo_falls_back_to_last_action_filtered():
     s = _sensors()
     s.pop("thruster")
     out = b.build(s)
-    # one step from state=0 with all targets>0 (rising -> tau_up=0.1, dt=0.005):
-    #   alpha = 0.005/0.1 = 0.05;  state = 0 + 0.05*(target-0) = 0.05*target
-    expected = 0.05 * np.array([0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
+    # one step from state=0 with all targets>0 (rising -> tau_up=0.1, dt=0.02):
+    #   alpha = 0.02/0.1 = 0.2;  state = 0 + 0.2*(target-0) = 0.2*target
+    expected = 0.2 * np.array([0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
     np.testing.assert_allclose(out[14:20], expected, atol=ATOL)
 
 
@@ -298,8 +298,10 @@ def test_explicit_thruster_key_overrides_echo():
 # ----------------------------------------------- thruster first-order lag (sim parity)
 # obs[14:20] runs marinelab ThrusterModel.apply_dynamics() so the board reports the
 # FILTERED thruster state the policy trained on. Constants pinned to the live sim:
-# tau_up=0.1 (rising), tau_down=0.05 (falling), dt=physics_dt=0.005, target=clip(cmd,-1,1).
-THR_TAU_UP, THR_TAU_DOWN, THR_DT = 0.1, 0.05, 0.005
+# tau_up=0.1 (rising), tau_down=0.05 (falling), dt=step_dt=0.02 (2026-08-26 re-verify,
+# decision/061 D: physics_dt(0.005)*decimation(4); see build_proprio.py's THR_FILTER_DT
+# comment for the commit 9a2768c9 trail), target=clip(cmd,-1,1).
+THR_TAU_UP, THR_TAU_DOWN, THR_DT = 0.1, 0.05, 0.02
 
 
 def _sim_apply_dynamics(state, cmd):
@@ -314,12 +316,12 @@ def _sim_apply_dynamics(state, cmd):
 
 
 def test_thruster_lag_uses_tau_up_when_rising():
-    # from 0, a positive command rises with tau_up=0.1 -> alpha=0.05
+    # from 0, a positive command rises with tau_up=0.1 -> alpha=0.2
     b = ProprioBuilder()
     b.set_last_action([0, 0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     s = _sensors(); s.pop("thruster")
     out = b.build(s)
-    np.testing.assert_allclose(out[14:20], np.full(6, 0.05), atol=ATOL)  # 0.005/0.1*1
+    np.testing.assert_allclose(out[14:20], np.full(6, 0.2), atol=ATOL)  # 0.02/0.1*1
 
 
 def test_thruster_lag_uses_tau_down_when_falling():
@@ -355,8 +357,8 @@ def test_thruster_lag_reset_zeros_state():
         b.build(s)                            # state climbs away from 0
     b.reset()
     b.set_last_action([0, 0, 1, 1, 1, 1, 1, 1])
-    out = b.build(s)                          # first step after reset -> 0.05*1 again
-    np.testing.assert_allclose(out[14:20], np.full(6, 0.05), atol=ATOL)
+    out = b.build(s)                          # first step after reset -> 0.2*1 again
+    np.testing.assert_allclose(out[14:20], np.full(6, 0.2), atol=ATOL)
 
 
 # ----------------------------------------------- reset clears estimator state
