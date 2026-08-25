@@ -477,10 +477,12 @@ int main(int argc, char **argv) {
         // Publish ONLY when both reads succeeded. A half-read pair would put a real
         // current next to a fabricated 0, and the consumer takes max(|.|) over both.
         int16_t raw1 = 0, raw2 = 0;
-        if (readCurrent(JOINT1_ID, &raw1) && readCurrent(JOINT2_ID, &raw2)) {
+        bool cur_ok = readCurrent(JOINT1_ID, &raw1) && readCurrent(JOINT2_ID, &raw2);
+        float current1_mA = static_cast<float>(raw1) * CURRENT_TO_MA;
+        float current2_mA = static_cast<float>(raw2) * CURRENT_TO_MA;
+        if (cur_ok) {
             std_msgs::Float32MultiArray current_msg;
-            current_msg.data = {static_cast<float>(raw1) * CURRENT_TO_MA,
-                                static_cast<float>(raw2) * CURRENT_TO_MA};
+            current_msg.data = {current1_mA, current2_mA};
             current_pub.publish(current_msg);
         }
 
@@ -536,7 +538,9 @@ int main(int argc, char **argv) {
         guard_pub.publish(guard_msg);
 
         // [BUG FIX T1] Throttled logging (was unthrottled at 10 Hz)
-        ROS_INFO_THROTTLE(2.0, "Joint Currents - J1: %.1f mA, J2: %.1f mA", current1_mA, current2_mA);
+        ROS_INFO_THROTTLE(2.0, "Joint Currents - J1: %.1f mA, J2: %.1f mA%s",
+                          current1_mA, current2_mA,
+                          cur_ok ? "" : "   *** READ FAILED, not published ***");
         ROS_INFO_THROTTLE(5.0,
             "joint1 |theta| max %.2f turns, %d ticks past the %.1f-turn training "
             "limit%s", g_j1_abs_max / (2.0 * M_PI), static_cast<int>(g_j1_over_count),
