@@ -201,7 +201,12 @@ class RLInferenceNode(object):
         # this replaced LATCHED the policy output during an ordinary attitude-
         # lowering move on 2026-08-25 (policy lifetime 0.255 s, 6 commanded ticks --
         # notes/2026-08-25-guard-session-retraction-handoff.md) and forbade the
-        # mirror branch [185.16, 354.84] deg with no argument beyond "unreviewed."
+        # mirror branch [185.16, 354.84] deg on two grounds, of which only one is
+        # refuted: "out of the trained distribution" is wrong (sim resets theta2
+        # uniform over (-pi, pi) -- env.yaml:344-346, finding/059), but "it is the
+        # other elbow solution" is a GEOMETRY claim nobody has ever checked -- no
+        # document measures whether link2 clears the hull past 180 deg
+        # (review/062, MEDIUM). Supervise the first crossing of 180 deg.
         # Even the hand-written classic controller (TDC) only refuses a
         # singularity as a START condition, never as a running constraint
         # (albc_controller.cpp EE-radius gate). See decision/061.
@@ -447,8 +452,10 @@ class RLInferenceNode(object):
         LATCHED the policy output. It is REMOVED, not disabled -- this system is
         constrained RL and singularity avoidance is already a TRAINED cost
         (manipulability_cost, w = sqrt|sin theta2| >= 0.3), and the window forbade
-        the mirror branch [185.16, 354.84] deg with no argument beyond
-        "unreviewed." That window (not this current cap) is what actually LATCHED
+        the mirror branch [185.16, 354.84] deg on two grounds, of which only one
+        is refuted -- "out of the trained distribution" is wrong (finding/059),
+        while "it is the other elbow solution" is a geometry claim nobody has
+        checked (review/062, MEDIUM: supervise the first crossing of 180 deg). That window (not this current cap) is what actually LATCHED
         a later 2026-08-25 tank run mid an ordinary attitude-lowering move --
         policy lifetime 0.255 s, 6 commanded ticks
         (notes/2026-08-25-guard-session-retraction-handoff.md). See decision/061
@@ -603,7 +610,7 @@ class RLInferenceNode(object):
                       else "   *** NOT the trained default %.4f ***" % DELTA_SCALE)
         # ARM PROTECTION, printed unconditionally. A guard that disables SILENTLY
         # leaves no artifact in the bag distinguishing a protected run from a bare
-        # one -- and every one of these three is disabled by a value, not a flag.
+        # one -- and both of these are disabled by a value, not a flag.
         if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
             rospy.loginfo("  current cap  : %.0f mA sustained %.2f s",
                           self.cur_max_ma, self.cur_max_s)

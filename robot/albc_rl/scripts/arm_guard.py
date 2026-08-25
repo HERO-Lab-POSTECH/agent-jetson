@@ -21,8 +21,13 @@ never clamps theta2 either. The hand-written clamp this replaced LATCHED the
 policy output during an ordinary attitude-lowering move on 2026-08-25 (policy
 lifetime 0.255 s, 6 commanded ticks -- notes/2026-08-25-guard-session-retraction-
 handoff.md, NOT finding/047, which decision/061 mis-cites for this figure) and
-forbade the mirror branch [185.16, 354.84] deg with no argument beyond
-"unreviewed." See decision/061.
+forbade the mirror branch [185.16, 354.84] deg on two grounds, of which only
+one is refuted: "out of the trained distribution" is wrong (sim resets theta2
+uniform over (-pi, pi) -- env.yaml:344-346, finding/059), but "it is the other
+elbow solution" is a GEOMETRY claim NOBODY HAS EVER CHECKED -- no document here
+measures whether link2 clears the hull / thruster shrouds / the J1 housing past
+180 deg (review/062, MEDIUM). Supervise the first crossing of 180 deg at low
+rate. See decision/061.
 """
 
 
