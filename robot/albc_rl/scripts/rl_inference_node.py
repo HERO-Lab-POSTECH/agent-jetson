@@ -98,6 +98,28 @@ from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
 
 
+def j2_in_window(theta2_rad, lo_rad, hi_rad):
+    """Is joint2 inside the safe window? theta2 is WRAPPED to [0, 2*pi) first.
+
+    Shared by the start-state gate and the per-tick arm guard so the two can never
+    disagree about what "inside" means.
+
+    Wrapping is mandatory, not cosmetic. /albc/joint_states and the policy's own
+    joint-target accumulator use different representations of the same physical
+    pose -- the driver logged "command -0.061 rad is -1.00 turns from baseline
+    6.107" on the run that broke arm2, i.e. -0.061 and 6.222 are the same place.
+    Comparing an unwrapped accumulator against a fixed window would reject poses
+    physically identical to accepted ones, and would drift further out every turn.
+
+    hi <= lo disables the window (returns True), matching the driver's
+    overGuard(limit > 0) convention for "this check is off".
+    """
+    if hi_rad <= lo_rad:
+        return True
+    th = float(np.mod(float(theta2_rad), 2.0 * np.pi))
+    return lo_rad <= th <= hi_rad
+
+
 def _md5_8(path):
     """First 8 hex chars of a file md5 -- printed at startup so the operator can
     confirm WHICH weights are loaded (deploy packs swap the .npz files)."""
@@ -164,6 +186,54 @@ class RLInferenceNode(object):
         self._last_sensor_t = None        # rospy time of last GOOD imu sample
         self._last_joints_t = None        # rospy time of last GOOD joint state
 
+        # --- ARM PROTECTION, added 2026-08-25 after arm2 fractured -------------
+        # The E2 run that broke arm2 had NONE of these. It started from a body
+        # tilt of 50.58 deg (the arm had drifted 160 deg during a 417 s torque-off
+        # driver handover), the policy answered with a 170 deg joint2 slew in 9 s
+        # at up to 47 deg/s, joint2 current peaked at 1323.5 mA, and after 40 load
+        # cycles at 0.623 Hz arm2 broke. Every one of those numbers sat in a region
+        # nothing was watching: JOINT_TARGET_CLAMP is [6*pi, inf] so joint2 is
+        # DELIBERATELY unlimited (np_policy.py:82-86), the 900 mA cap existed only
+        # inside a diagnostic script, and _gate_start_pose watches joint1 winding
+        # while the VEHICLE attitude went unchecked -- it logged "start-pose gate
+        # OK" at pitch -50.4 deg. Evidence and full timeline:
+        #   .community/posts/finding/047-e2-run1-arm2-fracture.md
+        #
+        # THE DEFAULTS ARE CALIBRATED ON THAT RUN, NOT GUESSED -- but they are
+        # still DECISIONS, not measurements: arm2's allowable stress and fatigue
+        # limit have never been measured. Each cites the strongest thing that does
+        # exist. Widen deliberately, never silently.
+        #
+        # joint2 window: the manipulability cost the policy was TRAINED with,
+        # w = sqrt|sin(theta2)| >= w_threshold 0.3, i.e. |sin theta2| >= 0.09.
+        # Outside it the policy is in a region its own reward penalised, and both
+        # ends are kinematic singularities (0 = fully extended, pi = fully folded).
+        # On the break run 24.9 % of measured samples and 22.7 % of commanded ones
+        # were outside, starting at t = 0.00 s.
+        _w_thresh = 0.3
+        _mnp = float(np.arcsin(_w_thresh ** 2))          # 0.0901 rad = 5.16 deg
+        self.j2_min = float(rospy.get_param("~joint2_min_rad", _mnp))
+        self.j2_max = float(rospy.get_param("~joint2_max_rad", np.pi - _mnp))
+        # Sustained current, not peak: breakaway from rest legitimately draws
+        # 1.1-1.3 A (measured 2026-08-25 by e1_fold_sweep.py) and the 2026-08-22
+        # arm1 break was 1.0 A SUSTAINED. On the break run |I_J2| stayed above
+        # 900 mA for a longest run of 1.240 s (first at t = 4.77 s) while 1000 mA
+        # never held longer than 0.44 s -- so 900 mA / 0.5 s fires and 1000 / 0.5
+        # would not. <= 0 on either disables the check.
+        self.cur_max_ma = float(rospy.get_param("~joint_current_max_ma", 900.0))
+        self.cur_max_s = float(rospy.get_param("~joint_current_max_s", 0.5))
+        # Start attitude: the +-30 deg envelope the episodes sample, which is also
+        # the cmd_roll_deg/cmd_pitch_deg slider range (cfg/GyroOffset.cfg). Tilt is
+        # measured as sqrt(roll^2 + pitch^2), which is INVARIANT under rotate_imu,
+        # so this number means the same thing in either frame. <= 0 disables.
+        self.start_att_max = float(rospy.get_param("~start_att_max_deg", 30.0))
+
+        self._joint_cur = None            # (I_joint1, I_joint2) mA, None until seen
+        self._last_cur_t = None           # rospy time of last GOOD current sample
+        self._over_cur_since = None       # rospy time |I| first exceeded the cap
+        self._halted = False              # latched: an arm guard tripped
+        self._halt_reason = ""
+
         # command setpoint (obs 0:3). Default = hold (zero). Wire /rl/command to change.
         # [roll_att_cmd, pitch_att_cmd, yaw_rate_cmd]  (attitude-only)
         self._command = np.zeros(3, dtype=np.float32)
@@ -179,6 +249,11 @@ class RLInferenceNode(object):
                          self._on_sensor, queue_size=1)
         rospy.Subscriber("/albc/joint_states", JointState,
                          self._on_joints, queue_size=1)
+        # joint_angle_command has published this all along; nothing consumed it, so
+        # the 1323.5 mA that preceded the 2026-08-25 arm2 fracture was measured,
+        # logged, bagged -- and unwatched.
+        rospy.Subscriber("/joint_currents", Float32MultiArray,
+                         self._on_currents, queue_size=1)
         if self.use_board_rates:
             # /albc_status is advertised as Float64MultiArray (status_publisher.h)
             rospy.Subscriber("/albc/status", Float64MultiArray,
@@ -202,6 +277,14 @@ class RLInferenceNode(object):
         # reach it. Do not move this below _home_arm or the Timer.
         if not self._gate_start_pose():
             rospy.signal_shutdown("joint1 start-pose gate")
+            return
+
+        # RL-DEPLOY 2026-08-25: and refuse to start from an attitude or a joint2
+        # pose the policy never trained on. The gate above passed the run that
+        # broke arm2; this one would have refused it twice over. Same placement
+        # rule -- BEFORE _home_arm, which commands the arm.
+        if not self._gate_start_state():
+            rospy.signal_shutdown("start-state gate")
             return
 
         # Home the arm BEFORE the policy starts, so every run begins from the same
@@ -274,6 +357,176 @@ class RLInferenceNode(object):
             return False
         rospy.loginfo("start-pose gate OK: joint1 %.3f rad (%.2f turns) within %.3f",
                       theta1, theta1 / (2.0 * np.pi), limit)
+        return True
+
+    def _gate_start_state(self):
+        """Refuse to start from a vehicle attitude or a joint2 pose the policy never saw.
+
+        WHY, 2026-08-25. _gate_start_pose above passed this run -- "start-pose gate
+        OK: joint1 0.276 rad (0.04 turns) within 3.142" -- while the vehicle sat at
+        pitch -50.4 deg and joint2 at -10.2 deg, both far outside anything the
+        policy trained on. It was watching the one axis that had bitten us before.
+
+        Two independent checks, either of which alone would have stopped that run
+        BEFORE the first tick:
+
+          tilt  = sqrt(roll^2 + pitch^2) vs ~start_att_max_deg. Measured 50.58 deg.
+                  sqrt(r^2+p^2) is invariant under rotate_imu (it is a rotation
+                  about z), so this threshold means the same thing in either frame
+                  and cannot be wrong-framed the way a bare roll or pitch can.
+          theta2 wrapped to [0, 2*pi) vs [~joint2_min_rad, ~joint2_max_rad].
+                  Measured -10.2 deg -> wraps to 349.8 deg, outside.
+
+        joint2 is WRAPPED before the test because /albc/joint_states and the
+        policy's accumulator disagree on representation: the driver logged
+        "command -0.061 rad is -1.00 turns from baseline 6.107" on this very run.
+        Comparing an unwrapped accumulator against a window would reject poses that
+        are physically identical to accepted ones.
+
+        Both are knobs, not walls: <= 0 on ~start_att_max_deg disables the tilt
+        check, and max <= min disables the joint2 window, matching the driver's
+        overGuard(limit > 0) convention.
+        """
+        ok = True
+
+        if self.start_att_max > 0.0:
+            try:
+                msg = rospy.wait_for_message("/hero_agent/sensors",
+                                             hero_agent_sensor, timeout=5.0)
+            except rospy.ROSException:
+                rospy.logwarn("start-state gate: no /hero_agent/sensors in 5 s -- "
+                              "rosserial down? attitude check SKIPPED.")
+                msg = None
+            if msg is not None:
+                eul = rotate_imu(msg.ROLL, msg.PITCH, msg.YAW, self.imu_yaw_offset)
+                tilt = float(np.degrees(np.hypot(eul[0], eul[1])))
+                if not np.isfinite(tilt):
+                    rospy.logwarn("start-state gate: attitude unreadable -- SKIPPED.")
+                elif tilt > self.start_att_max:
+                    rospy.logerr(
+                        "START REFUSED: vehicle tilt is %.2f deg (roll %.2f, pitch "
+                        "%.2f), past the %.1f deg start limit. The policy's episodes "
+                        "only ever sample +-30 deg, so it has no trained response "
+                        "here and will answer with a maximum-rate arm slew -- that "
+                        "is how arm2 broke on 2026-08-25 (start tilt 50.58 deg). "
+                        "Level the vehicle first. Override with "
+                        "_start_att_max_deg:=<deg> if that is deliberate.",
+                        tilt, np.degrees(eul[0]), np.degrees(eul[1]),
+                        self.start_att_max)
+                    ok = False
+                else:
+                    rospy.loginfo("start-state gate OK: tilt %.2f deg within %.1f",
+                                  tilt, self.start_att_max)
+
+        if self.j2_max > self.j2_min:
+            try:
+                msg = rospy.wait_for_message("/albc/joint_states", JointState,
+                                             timeout=5.0)
+            except rospy.ROSException:
+                rospy.logwarn("start-state gate: no /albc/joint_states in 5 s -- "
+                              "joint2 window check SKIPPED.")
+                msg = None
+            if msg is not None and len(msg.position) >= 2 \
+                    and np.isfinite(msg.position[1]):
+                th2 = float(np.mod(msg.position[1], 2.0 * np.pi))
+                if not j2_in_window(msg.position[1], self.j2_min, self.j2_max):
+                    rospy.logerr(
+                        "START REFUSED: joint2 is at %.3f rad (%.2f deg) , outside "
+                        "the [%.3f, %.3f] rad ([%.1f, %.1f] deg) window. Both ends "
+                        "are manipulability singularities (w = sqrt|sin theta2|, "
+                        "trained threshold 0.3) where the arm cannot move the buoy "
+                        "and the policy is in a region its own reward penalised. "
+                        "Park the arm inside the window first. Override with "
+                        "_joint2_min_rad / _joint2_max_rad if that is deliberate.",
+                        th2, np.degrees(th2), self.j2_min, self.j2_max,
+                        np.degrees(self.j2_min), np.degrees(self.j2_max))
+                    ok = False
+                else:
+                    rospy.loginfo("start-state gate OK: joint2 %.3f rad (%.1f deg) "
+                                  "within [%.1f, %.1f] deg", th2, np.degrees(th2),
+                                  np.degrees(self.j2_min), np.degrees(self.j2_max))
+            elif msg is not None:
+                rospy.logwarn("start-state gate: joint2 unreadable -- SKIPPED.")
+
+        return ok
+
+    def _arm_guard(self, target):
+        """Per-tick arm protection. Returns True while it is safe to command joints.
+
+        Trips are LATCHED. A guard that only suppresses the offending tick is no
+        guard at all here: the policy's joint target is an ACCUMULATOR
+        (np_policy.py step()), so it keeps integrating while suppressed and snaps
+        the moment the condition clears. Once tripped the node stops commanding the
+        arm entirely and says so until the operator Ctrl-Cs.
+
+        Three conditions, all measured on the run that broke arm2 (finding/047):
+
+          joint2 commanded  outside the window -- first at t = 2.13 s (22.7 % of ticks)
+          joint2 measured   outside the window -- first at t = 0.00 s (24.9 % of samples)
+          |I_joint2| above ~joint_current_max_ma continuously for ~joint_current_max_s
+                            -- 900 mA held for 1.240 s starting t = 4.77 s
+
+        Commanded AND measured are both checked because they fail differently: a
+        commanded excursion is the policy asking for something forbidden, a measured
+        one is the arm already there (drift, a previous run, a hand-moved arm).
+
+        Current is checked as a SUSTAINED excess, not a peak. Breakaway from rest
+        legitimately draws 1.1-1.3 A; the 2026-08-22 arm1 break was 1.0 A sustained.
+        A peak-triggered cap fires on every normal transition, which is exactly the
+        failure e1_fold_sweep.py hit before its cap was split.
+
+        A missing /joint_currents WARNS and skips rather than halting: an absent
+        signal is a different failure from an over-current one, and halting on it
+        would brick every run against an older driver. That is a known gap -- the
+        current guard is only live once the driver is publishing.
+        """
+        if self._halted:
+            rospy.logerr_throttle(
+                2.0, "ARM GUARD LATCHED (%s) -- no joint commands are being "
+                     "published. Ctrl-C this node." % self._halt_reason)
+            return False
+
+        def trip(reason):
+            self._halted = True
+            self._halt_reason = reason
+            rospy.logerr("ARM GUARD TRIPPED: %s. Joint commands STOPPED and thrusters "
+                         "zeroed; the driver holds the arm at its last target with "
+                         "torque on. Ctrl-C this node, then inspect the arm.", reason)
+            return False
+
+        if not j2_in_window(target[1], self.j2_min, self.j2_max):
+            return trip("policy commanded joint2 to %.1f deg, outside [%.1f, %.1f]"
+                        % (np.degrees(np.mod(float(target[1]), 2.0 * np.pi)),
+                           np.degrees(self.j2_min), np.degrees(self.j2_max)))
+        if not j2_in_window(self._joint_pos[1], self.j2_min, self.j2_max):
+            return trip("joint2 MEASURED at %.1f deg, outside [%.1f, %.1f]"
+                        % (np.degrees(np.mod(float(self._joint_pos[1]), 2.0 * np.pi)),
+                           np.degrees(self.j2_min), np.degrees(self.j2_max)))
+
+        if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
+            if self._joint_cur is None:
+                rospy.logwarn_throttle(
+                    10.0, "no /joint_currents yet -- the over-current guard is NOT "
+                          "active. Is joint_angle_command publishing it?")
+            else:
+                now = rospy.get_time()
+                over = float(np.max(np.abs(self._joint_cur)))
+                if over > self.cur_max_ma:
+                    if self._over_cur_since is None:
+                        self._over_cur_since = now
+                    held = now - self._over_cur_since
+                    if held >= self.cur_max_s:
+                        return trip("joint current %.0f mA held above %.0f mA for "
+                                    "%.2f s (J1 at %.1f deg)"
+                                    % (over, self.cur_max_ma, held,
+                                       np.degrees(float(self._joint_pos[0]))))
+                    rospy.logwarn_throttle(
+                        1.0, "joint current %.0f mA over %.0f mA for %.2f s "
+                             "(trips at %.2f s)"
+                        % (over, self.cur_max_ma, held, self.cur_max_s))
+                else:
+                    self._over_cur_since = None
+
         return True
 
     def _home_arm(self, q1, q2, tol, timeout_s):
@@ -405,6 +658,18 @@ class RLInferenceNode(object):
         self._joint_vel = vel
         self._last_joints_t = rospy.get_time()
 
+    def _on_currents(self, msg):
+        # std_msgs/Float32MultiArray from joint_angle_command: [I_joint1, I_joint2]
+        # in mA, published at the driver's loop_hz (50 Hz measured 2026-08-25).
+        if len(msg.data) < 2:
+            return
+        cur = np.array(msg.data[:2], dtype=np.float32)
+        if not np.all(np.isfinite(cur)):
+            rospy.logwarn_throttle(1.0, "joint_currents sample dropped: non-finite")
+            return
+        self._joint_cur = cur
+        self._last_cur_t = rospy.get_time()
+
     def _on_albc_status(self, msg):
         # /albc_status layout (status_publisher.h): indices [8,9,10] = ang vel p,q,r.
         if len(msg.data) >= 11:
@@ -497,9 +762,21 @@ class RLInferenceNode(object):
             return False
         self.builder.set_last_action(action)
 
+        # --- arm protection, BEFORE anything reaches the joints -------------------
+        target = self.policy.joint_target
+        if not self._arm_guard(target):
+            # Zero the thrusters explicitly instead of leaving it to the firmware
+            # B2 watchdog: the watchdog needs RL_TIMEOUT_MS of silence to NEUTRAL,
+            # and a halt should be immediate. Then publish NOTHING to the joints --
+            # the driver holds its last target with torque on, which is the safe
+            # state. Commanding a "recovery" pose here would be another slew.
+            halt_msg = Float32MultiArray()
+            halt_msg.data = [0.0] * 6
+            self._pub_thr.publish(halt_msg)
+            return False
+
         # --- publish -------------------------------------------------------------
         # arm joints: ABSOLUTE accumulated PD target (driver contract), never scaled
-        target = self.policy.joint_target
         self._pub_j1.publish(Float64(float(target[0])))
         self._pub_j2.publish(Float64(float(target[1])))
 

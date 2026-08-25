@@ -23,6 +23,27 @@
        confounded: the 2026-08-13 tank runs calmed 250x at control_hz 10, but that also
        cut the gain 5x. Hold 0.02 at control_hz 50 to isolate observation delay.
        Anything but 0.10 departs from what the checkpoint trained with. -->
+  <!-- ARM PROTECTION, added 2026-08-25 after arm2 fractured. Defaults are calibrated
+       on the run that broke it (.community/posts/finding/047), not guessed, but they
+       are still DECISIONS: arm2's allowable stress has never been measured.
+       joint2 window = the manipulability cost the policy trained with,
+       w = sqrt|sin theta2| >= 0.3, so [asin(0.09), pi-asin(0.09)] rad. Both ends are
+       kinematic singularities. The break run started at joint2 -10.2 deg, OUTSIDE.
+       max <= min disables the window. -->
+  <arg name="joint2_min_rad"      default="0.09016" />  <!-- 5.16 deg -->
+  <arg name="joint2_max_rad"      default="3.05143" />  <!-- 174.84 deg -->
+  <!-- SUSTAINED over-current, not peak: breakaway from rest legitimately draws
+       1.1-1.3 A, and the 2026-08-22 arm1 break was 1.0 A SUSTAINED. On the break run
+       |I_J2| held above 900 mA for 1.240 s (first at t=4.77 s) while 1000 mA never
+       held longer than 0.44 s, so 900/0.5 fires and 1000/0.5 would not.
+       <= 0 on either disables. -->
+  <arg name="joint_current_max_ma" default="900.0" />
+  <arg name="joint_current_max_s"  default="0.5" />
+  <!-- Refuse to start above this vehicle tilt, sqrt(roll^2+pitch^2) which is
+       invariant under rotate_imu. +-30 deg is the attitude envelope the episodes
+       sample (cfg/GyroOffset.cfg). The break run started at 50.58 deg and the
+       joint1-only start gate passed it. <= 0 disables. -->
+  <arg name="start_att_max_deg"   default="30.0" />
   <arg name="thruster_scale"      default="0.0" />    <!-- 0.0=joint-only surface test, 1.0=live -->
   <arg name="thruster_max_s"      default="0.0" />    <!-- >0 => thrusters latch to 0 after N sec -->
   <arg name="imu_yaw_offset_deg"  default="102.0" /> <!-- CONFIRMED 2026-08-12 (was -78.0, itself 180 deg out; before that 45.0). albc_controller.yaml carries the solve -->
@@ -41,6 +62,11 @@
     <param name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <param name="home_on_start"      value="$(arg home_on_start)" />
     <param name="joint1_start_max_rad" value="$(arg joint1_start_max_rad)" />
+    <param name="joint2_min_rad"     value="$(arg joint2_min_rad)" />
+    <param name="joint2_max_rad"     value="$(arg joint2_max_rad)" />
+    <param name="joint_current_max_ma" value="$(arg joint_current_max_ma)" />
+    <param name="joint_current_max_s" value="$(arg joint_current_max_s)" />
+    <param name="start_att_max_deg"  value="$(arg start_att_max_deg)" />
     <param name="thruster_scale"     value="$(arg thruster_scale)" />
     <param name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <param name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />

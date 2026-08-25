@@ -40,6 +40,16 @@
        Confounded with control_hz (per-second rate = gain x hz). Diagnostic sweep:
        control_hz:=50 joint_delta_scale:=0.02 matches the 10 Hz run's per-second gain
        while keeping the 50 Hz delay. Calm there means gain, noisy means delay. -->
+  <!-- ARM PROTECTION pass-through. Rationale and the measurements behind every
+       default live in albc_rl.launch next to the same names; they are repeated
+       here only so `launch-rl joint2_max_rad:=...` works from the CLI, which is
+       how an operator widens a guard deliberately rather than by editing a file.
+       Added 2026-08-25 after arm2 fractured. See .community/posts/finding/047. -->
+  <arg name="joint2_min_rad"      default="0.09016" />
+  <arg name="joint2_max_rad"      default="3.05143" />
+  <arg name="joint_current_max_ma" default="900.0" />
+  <arg name="joint_current_max_s"  default="0.5" />
+  <arg name="start_att_max_deg"   default="30.0" />
   <arg name="thruster_scale"      default="0.0" />
   <arg name="thruster_max_s"      default="0.0" />
   <arg name="imu_yaw_offset_deg"  default="102.0" />
@@ -101,6 +111,11 @@
     <arg name="joint_delta_scale"  value="$(arg joint_delta_scale)" />
     <arg name="home_on_start"      value="$(arg home_on_start)" />
     <arg name="joint1_start_max_rad" value="$(arg joint1_start_max_rad)" />
+    <arg name="joint2_min_rad"     value="$(arg joint2_min_rad)" />
+    <arg name="joint2_max_rad"     value="$(arg joint2_max_rad)" />
+    <arg name="joint_current_max_ma" value="$(arg joint_current_max_ma)" />
+    <arg name="joint_current_max_s" value="$(arg joint_current_max_s)" />
+    <arg name="start_att_max_deg"  value="$(arg start_att_max_deg)" />
     <arg name="thruster_scale"     value="$(arg thruster_scale)" />
     <arg name="thruster_max_s"     value="$(arg thruster_max_s)" />
     <arg name="imu_yaw_offset_deg" value="$(arg imu_yaw_offset_deg)" />
