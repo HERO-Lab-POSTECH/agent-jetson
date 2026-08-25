@@ -53,9 +53,19 @@
        .community/posts/finding/047. The joint2 hard window this block used to
        also pass through is REMOVED 2026-08-26: see albc_rl.launch and
        decision/061 A1/A2. -->
-  <arg name="joint_current_max_ma" default="900.0" />
+  <arg name="joint_current_max_ma" default="1500.0" />   <!-- RAISED 900 -> 1500
+       2026-08-26 by operator decision; the measurements and the trade are in
+       albc_rl.launch next to the same arg. Short version: 900 was calibrated on
+       one transition and a NORMAL attitude-hold at target roll 30 deg already
+       draws 939-1071 mA, so the guard was firing on legitimate static load.
+       1500 is above the 1.0 A sustained figure from the 2026-08-22 arm1 break,
+       so it no longer catches that failure. -->
   <arg name="joint_current_max_s"  default="0.5" />
-  <arg name="start_att_max_deg"   default="30.0" />
+  <arg name="start_att_max_deg"   default="45.0" />   <!-- RAISED 30 -> 45
+       2026-08-26 by operator decision; rationale in albc_rl.launch next to the
+       same arg. Short version: 30 was the training envelope used as a start
+       limit and refused a run at 30.32 deg over 0.32 deg. 45 still refuses the
+       50.58 deg start that broke arm2 on 2026-08-25. -->
   <arg name="thruster_scale"      default="0.0" />
   <arg name="thruster_max_s"      default="0.0" />
   <arg name="imu_yaw_offset_deg"  default="102.0" />

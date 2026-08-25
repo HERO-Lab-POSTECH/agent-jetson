@@ -216,13 +216,13 @@ class RLInferenceNode(object):
         # 900 mA for a longest run of 1.240 s (first at t = 4.77 s) while 1000 mA
         # never held longer than 0.44 s -- so 900 mA / 0.5 s fires and 1000 / 0.5
         # would not. <= 0 on either disables the check.
-        self.cur_max_ma = float(rospy.get_param("~joint_current_max_ma", 900.0))
+        self.cur_max_ma = float(rospy.get_param("~joint_current_max_ma", 1500.0))
         self.cur_max_s = float(rospy.get_param("~joint_current_max_s", 0.5))
         # Start attitude: the +-30 deg envelope the episodes sample, which is also
         # the cmd_roll_deg/cmd_pitch_deg slider range (cfg/GyroOffset.cfg). Tilt is
         # measured as sqrt(roll^2 + pitch^2), which is INVARIANT under rotate_imu,
         # so this number means the same thing in either frame. <= 0 disables.
-        self.start_att_max = float(rospy.get_param("~start_att_max_deg", 30.0))
+        self.start_att_max = float(rospy.get_param("~start_att_max_deg", 45.0))
 
         self._joint_cur = None            # (I_joint1, I_joint2) mA, None until seen
         self._last_cur_t = None           # rospy time of last GOOD current sample
