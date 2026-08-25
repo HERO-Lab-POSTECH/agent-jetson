@@ -29,7 +29,21 @@
        joint2 window = the manipulability cost the policy trained with,
        w = sqrt|sin theta2| >= 0.3, so [asin(0.09), pi-asin(0.09)] rad. Both ends are
        kinematic singularities. The break run started at joint2 -10.2 deg, OUTSIDE.
-       max <= min disables the window. -->
+       max <= min disables the window.
+
+       EVERY NUMBER BELOW IS AN ANGLE, so all of them depend on the joint2 DATUM --
+       Homing Offset J2 = -61, EEPROM addr 20. That offset exists specifically to
+       absorb a re-seating residual (5.36 deg on 2026-08-11), which means RE-SEATING
+       THE ARM IS THE EVENT THAT MOVES IT. Verify the datum after any reassembly
+       before treating these thresholds as meaningful: a 180 deg error trips loudly,
+       but a few degrees is SILENT -- it shifts every threshold together and every
+       log line still reads normal. The defaults were calibrated on bag data from the
+       old arm2 at the old datum (the 174.84 deg ceiling sits only 8.5 deg above the
+       observed limit-cycle centre of 166.3 deg), so a small shift either nuisance-
+       trips on run 1 or opens a gap above the singularity. If it moved, fix the
+       DATUM, not this window: asin(0.09) is in true-angle coordinates and does not
+       change, and editing the window would mint a second coordinate system.
+       Method: rules-robot-code SKILL.md, rotation-calibration discipline. -->
   <arg name="joint2_min_rad"      default="0.09016" />  <!-- 5.16 deg -->
   <arg name="joint2_max_rad"      default="3.05143" />  <!-- 174.84 deg -->
   <!-- SUSTAINED over-current, not peak: breakaway from rest legitimately draws
