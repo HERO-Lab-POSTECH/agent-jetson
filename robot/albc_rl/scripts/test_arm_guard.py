@@ -86,6 +86,22 @@ print('\n2. guard defaults agree across all three files, and are forwarded')
 node_src = open(NODE).read()
 inc = ET.parse(FIELD).getroot().find('include')
 forwarded = set(a.get('name') for a in inc.findall('arg'))
+# The <arg> half is only half the wiring. An arg that is declared, agreed and
+# forwarded but never BOUND to a <param> inside the node block is a knob that reads
+# as working and does nothing -- the same class as the XML bug check 1 catches, and
+# the same class only a mechanical check finds. VERIFIED BY MUTATION 2026-08-25:
+# deleting one <param> line left this file reporting 0 failures.
+node_el = None
+for n in ET.parse(LAUNCH).getroot().iter('node'):
+    if n.get('name') == 'rl_inference_node':
+        node_el = n
+check(node_el is not None, 'albc_rl.launch has an rl_inference_node <node> block')
+bound = ({} if node_el is None
+         else dict((p.get('name'), p.get('value')) for p in node_el.findall('param')))
+for name in GUARDS:
+    check(bound.get(name) == '$(arg %s)' % name,
+          '%s is BOUND as <param value="$(arg %s)"> in the node block (got %r)'
+          % (name, name, bound.get(name)))
 for name in GUARDS:
     a = launch_args.get(name)
     b = field_args.get(name)
@@ -124,11 +140,30 @@ check(abs(float(launch_args['joint2_max_rad']) - (math.pi - mnp)) < 1e-4,
          math.degrees(math.pi - mnp)))
 check(re.search(r'np\.arcsin\(_w_thresh \*\* 2\)', node_src) is not None,
       'rl_inference_node derives the bound rather than hardcoding it')
+# Grepping for the EXPRESSION is not enough: _w_thresh itself can drift and every
+# other check stays green, so a bare `rosrun` of the node and a `roslaunch` would
+# run different guards, silently. VERIFIED BY MUTATION 2026-08-25: changing the node
+# to 0.4 moved its window to [0.16069, 2.98090] while the launch literal stayed at
+# [0.09016, 3.05143], and this file still reported 0 failures. Recompute the node's
+# OWN number and compare it numerically.
+m = re.search(r'_w_thresh\s*=\s*([0-9.]+)', node_src)
+check(m is not None, 'rl_inference_node states _w_thresh as a literal')
+if m is not None:
+    node_w = float(m.group(1))
+    node_mnp = math.asin(node_w ** 2)
+    check(abs(node_w - W_THRESHOLD) < 1e-9,
+          'node _w_thresh %s == the trained threshold %.1f' % (node_w, W_THRESHOLD))
+    check(abs(node_mnp - float(launch_args['joint2_min_rad'])) < 1e-4,
+          'node-computed min %.5f == launch joint2_min_rad %s'
+          % (node_mnp, launch_args['joint2_min_rad']))
+    check(abs((math.pi - node_mnp) - float(launch_args['joint2_max_rad'])) < 1e-4,
+          'node-computed max %.5f == launch joint2_max_rad %s'
+          % (math.pi - node_mnp, launch_args['joint2_max_rad']))
 
 print('\n4. the window predicate on the poses measured during the fracture')
 try:
     sys.path.insert(0, HERE)
-    from rl_inference_node import j2_in_window          # noqa: E402
+    from rl_inference_node import j2_in_window, over_current_held   # noqa: E402
 except ImportError as e:
     print('  SKIP  cannot import rl_inference_node (%s).' % e)
     print('        This step needs rospy, so run it ON THE BOARD:')
@@ -158,6 +193,45 @@ else:
           'wrap equivalence: +-2*pi cannot change the verdict')
     check(j2_in_window(99.0, 1.0, 1.0) is True,
           'hi <= lo disables the window (overGuard convention)')
+
+    print('\n5. the sustained-current timer, including the injected-zero sequence')
+    CAP, HOLD = 900.0, 0.5
+
+    def run(samples, cap=CAP):
+        """samples = [(t, mA, stale)] -> max held reached."""
+        since, worst = None, 0.0
+        for t, ma, st in samples:
+            since, held = over_current_held(since, t, ma, cap, st)
+            worst = max(worst, held)
+        return worst
+
+    steady = [(i * 0.02, 1300.0, False) for i in range(50)]     # 1 s at 1300 mA
+    check(run(steady) >= HOLD, 'a steady 1300 mA stall reaches the %.2f s trip' % HOLD)
+    # THE 2026-08-25 DEFECT, as a test. The driver used to publish 0 mA on a failed
+    # Dynamixel read; one per 0.5 s window reset the timer and the guard never fired.
+    # It is fixed upstream (the driver skips the publish), so a gap now arrives as
+    # STALE -- and stale must NOT clear an excess that is already accumulating.
+    injected = []
+    for i in range(50):
+        injected.append((i * 0.02, 0.0 if i % 10 == 9 else 1300.0, False))
+    check(run(injected) < HOLD,
+          'injected 0 mA DOES clear the timer -- this is why the driver must not '
+          'publish a failed read (regression pin, not a wish)')
+    gappy = []
+    for i in range(50):
+        gappy.append((i * 0.02, 1300.0, i % 10 == 9))   # value held, sample STALE
+    check(run(gappy) >= HOLD,
+          'a STALE gap keeps the timer running (unknown != clear)')
+    check(run([(0.0, 500.0, False), (1.0, 500.0, True)]) == 0.0,
+          'stale with nothing accumulating stays clear')
+    check(run([(0.0, 1300.0, False), (0.02, 100.0, False), (1.0, 1300.0, False)]) < HOLD,
+          'a genuine fresh under-cap sample DOES clear it')
+    # first over sample must not trip instantly
+    since, held = over_current_held(None, 10.0, 1300.0, CAP, False)
+    check(since == 10.0 and held == 0.0, 'first over-cap sample starts at held = 0')
+    # clock jump: this board restores its clock from a snapshot at boot
+    check(over_current_held(100.0, 50.0, 1300.0, CAP, False)[1] == 0.0,
+          'a BACKWARD clock jump clamps held to 0 rather than going negative')
 
 print('\n%s  (%d failures)' % ('PASS' if not fails else 'FAIL', len(fails)))
 sys.exit(1 if fails else 0)

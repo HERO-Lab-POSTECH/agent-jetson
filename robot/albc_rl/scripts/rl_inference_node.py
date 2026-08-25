@@ -120,6 +120,31 @@ def j2_in_window(theta2_rad, lo_rad, hi_rad):
     return lo_rad <= th <= hi_rad
 
 
+def over_current_held(prev_since, now, value, cap, stale):
+    """Accumulate how long the joint current has been over `cap`. Pure, so it is
+    testable -- this is the most intricate logic in the arm guard and the place a
+    defect hides best.
+
+    Returns (since, held): `since` is the timestamp the excess began (None = clear),
+    `held` the seconds it has lasted.
+
+    A SILENT signal is UNKNOWN, not CLEAR. The 2026-08-25 defect was upstream of
+    here: the driver published 0 mA on a failed Dynamixel read, so one bad read per
+    window reset the accumulator and the guard could never trip while the arm
+    stalled -- and a stall is exactly what jams that bus (295/572 read failures
+    measured 2026-08-20). The driver now skips the publish instead, and `stale`
+    carries that gap through: while it is set, an existing excess keeps counting.
+    Only a FRESH under-cap sample clears it.
+
+    `held` is clamped: this board restores its clock from a snapshot at boot, so a
+    jetson_clock_sync landing mid-run can jump the clock by days in either direction.
+    """
+    if value > cap or (stale and prev_since is not None):
+        since = now if prev_since is None else prev_since
+        return since, min(max(now - since, 0.0), 1e4)
+    return None, 0.0
+
+
 def _md5_8(path):
     """First 8 hex chars of a file md5 -- printed at startup so the operator can
     confirm WHICH weights are loaded (deploy packs swap the .npz files)."""
@@ -233,6 +258,7 @@ class RLInferenceNode(object):
         self._over_cur_since = None       # rospy time |I| first exceeded the cap
         self._halted = False              # latched: an arm guard tripped
         self._halt_reason = ""
+        self._start_checked = False       # tilt re-checked on the first publishing tick
 
         # command setpoint (obs 0:3). Default = hold (zero). Wire /rl/command to change.
         # [roll_att_cmd, pitch_att_cmd, yaw_rate_cmd]  (attitude-only)
@@ -394,14 +420,24 @@ class RLInferenceNode(object):
                 msg = rospy.wait_for_message("/hero_agent/sensors",
                                              hero_agent_sensor, timeout=5.0)
             except rospy.ROSException:
-                rospy.logwarn("start-state gate: no /hero_agent/sensors in 5 s -- "
-                              "rosserial down? attitude check SKIPPED.")
+                # REFUSE, do not skip. This launch deliberately does not start the IMU
+                # bridge (that is launch-agent), so "no sensors yet" is the ordinary
+                # operator mistake -- and skipping here reproduces 2026-08-25 exactly:
+                # the policy waits for sensors, they arrive at 50 deg tilt, it runs.
+                rospy.logerr("START REFUSED: no /hero_agent/sensors in 5 s, so the "
+                             "start-attitude gate cannot run. Bring up launch-agent "
+                             "first (PLAN.md:1377 has the order). Disable the gate "
+                             "with _start_att_max_deg:=0 if that is deliberate.")
                 msg = None
+                ok = False
             if msg is not None:
                 eul = rotate_imu(msg.ROLL, msg.PITCH, msg.YAW, self.imu_yaw_offset)
                 tilt = float(np.degrees(np.hypot(eul[0], eul[1])))
                 if not np.isfinite(tilt):
-                    rospy.logwarn("start-state gate: attitude unreadable -- SKIPPED.")
+                    rospy.logerr("START REFUSED: attitude unreadable (non-finite). "
+                                 "An unreadable IMU is not a reason to start a policy "
+                                 "that cannot run without one.")
+                    ok = False
                 elif tilt > self.start_att_max:
                     rospy.logerr(
                         "START REFUSED: vehicle tilt is %.2f deg (roll %.2f, pitch "
@@ -463,7 +499,9 @@ class RLInferenceNode(object):
 
           joint2 commanded  outside the window -- first at t = 2.13 s (22.7 % of ticks)
           joint2 measured   outside the window -- first at t = 0.00 s (24.9 % of samples)
-          |I_joint2| above ~joint_current_max_ma continuously for ~joint_current_max_s
+          max(|I_joint1|, |I_joint2|) above ~joint_current_max_ma continuously for
+             ~joint_current_max_s. The cap was calibrated on J2, but J1 runs 5-59 mA
+             in normal operation, so covering both costs nothing and catches a J1 stall
                             -- 900 mA held for 1.240 s starting t = 4.77 s
 
         Commanded AND measured are both checked because they fail differently: a
@@ -491,8 +529,25 @@ class RLInferenceNode(object):
             self._halt_reason = reason
             rospy.logerr("ARM GUARD TRIPPED: %s. Joint commands STOPPED and thrusters "
                          "zeroed; the driver holds the arm at its last target with "
-                         "torque on. Ctrl-C this node, then inspect the arm.", reason)
+                         "torque on. NOTE: Ctrl-C on THIS node does not release that "
+                         "hold -- only the driver does, and releasing it underwater "
+                         "lets the buoy drag the arm (the 417 s handover that started "
+                         "the 2026-08-25 break). On an over-CURRENT trip the arm is "
+                         "STILL stalled: recover the vehicle first, release torque out "
+                         "of the water.", reason)
             return False
+
+        # First tick that would publish: re-check vehicle tilt. __init__'s gate is a
+        # single sample taken before homing, and the accident's own mechanism -- 417 s
+        # of drift moving the vehicle 49 deg -- is attitude changing between gate-pass
+        # and tick 1. Once only: mid-run tilt is the policy's job, not a halt condition.
+        if not self._start_checked and self.start_att_max > 0.0:
+            self._start_checked = True
+            tilt = float(np.degrees(np.hypot(self._euler[0], self._euler[1])))
+            if not np.isfinite(tilt) or tilt > self.start_att_max:
+                return trip("vehicle tilt %.2f deg at the FIRST control tick, past the "
+                            "%.1f deg start limit -- the __init__ gate saw a different "
+                            "attitude" % (tilt, self.start_att_max))
 
         if not j2_in_window(target[1], self.j2_min, self.j2_max):
             return trip("policy commanded joint2 to %.1f deg, outside [%.1f, %.1f]"
@@ -503,6 +558,22 @@ class RLInferenceNode(object):
                         % (np.degrees(np.mod(float(self._joint_pos[1]), 2.0 * np.pi)),
                            np.degrees(self.j2_min), np.degrees(self.j2_max)))
 
+        # Warning band. The ceiling sits INSIDE the observed operating swing -- the
+        # 2026-08-25 limit cycle centred at 166.3 deg, only 8.5 deg below it -- so a
+        # run that reads as nominal can latch with no prior indication, and a trip
+        # that looks arbitrary is a trip that gets the guard widened. Make the
+        # approach visible in rosout, which the fieldtest launch already bags.
+        if self.j2_max > self.j2_min:
+            half = 0.5 * (self.j2_max - self.j2_min)
+            mid = 0.5 * (self.j2_max + self.j2_min)
+            th2 = float(np.mod(float(self._joint_pos[1]), 2.0 * np.pi))
+            if abs(th2 - mid) > 0.9 * half:
+                rospy.logwarn_throttle(
+                    1.0, "joint2 %.1f deg is within 10%% of the [%.1f, %.1f] window "
+                         "edge -- the guard latches the run past it"
+                    % (np.degrees(th2), np.degrees(self.j2_min),
+                       np.degrees(self.j2_max)))
+
         if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
             if self._joint_cur is None:
                 rospy.logwarn_throttle(
@@ -511,21 +582,24 @@ class RLInferenceNode(object):
             else:
                 now = rospy.get_time()
                 over = float(np.max(np.abs(self._joint_cur)))
-                if over > self.cur_max_ma:
-                    if self._over_cur_since is None:
-                        self._over_cur_since = now
-                    held = now - self._over_cur_since
+                stale = (self._last_cur_t is None
+                         or (now - self._last_cur_t) > self.joint_timeout)
+                self._over_cur_since, held = over_current_held(
+                    self._over_cur_since, now, over, self.cur_max_ma, stale)
+                if self._over_cur_since is not None:
                     if held >= self.cur_max_s:
-                        return trip("joint current %.0f mA held above %.0f mA for "
-                                    "%.2f s (J1 at %.1f deg)"
-                                    % (over, self.cur_max_ma, held,
-                                       np.degrees(float(self._joint_pos[0]))))
+                        return trip("joint current J1 %.0f / J2 %.0f mA held above "
+                                    "%.0f mA for %.2f s%s"
+                                    % (float(self._joint_cur[0]),
+                                       float(self._joint_cur[1]),
+                                       self.cur_max_ma, held,
+                                       " (signal went STALE while over)" if stale else ""))
                     rospy.logwarn_throttle(
-                        1.0, "joint current %.0f mA over %.0f mA for %.2f s "
-                             "(trips at %.2f s)"
-                        % (over, self.cur_max_ma, held, self.cur_max_s))
-                else:
-                    self._over_cur_since = None
+                        1.0, "joint current J1 %.0f / J2 %.0f mA over %.0f mA for "
+                             "%.2f s (trips at %.2f s)%s"
+                        % (float(self._joint_cur[0]), float(self._joint_cur[1]),
+                           self.cur_max_ma, held, self.cur_max_s,
+                           " STALE" if stale else ""))
 
         return True
 
@@ -585,6 +659,25 @@ class RLInferenceNode(object):
                       self.policy.delta_scale * self.hz,
                       "" if abs(self.policy.delta_scale - DELTA_SCALE) < 1e-9
                       else "   *** NOT the trained default %.4f ***" % DELTA_SCALE)
+        # ARM PROTECTION, printed unconditionally. A guard that disables SILENTLY
+        # leaves no artifact in the bag distinguishing a protected run from a bare
+        # one -- and every one of these three is disabled by a value, not a flag.
+        if self.j2_max > self.j2_min:
+            rospy.loginfo("  joint2 window: [%.2f, %.2f] deg",
+                          np.degrees(self.j2_min), np.degrees(self.j2_max))
+        else:
+            rospy.logwarn("  joint2 window: *** DISABLED *** (max %.4f <= min %.4f rad)",
+                          self.j2_max, self.j2_min)
+        if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
+            rospy.loginfo("  current cap  : %.0f mA sustained %.2f s",
+                          self.cur_max_ma, self.cur_max_s)
+        else:
+            rospy.logwarn("  current cap  : *** DISABLED *** (%.0f mA / %.2f s)",
+                          self.cur_max_ma, self.cur_max_s)
+        if self.start_att_max > 0.0:
+            rospy.loginfo("  start tilt   : refuse above %.1f deg", self.start_att_max)
+        else:
+            rospy.logwarn("  start tilt   : *** DISABLED ***")
         rospy.loginfo("  weights_dir  : %s", os.path.abspath(weights_dir))
         rospy.loginfo("  student npz  : %s  md5 %s", os.path.basename(student_npz),
                       _md5_8(student_npz))

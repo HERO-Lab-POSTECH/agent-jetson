@@ -186,14 +186,22 @@ void setProfileVelocity(uint8_t id, uint32_t velocity) {
     }
 }
 
-int16_t readCurrent(uint8_t id) {
+// RL-DEPLOY 2026-08-25: returns success instead of silently yielding raw=0, for the
+// same reason readPosition below does. A failed read used to publish 0 mA, and the RL
+// node's SUSTAINED over-current guard treats any under-cap sample as proof the stall
+// cleared -- so one failed read per cur_max_s window reset the timer and the guard
+// could never trip. This bus has measured 295/572 read failures under load
+// (2026-08-20), and a loaded, noisy bus is exactly what a stall creates.
+bool readCurrent(uint8_t id, int16_t* out) {
     uint8_t error = 0;
     int16_t current = 0;
     int result = packet_handler->read2ByteTxRx(port_handler, id, ADDR_PRESENT_CURRENT, (uint16_t*)&current, &error);
     if (result != COMM_SUCCESS) {
         ROS_ERROR_THROTTLE(1.0, "Failed to read current for Dynamixel ID %d (err=%d)", id, result);
+        return false;
     }
-    return current;
+    *out = current;
+    return true;
 }
 
 // RL-DEPLOY: returns success instead of silently yielding raw=0 on a failed read.
@@ -466,12 +474,15 @@ int main(int argc, char **argv) {
                 startup_counter++;
             }
         }
-        float current1_mA = static_cast<float>(readCurrent(JOINT1_ID)) * CURRENT_TO_MA;
-        float current2_mA = static_cast<float>(readCurrent(JOINT2_ID)) * CURRENT_TO_MA;
-
-        std_msgs::Float32MultiArray current_msg;
-        current_msg.data = {current1_mA, current2_mA};
-        current_pub.publish(current_msg);
+        // Publish ONLY when both reads succeeded. A half-read pair would put a real
+        // current next to a fabricated 0, and the consumer takes max(|.|) over both.
+        int16_t raw1 = 0, raw2 = 0;
+        if (readCurrent(JOINT1_ID, &raw1) && readCurrent(JOINT2_ID, &raw2)) {
+            std_msgs::Float32MultiArray current_msg;
+            current_msg.data = {static_cast<float>(raw1) * CURRENT_TO_MA,
+                                static_cast<float>(raw2) * CURRENT_TO_MA};
+            current_pub.publish(current_msg);
+        }
 
         // RL-DEPLOY: read measured positions, accumulate + differentiate, publish JointState.
         ros::Time now_t = ros::Time::now();
