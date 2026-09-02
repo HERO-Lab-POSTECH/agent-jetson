@@ -58,8 +58,11 @@ int main() {
     // (1a) TDC equilibrium hold — both axes INSIDE level band: dy=dx=0, target unchanged.
     {
         CtrlIn in = base(CTRL_TDC);
-        in.current_roll = 0.001;  in.current_pitch = -0.001;   // |.| < LEVEL_THRESHOLD (0.01745)
-        in.error_roll   = 0.5;    in.error_pitch   = -0.3;     // nonzero, but must be clamped out
+        // 3e169b7 (2026-08-12): the level gate reads the ERROR, not the measured
+        // angle. current_* is deliberately OUT of band here, so a revert to the
+        // old angle-gated form would recompute and FAIL this case.
+        in.current_roll = 0.5;    in.current_pitch = -0.3;     // out-of-band on purpose
+        in.error_roll   = 0.001;  in.error_pitch   = -0.001;   // |err| < LEVEL_THRESHOLD (0.01745)
         in.target_x = 0.10; in.target_y = -0.20;
         CtrlOut o = computeControlOutputOracle(in);
         expect_near(o.target_x, in.target_x, "TDC hold(in-band): target_x frozen");
@@ -69,8 +72,8 @@ int main() {
     // (1b) TDC — roll OUTSIDE band, pitch INSIDE band: only target_y moves.
     {
         CtrlIn in = base(CTRL_TDC);
-        in.current_roll = 0.10;   in.current_pitch = 0.001;    // roll out, pitch in
-        in.error_roll   = 0.2;    in.error_pitch   = 0.9;      // pitch error must be clamped (in-band)
+        in.current_roll = 0.10;   in.current_pitch = 0.9;      // an angle gate would call pitch OUT
+        in.error_roll   = 0.2;    in.error_pitch   = 0.001;    // error gate: roll out, pitch in
         in.target_x = 0.0; in.target_y = 0.0;
         CtrlOut o = computeControlOutputOracle(in);
 
@@ -128,8 +131,8 @@ int main() {
     // (2a) PID level band — both axes INSIDE band: target held (no recompute).
     {
         CtrlIn in = base(CTRL_PID);
-        in.current_roll = 0.005;  in.current_pitch = -0.005;   // both in-band
-        in.error_roll = 0.3; in.error_pitch = 0.3;
+        in.current_roll = 0.3;    in.current_pitch = 0.3;      // out-of-band on purpose (see 1a)
+        in.error_roll = 0.005; in.error_pitch = -0.005;         // both ERRORS in-band -> held
         in.integral_roll = 1.0; in.integral_pitch = 1.0;
         in.deriv_roll = 0.5; in.deriv_pitch = 0.5;
         in.target_x = 0.123; in.target_y = -0.456;
@@ -160,8 +163,8 @@ int main() {
     // (2c) PID mixed band — roll out, pitch in: y recomputed, x held.
     {
         CtrlIn in = base(CTRL_PID);
-        in.current_roll = 0.10;   in.current_pitch = 0.001;    // roll out, pitch in
-        in.error_roll = 0.20; in.error_pitch = 5.0;            // pitch err ignored (held)
+        in.current_roll = 0.10;   in.current_pitch = 0.5;      // an angle gate would call pitch OUT
+        in.error_roll = 0.20; in.error_pitch = 0.001;          // error gate: pitch in -> x held
         in.integral_roll = 0.0; in.integral_pitch = 0.0;
         in.deriv_roll = 0.0; in.deriv_pitch = 0.0;
         in.target_x = 0.777; in.target_y = 0.0;
