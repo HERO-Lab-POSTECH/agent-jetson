@@ -15,7 +15,6 @@ add_message_files(
    hero_agent_state.msg
    hero_agent_sensor.msg
    hero_xy_cont.msg
-   hero_agent_vision.msg
    hero_agent_dvl.msg
    hero_agent_cont_xy.msg
    hero_agent_position_result.msg

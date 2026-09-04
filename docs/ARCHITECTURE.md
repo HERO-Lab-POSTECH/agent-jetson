@@ -935,9 +935,8 @@ robot/
 │   ├── package.xml                     (manifest v1.0.0, no CHANGELOG)
 │   └── (no CHANGELOG.md)
 │
-├── drivers/                           (vendored, 분석 범위 외 — 인터페이스 경계만)
+├── drivers/                           (vendored, 분석 범위 외 — THIRD_PARTY.md)
 │   ├── dynamixel_sdk/                  (ROBOTIS, Dynamixel MX 프로토콜)
-│   ├── dynamixel_sdk_examples/
 │   ├── rosserial/                      (펌웨어 브릿지)
 │   ├── rosserial_arduino/              (ros_lib 스텁 생성)
 │   └── rosserial_msgs/

@@ -25,3 +25,10 @@ Thumbs.db
 
 # numpy runtime cache (as_strided etc.)
 **/.cache/
+
+# Harness state (session-scoped, never board content)
+.claude/
+.remember/
+.pytest_cache/
+.graphify/
+.graphifyignore

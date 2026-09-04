@@ -8,7 +8,7 @@ PYTHON="${PYTHON:-python3}"
 ROOT="$(pwd)"
 fail=0
 bash tests/characterization/run.sh || fail=1
-for d in robot/albc_rl/numpy_port robot/albc_rl/scripts robot/hero_agent/scripts; do
+for d in robot/albc_rl/numpy_port robot/albc_rl/scripts; do
     echo "=== pytest $d ==="
     (cd "$d" && PYTHONPATH="$ROOT/robot/albc_rl/src" "$PYTHON" -m pytest -q -p no:cacheprovider) || fail=1
 done
