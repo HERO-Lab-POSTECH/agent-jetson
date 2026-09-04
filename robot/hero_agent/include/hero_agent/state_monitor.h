@@ -9,6 +9,7 @@
 #include <std_msgs/Float64MultiArray.h>
 #include "hero_msgs/hero_agent_state.h"
 #include "hero_msgs/hero_agent_sensor.h"
+#include "albc_control/imu_rotation.h"
 
 #include <cmath>
 #include <cstdio>
@@ -43,11 +44,9 @@ public:
     // ==============================
     void onSensor(const hero_msgs::hero_agent_sensor::ConstPtr& msg)
     {
-        double raw_roll  = msg->ROLL;
-        double raw_pitch = -(msg->PITCH);
-        double c = cos(imu_yaw_offset_rad), s = sin(imu_yaw_offset_rad);
-        sensor_roll  = static_cast<float>( c * raw_roll + s * raw_pitch);
-        sensor_pitch = static_cast<float>(-s * raw_roll + c * raw_pitch);
+        ImuRpy out = rotateImu(msg->ROLL, msg->PITCH, msg->YAW, imu_yaw_offset_rad);
+        sensor_roll  = static_cast<float>(out.roll);
+        sensor_pitch = static_cast<float>(out.pitch);
         sensor_yaw   = msg->YAW;
         sensor_depth = msg->DEPTH;
     }

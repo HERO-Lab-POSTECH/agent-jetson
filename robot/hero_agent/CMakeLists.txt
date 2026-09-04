@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(hero_agent)
 
-find_package(catkin REQUIRED COMPONENTS std_msgs roscpp hero_msgs)
+find_package(catkin REQUIRED COMPONENTS std_msgs roscpp hero_msgs albc_control)
 
 # No LIBRARIES here: this package builds only the `agent` executable below, so
 # exporting a `hero_agent` library promises a target that is never created. A
@@ -12,7 +12,7 @@ find_package(catkin REQUIRED COMPONENTS std_msgs roscpp hero_msgs)
 # catkin_INCLUDE_DIRS.
 catkin_package(
   INCLUDE_DIRS include
-  CATKIN_DEPENDS std_msgs roscpp hero_msgs
+  CATKIN_DEPENDS std_msgs roscpp hero_msgs albc_control
 )
 
 include_directories(

@@ -22,8 +22,6 @@
 #ifndef ALBC_CONTROL_ATTITUDE_CONTROLLER_H
 #define ALBC_CONTROL_ATTITUDE_CONTROLLER_H
 
-#include <algorithm>   // std::max, std::min
-#include <cmath>       // std::abs
 #include "albc_control/control_law.h"       // computeControlOutputOracle, CtrlIn/CtrlOut, LEVEL_THRESHOLD
 #include "albc_control/feedback_filters.h"  // integralStep, dampedDerivative, ORACLE_*
 

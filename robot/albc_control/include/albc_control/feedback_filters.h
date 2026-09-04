@@ -30,7 +30,7 @@
 // parameters to stay decoupled from any future tuning.
 static const double ORACLE_INTEGRAL_MAX    = 100.0;
 static const double ORACLE_DERIV_LPF_ALPHA = 0.2;
-static const double ORACLE_LEVEL_THRESHOLD = 0.01745; // rad (1 deg)
+static constexpr double ORACLE_LEVEL_THRESHOLD = 0.01745; // rad (1 deg)
 
 // Integral accumulation with freeze-at-setpoint + symmetric anti-windup clamp.
 // Transcribed from albc_controller.cpp:674-677 (roll) / 678-681 (pitch); roll and

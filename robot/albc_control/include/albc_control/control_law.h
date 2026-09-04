@@ -47,6 +47,7 @@
 #include <cmath>
 #include <algorithm>   // std::min, std::max
 #include "albc_control/albc_kinematics.h"
+#include "albc_control/feedback_filters.h"
 
 using albc::Fb;
 using albc::L1;
@@ -57,7 +58,7 @@ static constexpr double COS_EPSILON          = 1e-6;
 static constexpr double COMMON_FACTOR_MAX    = 10.0;
 static constexpr double PID_BASE_X           = -L2;
 static constexpr double PID_BASE_Y           =  L1;
-static constexpr double LEVEL_THRESHOLD      = 0.01745;
+static constexpr double LEVEL_THRESHOLD      = ORACLE_LEVEL_THRESHOLD;
 
 // Mode codes (mirror ControlMode in albc_controller.cpp).
 enum { CTRL_TDC = 1, CTRL_PID = 2, CTRL_FIXED = 3, CTRL_MANUAL = 4 };

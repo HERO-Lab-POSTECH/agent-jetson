@@ -20,64 +20,13 @@
 
 using namespace albc;
 
-// ==============================
-// Control Mode / keyboard
-// ==============================
-//
-// ControlMode / ManualSubMode enums, controlModeName(), the raw-terminal
-// keyboard helpers (initKeyboard/closeKeyboard/readKey), initInteractive()
-// (param-driven startup, Task-7), cycleMode(), handleRuntimeKey() and the
-// mode-change detection now live in ModeManager (mode_manager.h).
-
-// ==============================
-// Constants
-// ==============================
-
-// INTEGRAL_MAX / COS_EPSILON / COMMON_FACTOR_MAX / PID_BASE_X / PID_BASE_Y /
-// DERIV_LPF_ALPHA / LEVEL_THRESHOLD now live inside AttitudeController (via the
-// control_law.h / feedback_filters.h oracle constants). See attitude_controller.h.
-// MANUAL_ANGLE_STEP / MANUAL_POS_STEP now live inside ModeManager.
-
-// ==============================
-// State Structures
-// ==============================
-//
-// The former ControlGains / ControlState structs and the computeControlOutput()
-// function now live inside AttitudeController (attitude_controller.h), which
-// owns the feedback pipeline + 4-mode control law.
-
-// ==============================
-// Globals
-// ==============================
-//
-// All former file-scope state now lives in classes owned by main():
-//   ModeManager / AttitudeController / InverseKinematics / ImuProcessor
-//   JointCurrentMonitor (absorbs joint_current1/2_mA + jointCurrentsCallback)
-//   StatusPublisher      (absorbs angle_pub_1/2 + status_pub + the publish blocks)
-// The only file-scope object left is g_mode_mgr below — a non-owning pointer the
-// atexit handler needs, because atexit() takes a zero-arg free function and so
-// cannot capture main()'s ModeManager. It is set to main()'s `static` local
-// mode_mgr (program lifetime), so the handler is valid even after main returns.
+// albc_controller: thin assembly of ModeManager / AttitudeController /
+// InverseKinematics / ImuProcessor / JointCurrentMonitor / StatusPublisher /
+// Dashboard (albc_control/include). Control math lives in the ROS-free oracle
+// headers (control_law.h, feedback_filters.h, dls_ik.h, imu_rotation.h) and is
+// pinned by tests/characterization. g_mode_mgr exists only for atexit().
 static ModeManager* g_mode_mgr = nullptr;
 
-// ==============================
-// Inverse Kinematics (Damped Least Squares)
-// ==============================
-// IK now lives in the InverseKinematics class (inverse_kinematics.h), which
-// delegates each step to dls_oracle::updateJointAnglesOracle (dls_ik.h) — the
-// byte-identical transcription of the former global updateJointAngles().
-
-// ==============================
-// Callbacks
-// ==============================
-
-// imuCallback now lives in the ImuProcessor class (imu_processor.h): onImu()
-// delegates the rotation to rotateImu() (imu_rotation.h). state.current_* is
-// synced from imu_proc at the top of each control-loop iteration.
-
-// Dynamic-reconfigure callback. Takes the four configured instances by pointer
-// (bound via boost::bind in main) since they are now main() locals, not globals.
-// The body order and every operation are byte-identical to the former version.
 void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*level*/,
                          ModeManager* mode_mgr, AttitudeController* attitude,
                          InverseKinematics* ik, ImuProcessor* imu_proc) {
@@ -105,19 +54,6 @@ void reconfigureCallback(albc_control::ALBCControllerConfig& config, uint32_t /*
              attitude->Mtd(), attitude->Kptd());
 }
 
-// ==============================
-// Mode Selection / runtime keys / Control Law / Dashboard
-// ==============================
-//
-// initInteractive(), cycleMode(), handleRuntimeKey() now live in
-// ModeManager (mode_manager.h). The 4-mode control-law switch (former
-// computeControlOutput) lives inside AttitudeController::update ->
-// computeControlOutputOracle (control_law.h). printDashboard() now lives in
-// Dashboard::render (dashboard.h).
-
-// atexit() needs a zero-arg free function; forward to the active ModeManager's
-// closeKeyboard() (via g_mode_mgr) so the terminal is restored on any exit path
-// (former atexit(closeKeyboard), :376).
 static void restoreKeyboardAtExit() { if (g_mode_mgr) g_mode_mgr->closeKeyboard(); }
 
 // ==============================

@@ -13,6 +13,7 @@
   <depend>rospy</depend>
   <depend>std_msgs</depend>
   <depend>hero_msgs</depend>
+  <depend>albc_control</depend>
   <exec_depend>uvc_camera</exec_depend>
   <exec_depend>rosserial_python</exec_depend>
 
