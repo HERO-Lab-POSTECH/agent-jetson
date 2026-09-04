@@ -657,7 +657,12 @@ def test_the_renamed_topics_left_no_old_spelling_behind():
     for root, dirs, files in os.walk(REPO):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         for fname in files:
-            if not fname.endswith((".py", ".cpp", ".h", ".ino", ".launch", ".sh", ".yaml")):
+            # .md is in the list because leaving it out is what let the rename
+            # survive in docs/ARCHITECTURE.md: a reader following that doc would
+            # rostopic-echo a name no node publishes. docs/adr/ is skipped below
+            # -- those files narrate the rename and quote the old names on purpose.
+            if not fname.endswith((".py", ".cpp", ".h", ".ino", ".launch", ".sh",
+                                   ".yaml", ".md")):
                 continue
             if fname == os.path.basename(__file__):
                 continue

@@ -313,20 +313,26 @@ int main()
             // 2026-09-04 (D14). Three more agent.ino edits that only exist as
             // text on a host, each fixing a way the ESCs could keep running or
             // be handed a number that is not one.
-            expect_true(y.find("else if (!cont_depth_on && !rl_active)") != std::string::npos,
+            expect_true(y.find("else if (!cont_depth_on)") != std::string::npos,
                         "'Y' flushes NEUTRAL when it turns off the LAST controller");
             std::string d = key_block(ino, "Command == 'D'");
             expect_true(!d.empty() && d.find("if (cont_depth_on) I_depth = 0;") != std::string::npos,
                         "'D' clears the depth integrator on the rising edge (yaw convention)");
-            expect_true(d.find("else if (!cont_yaw_on && !rl_active)") != std::string::npos,
+            expect_true(d.find("else if (!cont_yaw_on)") != std::string::npos,
                         "'D' flushes NEUTRAL when it turns off the LAST controller");
             expect_true(ino.find("if (a != a) a = 0.0f;") != std::string::npos,
                         "rl_action_to_pwm maps NaN to neutral before the ESC frame");
-            // The flush must never fire while RL owns the ESCs: messageThruster()
-            // writes them directly and a stray frame would fight it for a cycle.
-            expect_true(y.find("!rl_active") != std::string::npos &&
-                        d.find("!rl_active") != std::string::npos,
-                        "neither flush can interrupt an active RL stream");
+            // NEITHER flush may carry an rl_active guard. messageThruster() forces
+            // cont_yaw_on and cont_depth_on to 0 on every RL message, so both
+            // branches are already unreachable while the mixer streams -- the same
+            // reasoning the ESC-transmission block states for itself. A guard here
+            // would be dead in the normal case and, in the gap between the last RL
+            // message and the 300 ms watchdog, would DELAY the safety flush.
+            // The guard EXPRESSION, not the word: the 'D' block carries a comment
+            // that names rl_active to say why it is deliberately absent.
+            expect_true(y.find("&& !rl_active") == std::string::npos &&
+                        d.find("&& !rl_active") == std::string::npos,
+                        "neither flush carries a dead rl_active guard");
         }
     }
 

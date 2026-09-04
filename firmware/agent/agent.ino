@@ -199,9 +199,7 @@ void messageCommand(const std_msgs::Int8 &command_msg)
     // notes/2026-08-24-fault-tolerant-allocation-analysis.md §3-6 "2순위 — 적분기"
     if (cont_yaw_on) I_yaw = 0;
     // Falling edge with depth already off: flush NEUTRAL, see the 'D' handler.
-    // Skipped while RL owns the ESCs -- messageThruster() drives them directly
-    // and a stray frame here would fight it for one cycle.
-    else if (!cont_depth_on && !rl_active) {
+    else if (!cont_depth_on) {
       pwm_m1 = ESC_NEUTRAL; pwm_m2 = ESC_NEUTRAL;
       pwm_m4 = ESC_NEUTRAL; pwm_m5 = ESC_NEUTRAL;
       esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
@@ -220,7 +218,10 @@ void messageCommand(const std_msgs::Int8 &command_msg)
     // owned. ESC transmission below only runs while a controller is enabled, so
     // disabling the LAST one used to leave the previous frame latched and the
     // thrusters running at whatever they were.
-    else if (!cont_yaw_on && !rl_active) {
+    // NOT gated on rl_active, for the reason the ESC block at :507 gives:
+    // messageThruster() forces both flags to 0 on every RL message, so this
+    // branch is already unreachable while the mixer streams.
+    else if (!cont_yaw_on) {
       pwm_m0 = ESC_NEUTRAL; pwm_m3 = ESC_NEUTRAL;
       esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
       esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);

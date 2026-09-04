@@ -25,7 +25,7 @@ graph TB
     RLNode["albc_rl<br/>(50 Hz, TCN/GRU + actor)"]
     
     StatusROS["/albc/status<br/>(11-field)"]
-    JointCmdROS["/hero_agent/active_joint<br/>_position_controller/command"]
+    JointCmdROS["/albc/joint1_cmd<br/>/albc/joint2_cmd"]
     JointStatesROS["/albc/joint_states<br/>(10 Hz)"]
     ThrusterROS["/albc/thruster_cmd"]
     
@@ -224,7 +224,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 |:---|:---|:---|
 | `/hero_agent/sensors` | in | hero_msgs/hero_agent_sensor |
 | `/albc/status` | out | std_msgs/Float64MultiArray[11] |
-| `/hero_agent/active_joint{1,2}_position_controller/command` | out | std_msgs/Float64 (rad, mapTo2Pi) |
+| `/albc/joint1_cmd`, `/albc/joint2_cmd` | out | std_msgs/Float64 (rad, mapTo2Pi) |
 | `/albc/joint_states` | out | sensor_msgs/JointState |
 | `/albc/joint_currents` | in | std_msgs/Float32MultiArray |
 | `/albc_controller/imu_yaw_offset` | param | double (default 45.0°, 공유) |
@@ -270,7 +270,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 - 20D proprioception 블록 조립 (ProprioBuilder.build)
 - 46D temporal history (stride=3) + 3D leaky gated integral 보유
 - 69D 정책 순전파 (TCN/GRU encoder + teacher actor, numpy npforward)
-- 절대 누적 관절 PD 목표 발행 (/hero_agent/active_joint{1,2}_position_controller/command)
+- 절대 누적 관절 PD 목표 발행 (/albc/joint1_cmd, /albc/joint2_cmd)
 - 스러스터 명령 발행 (8D 액션의 action[2:8] → /albc/thruster_cmd[0:6], 안전-모드 스케일 기본 0.0)
 - IMU staleness gate (기본 0.2s), 관절 상태 staleness gate (0.5s)
 
@@ -296,7 +296,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 | `/albc/joint_states` | in | sensor_msgs/JointState (10 Hz driver) |
 | `/albc/status` | in | std_msgs/Float64MultiArray (data[8:11] if use_board_rates) |
 | `/albc/rl_command` | in | std_msgs/Float32MultiArray (att cmd) |
-| `/hero_agent/active_joint{1,2}_position_controller/command` | out | std_msgs/Float64 (절대 누적 PD) |
+| `/albc/joint1_cmd`, `/albc/joint2_cmd` | out | std_msgs/Float64 (절대 누적 PD) |
 | `/albc/thruster_cmd` | out | std_msgs/Float32MultiArray[6] |
 | `~encoder_type` | param | string ('tcn' \| 'gru', default 'tcn') |
 | `~weights_dir` | param | string (default ../numpy_port) |
@@ -372,7 +372,7 @@ rosserial_python (ttyUSB1 @ 57600)
 │     - ProprioBuilder.build → 20D proprio           │
 │     - NumpyStudentPolicy.act → 8D action           │
 │     - Joint PD target accumulate (DELTA_SCALE)     │
-│     - Publish /hero_agent/active_joint*/command    │
+│     - Publish /albc/joint{1,2}_cmd               │
 │     - Publish /albc/thruster_cmd (scale × 0.0)    │
 └─────────────────────────────────────────────────────┘
     ↓
@@ -420,7 +420,7 @@ albc_controller (50 Hz, TDC/PID/FIXED mode)
     ↓ ImuProcessor.onImu: rotate_imu → CtrlIn
     ↓ AttitudeController: error → integral + derivative → CtrlOut
     ↓ InverseKinematics.solveIK → joint angle
-    ↓ /hero_agent/active_joint{1,2}_position_controller/command
+    ↓ /albc/joint1_cmd, /albc/joint2_cmd
     ↓
 joint_angle_command (10 Hz)
     ↓ Dynamixel arm
@@ -517,7 +517,7 @@ gyro_rot_z = gyro_z;  // z-axis rotation-axis component unchanged
 
 ### 4.3 관절 명령 계약
 
-node는 **절대 누적 PD 목표**를 /hero_agent/active_joint{1,2}_position_controller/command로 발행:
+node는 **절대 누적 PD 목표**를 /albc/joint1_cmd, /albc/joint2_cmd 로 발행:
 ```
 joint_target += DELTA_SCALE * action[0:2]
 // Never the raw delta, always absolute

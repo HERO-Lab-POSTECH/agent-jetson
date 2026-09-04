@@ -23,7 +23,7 @@ subscriber/publisher stub은 있으나 live ROS 그래프에 짝이 없다(QR/DV
 | `hero_agent_state.msg` | Full robot state (yaw, depth, throttle, etc.) | ACTIVE |
 | `hero_agent_sensor.msg` | IMU sensor data (roll, pitch, yaw, depth, gyro) | ACTIVE |
 | `hero_agent_dvl.msg` | DVL target commands | ACTIVE |
-| `hero_agent_vision.msg` | Vision detection results | ACTIVE (perception) |
+| `hero_agent_thruster_cmd.msg` | 6-channel RL thruster command | ACTIVE |
 
 ## Services
 
