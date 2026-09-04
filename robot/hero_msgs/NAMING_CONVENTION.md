@@ -75,12 +75,7 @@ Mixed_Case). 적용은 flash 단계(.msg 필드 변경이 펌웨어 `.ino` lock-
 | hero_agent_sensor | ROLL, PITCH, YAW, DEPTH, GYRO_X/Y/Z | roll, pitch, yaw, depth, gyro_x/y/z |
 | hero_agent_state | Yaw, Target_yaw, Throttle, Valid_yaw, Depth, Target_depth, Move_speed, Cont_state, State_addit | yaw, target_yaw, throttle, valid_yaw, depth, target_depth, move_speed, cont_state, state_addit |
 | hero_agent_dvl | TARGET_X/Y/Z, command | target_x/y/z, command |
-| hero_agent_dvl_velocity | VX, VY, TIME, VALID | vx, vy, time, valid |
 | hero_agent_vision | WHITE_VALID, BLACK_VALID, OBJECT_VALID, LASER_VALID, HIGH_LASER, LOW_LASER, FOR_YAW | white_valid, black_valid, object_valid, laser_valid, high_laser, low_laser, for_yaw |
-| hero_agent_cont_xy | T0~T3, TARGET_DEPTH | t0~t3, target_depth |
-| hero_agent_cont_para | control_T, Kp, Ki, Kd, Mb, KKp, KKv | control_t, kp, ki, kd, mb, kkp, kkv |
-| hero_xy_cont | TARGET_X/Y, VALID | target_x/y, valid |
-| hero_agent_position_result | TARGET_X/Y/Z, X, Y, Z | target_x/y/z, x, y, z |
 
 **근거**: ROS Names spec / ROS 2 interface spec — field names "must be lowercase
 alphanumeric characters with underscores."
@@ -93,8 +88,6 @@ custom 메시지 남발 금지. 의미가 맞으면 표준 메시지를 쓴다.
 
 - IMU(자세+각속도) → `sensor_msgs/Imu`, 속도 명령 → `geometry_msgs/Twist` 권장
   📋 RULE-ONLY (현재 custom hero_agent_sensor + 별도 토픽, 표준화는 펌웨어 단계)
-- boolean 플래그는 `bool` 타입. 현재 `char VALID`('y'와 비교, hero_agent_dvl_velocity)와
-  `int8 VALID`(hero_xy_cont) 혼재 → `bool`로 통일 📋 RULE-ONLY (.msg 타입 변경 = flash)
 - ROS엔 공식 메시지 deprecation 기구가 없다(genmsg#67 미해결). de-facto는
   `.msg` 상단 주석 + 런타임 `ROS_WARN_ONCE`.
 
@@ -154,14 +147,10 @@ prevent .msg proliferation)."
 - `hero_agent_sensor` — 펌웨어 → albc_controller / rl_inference_node (GYRO_X/Y/Z append됨)
 - `hero_agent_state` — 펌웨어 → agent.cpp StateMonitor
 - `hero_agent_dvl` — agent.cpp → 펌웨어
-- `hero_xy_cont` — perception
 - `hero_agent_vision` — perception
-- `hero_command.srv` — perception manipulation
 
 ### DEPRECATED (4) — 펌웨어 stub은 있으나 ROS 그래프 짝 없음 (QR/DVL 미션 dormant)
 
-- `hero_agent_cont_xy`, `hero_agent_cont_para`, `hero_agent_dvl_velocity`,
-  `hero_agent_position_result`
 - `.msg` 상단에 DEPRECATED 주석 표기. 완전 제거는 펌웨어 subscriber stub 제거(flash,
   요구사항 1)와 함께. QR/DVL 미션 부활 시 재활성 여지를 위해 지금은 보존.
 

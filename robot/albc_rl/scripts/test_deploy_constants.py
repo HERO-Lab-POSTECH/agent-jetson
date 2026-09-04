@@ -563,11 +563,9 @@ if __name__ == "__main__":
 # for. Launch files and shell scripts carry the names as bare strings, so they
 # are checked against the SSOTs rather than trusted.
 #
-# The three sets are deliberately NOT equal: the firmware knows nothing about
-# the Jetson-internal /albc/* topics, and still carries four 2022 legacy topics
-# (result, cont_xy_darknet, cont_para, dvl_velocity) that are removed with the
-# dead DVL/darknet callbacks. What must hold is that every name declared in two
-# places is spelled the same in both.
+# The three sets are deliberately NOT equal: the firmware knows nothing about the
+# Jetson-internal /albc/* topics, so its set is a subset. What must hold is that
+# every name declared in two places is spelled the same in both.
 # ---------------------------------------------------------------------------
 REPO = os.path.normpath(os.path.join(ROBOT, ".."))
 CPP_TOPICS_H = os.path.join(ROBOT, "hero_msgs", "include", "hero_msgs", "topics.h")

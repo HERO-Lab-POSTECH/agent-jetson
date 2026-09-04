@@ -1,3 +1,0 @@
-float32 TARGET_X
-float32 TARGET_Y
-int8 VALID

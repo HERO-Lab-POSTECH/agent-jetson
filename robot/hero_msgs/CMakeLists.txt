@@ -3,23 +3,13 @@ project(hero_msgs)
 
 find_package(catkin REQUIRED COMPONENTS message_generation std_msgs)
 
-add_service_files(
-  DIRECTORY srv
-  FILES
-  hero_command.srv
-  )
 ## Generate messages in the 'msg' folder
 add_message_files(
    DIRECTORY msg
    FILES
    hero_agent_state.msg
    hero_agent_sensor.msg
-   hero_xy_cont.msg
    hero_agent_dvl.msg
-   hero_agent_cont_xy.msg
-   hero_agent_position_result.msg
-   hero_agent_cont_para.msg
-   hero_agent_dvl_velocity.msg
    hero_agent_thruster_cmd.msg
 )
 

@@ -21,7 +21,7 @@ bash tests/run_all.sh                # 전부 빌드+실행, 하나라도 실패
 **catkin (보드 워크스페이스)** — `characterization_tests` 패키지로 통합됨:
 
 ```bash
-catkin_make run_tests                 # 12종 일괄 실행 (CTest 요약에 표시)
+catkin_make run_tests                 # 13종 일괄 실행 (CTest 요약에 표시)
 # 빠지면 fallback: catkin_make tests && (cd build/characterization_tests && ctest)
 ```
 
@@ -51,6 +51,7 @@ exported include를 상속한다. 테스트 `.cpp`는 package-style include(`her
 | `test_dls_ik.cpp` | `albc_controller.cpp:155-199` (updateJointAngles) | DLS 역기구학 1스텝 (λ 가변댐핑·JᵀJ+λ²I·pseudo-inverse·특이점 클램프) |
 | `test_control_law.cpp` | `albc_controller.cpp:385-433` (computeControlOutput) | 4모드 제어식 (TDC common_factor·PID·FIXED·MANUAL no-op·equilibrium hold) |
 | `test_damping_integral.cpp` | `albc_controller.cpp:674-702` (피드백 파이프라인) | asymmetric damping gate(sign-only, RAW)·integral freeze+clamp·derivative LPF |
+| `test_firmware_dvl.cpp` | `firmware/agent/dvl_position.cpp` | 살아남은 `/hero_agent/dvl` 콜백을 호스트에서 **실제 컴파일**해 두 분기(리셋·목표 저장)를 pin. 2026-09-04 에 발행자 없는 콜백 3개를 지운 뒤 남은 extern 이 전부 맞는지 확인하는 것이 주목적 — 빠지면 보드에서만 링크 에러가 난다 |
 | `test_deadband_gate.cpp` | `control_law.h`·`feedback_filters.h` | target 0에서 기존 measured-angle gate와 bit-identical, nonzero target에서 error gate가 명령을 내는지 |
 | `test_ee_seed_guard.cpp` | `albc_controller.cpp:main()` 시드 경로 | raw-cumulative 관절값의 wrap 시드와 접힌 특이점 EE 반경 guard |
 | `test_joint_unwrap.cpp` | `joint_unwrap.h` | 현장 replay의 첫 명령 unwrap·3-turn guard·기존 single-step 결함 재현 |

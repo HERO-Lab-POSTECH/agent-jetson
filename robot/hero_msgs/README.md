@@ -24,14 +24,8 @@ subscriber/publisher stub은 있으나 live ROS 그래프에 짝이 없다(QR/DV
 | `hero_agent_sensor.msg` | IMU sensor data (roll, pitch, yaw, depth, gyro) | ACTIVE |
 | `hero_agent_dvl.msg` | DVL target commands | ACTIVE |
 | `hero_agent_vision.msg` | Vision detection results | ACTIVE (perception) |
-| `hero_xy_cont.msg` | XY control data | ACTIVE (perception) |
-| `hero_agent_dvl_velocity.msg` | DVL velocity measurements | DEPRECATED (firmware stub only) |
-| `hero_agent_cont_xy.msg` | XY thruster control commands (T0-T3) | DEPRECATED (firmware stub only) |
-| `hero_agent_cont_para.msg` | QR controller parameters (Kp, Ki, Kd, etc.) | DEPRECATED (firmware stub only) |
-| `hero_agent_position_result.msg` | Position result (X, Y, Z) | DEPRECATED (firmware stub only) |
 
 ## Services
 
 | Service | Purpose |
 |:--------|:--------|
-| `hero_command.srv` | Single command request/response |

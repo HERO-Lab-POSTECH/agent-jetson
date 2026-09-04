@@ -19,7 +19,7 @@
 #     (안 하면 link 에서 undefined reference to ros::normalizeSecNSec).
 #   - core 는 MegaCore(MCUdude_corefiles). 표준 Arduino core 로 링크하면
 #     __vector_36 다중정의 충돌(상세 = BUILD_AND_FLASH.md §왜 표준 코어로는 안 되나).
-set -u
+set -euo pipefail   # a failed compile must not leave a stale .hex looking fresh
 SRCDIR="${1:?소스디렉토리 필요}"
 NAME="${2:?출력이름 필요}"
 
@@ -109,4 +109,8 @@ echo "=== [6] 크기 ===" | tee -a "$LOG"
 avr-size "$OUT/$NAME.elf" | tee -a "$LOG"
 echo
 echo "RESULT_HEX=$OUT/$NAME.hex"
-echo "flash bytes: $(avr-objcopy -I ihex -O binary "$OUT/$NAME.hex" /tmp/_fw.bin 2>/dev/null; wc -c < /tmp/_fw.bin)"
+_fwbin="$(mktemp)"
+trap 'rm -f "$_fwbin"' EXIT
+avr-objcopy -I ihex -O binary "$OUT/$NAME.hex" "$_fwbin"
+echo "flash bytes: $(wc -c < "$_fwbin")"
+echo "hex md5: $(md5sum "$OUT/$NAME.hex" 2>/dev/null || md5 -q "$OUT/$NAME.hex")"

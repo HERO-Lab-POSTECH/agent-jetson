@@ -42,8 +42,6 @@ extern double desired_angle_depth;
 // ── cont_direc 믹싱 입력 (정의는 agent.ino, 여기선 extern) ──
 extern volatile uint8_t cont_direc;
 extern volatile int move_speed;
-extern volatile int Th_0, Th_1, Th_2, Th_3;
-extern volatile int darknet_Th_0, darknet_Th_1, darknet_Th_2, darknet_Th_3;
 
 void PID_control_yaw();
 void PID_control_depth();

@@ -9,20 +9,11 @@
 #include <std_msgs/Int8.h>
 #include "hero_msgs/hero_agent_sensor.h"
 #include "hero_msgs/hero_agent_state.h"
-#include "ros_opencv_ipcam_qr/hero_ipcam_qr_msg.h"
-#include "hero_msgs/hero_xy_cont.h"
-#include "hero_msgs/hero_command.h"
 
 #include "hero_msgs/hero_agent_dvl.h"
-#include "hero_msgs/hero_agent_dvl_velocity.h"
 
 // RL thruster mixer command (float32[6] thrust in [-1,1], ch T0..T5 = m0..m5).
 #include "hero_msgs/hero_agent_thruster_cmd.h"
-
-// 20220613_add for dvl position cont
-#include "hero_msgs/hero_agent_cont_xy.h"
-#include "hero_msgs/hero_agent_cont_para.h"
-#include "hero_msgs/hero_agent_position_result.h"
 
 // for PIN SETTING---------------------
 #define F_CPU 16000000UL
@@ -43,11 +34,9 @@ ros::NodeHandle nh; // main handle
 
 hero_msgs::hero_agent_state state_msg;            // state
 hero_msgs::hero_agent_sensor sensors_msg;         // sensors
-hero_msgs::hero_agent_position_result result_msg; // sensors
 
 ros::Publisher pub_state(TOPIC_STATE, &state_msg);
 ros::Publisher pub_sensors(TOPIC_SENSORS, &sensors_msg);
-ros::Publisher pub_result(TOPIC_RESULT, &result_msg);
 
 //--------------------------------------
 
@@ -166,17 +155,9 @@ volatile uint8_t state_Laser = 0;
 volatile int State_all = 0;
 //-------------------------------------
 
-volatile int Th_0 = 0;
-volatile int Th_1 = 0;
-volatile int Th_2 = 0;
-volatile int Th_3 = 0;
-
 volatile double X = 0, Y = 0, Z = 0;
 volatile double Tx = 0, Ty = 0;
 volatile double error_sum_x = 0, error_sum_y = 0;
-
-volatile double Kp = 150, Ki = 0, Kd = 150;
-volatile double Mb = 15, KKp = 0.225, KKv = 0.705;
 
 int control_T = 0;
 
@@ -191,29 +172,10 @@ volatile double error_d_x_pre = 0, error_d_y_pre = 0;
 volatile double pre_a_x = 0, pre_a_y = 0;
 volatile double pre_v_x = 0, pre_v_y = 0;
 
-// msgCallback_dvl() / msgCallback_cont_para() 정의는 dvl_position.cpp로 이동 (선언은 dvl_position.h).
+// msgCallback_dvl() 정의는 dvl_position.cpp (선언은 dvl_position.h).
 // DVL 적분·제어 전역의 *정의*는 agent.ino에 그대로 유지(dvl_position.h가 extern).
 
-volatile float save_acc_x = 0;
-volatile float pre_save_acc_x = 0;
-volatile float save_v_x = 0;
 
-volatile float save_acc_x_pre[20] = {
-    0,
-};
-volatile int save_acc_count[20] = {
-    0,
-};
-volatile int print_i = 13;
-
-// msgCallback_dvl_velocity() 정의는 dvl_position.cpp로 이동 (선언은 dvl_position.h).
-
-volatile int darknet_Th_0 = 0;
-volatile int darknet_Th_1 = 0;
-volatile int darknet_Th_2 = 0;
-volatile int darknet_Th_3 = 0;
-
-// msgCallback_cont_xy_darknet() 정의는 dvl_position.cpp로 이동 (선언은 dvl_position.h).
 //---------------------------------------
 
 int test_cont_set = 0;
@@ -236,11 +198,33 @@ void messageCommand(const std_msgs::Int8 &command_msg)
     // 불감대 FF 전에는 적분기가 출력에 닿지 않아 무증상이었다. 자세한 근거:
     // notes/2026-08-24-fault-tolerant-allocation-analysis.md §3-6 "2순위 — 적분기"
     if (cont_yaw_on) I_yaw = 0;
+    // Falling edge with depth already off: flush NEUTRAL, see the 'D' handler.
+    // Skipped while RL owns the ESCs -- messageThruster() drives them directly
+    // and a stray frame here would fight it for one cycle.
+    else if (!cont_depth_on && !rl_active) {
+      pwm_m1 = ESC_NEUTRAL; pwm_m2 = ESC_NEUTRAL;
+      pwm_m4 = ESC_NEUTRAL; pwm_m5 = ESC_NEUTRAL;
+      esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
+      esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+    }
   }
   else if (Command == 'D') // Depth control
   {
     cont_depth_on = !cont_depth_on;
     cont_Depth = cont_depth_on;
+    // Same rising-edge convention as yaw above (2026-08-24). Without it a
+    // previously saturated I_depth is re-applied the instant depth control is
+    // switched back on.
+    if (cont_depth_on) I_depth = 0;
+    // Falling edge: send one NEUTRAL frame for the channels this controller
+    // owned. ESC transmission below only runs while a controller is enabled, so
+    // disabling the LAST one used to leave the previous frame latched and the
+    // thrusters running at whatever they were.
+    else if (!cont_yaw_on && !rl_active) {
+      pwm_m0 = ESC_NEUTRAL; pwm_m3 = ESC_NEUTRAL;
+      esc_input(0x02, pwm_m0, pwm_m1, pwm_m2);
+      esc_input(0x03, pwm_m3, pwm_m4, pwm_m5);
+    }
   }
   else if (Command == 'L') // Laser
   {
@@ -274,7 +258,6 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   else if (Command == 'q') // stop
   {
     cont_direc = 0;
-    save_acc_x = 0;
   }
   else if (Command == 's') // backward
   {
@@ -374,6 +357,9 @@ ros::Subscriber<std_msgs::Int8> sub_command(TOPIC_COMMAND,
 // 도달 불가가 된다 — 정책이 학습한 대칭 ±1 대비 권한이 조용히 비대칭이 된다.
 static int rl_action_to_pwm(float a, int span, int lo, int hi, int bias)
 {
+  // NaN fails BOTH comparisons below and would reach the (int) cast and the ESC
+  // frame as an arbitrary count. Neutral is the only safe reading of "no number".
+  if (a != a) a = 0.0f;
   if (a > 1.0f) a = 1.0f;
   else if (a < -1.0f) a = -1.0f;
   int pwm = ESC_NEUTRAL - bias + (int)(a * span);
@@ -416,12 +402,7 @@ void messageThruster(const hero_msgs::hero_agent_thruster_cmd &msg)
 ros::Subscriber<hero_msgs::hero_agent_thruster_cmd> sub_thruster(TOPIC_THRUSTER_PWM,
                                                                  &messageThruster);
 
-ros::Subscriber<hero_msgs::hero_agent_cont_xy> sub_cont_xy_darknet(TOPIC_CONT_XY_DARKNET,
-                                                                   &msgCallback_cont_xy_darknet);
-
 ros::Subscriber<hero_msgs::hero_agent_dvl> sub_dvl(TOPIC_DVL, &msgCallback_dvl);
-ros::Subscriber<hero_msgs::hero_agent_cont_para> sub_cont_para(TOPIC_CONT_PARA, &msgCallback_cont_para);
-ros::Subscriber<hero_msgs::hero_agent_dvl_velocity> sub_dvl_velocity(TOPIC_DVL_VELOCITY, &msgCallback_dvl_velocity);
 
 //--------------------------------------------
 //--------------------------------------------
@@ -484,17 +465,15 @@ void setup()
 
   nh.advertise(pub_state);
   nh.advertise(pub_sensors);
-  // pub_result NOT advertised (2026-08-25). /hero_agent/result had ZERO
-  // subscribers on the live graph (measured) and hero_agent_position_result.msg
-  // has carried a DEPRECATED banner since 2026-06-14. At 24 B payload x 22.6 Hz
-  // it was 724 B/s -- 13 % of the 57600-baud link -- spent on nothing, and that
-  // budget is exactly what the loop-rate sensors publish above needs.
+  // /hero_agent/result was un-advertised 2026-08-25 (zero subscribers measured,
+  // msg DEPRECATED since 2026-06-14, 724 B/s = 13 % of the 57600-baud link spent
+  // on nothing) and the publisher itself is gone 2026-09-04.
   nh.subscribe(sub_command);
   nh.subscribe(sub_thruster);
-  nh.subscribe(sub_cont_xy_darknet);
+  // /hero_agent/{cont_xy_darknet,cont_para,dvl_velocity} un-subscribed 2026-09-04:
+  // no publisher has existed since the 2022 DVL/darknet work, and their callbacks
+  // are deleted. Their topic constants stay in config.h only as wire history.
   nh.subscribe(sub_dvl);
-  nh.subscribe(sub_cont_para);
-  nh.subscribe(sub_dvl_velocity);
   Initialization(); // init all 1100ms
 
   start_time = millis();
@@ -643,7 +622,7 @@ void loop()
     // depth = DEPTH_Sensor.depth();
 
     // sensors_msg moved OUT of this branch (2026-08-25) -- see the block above
-    // the depth state machine. result_msg dropped entirely; both are why.
+    // the depth state machine. The result publisher is gone entirely; both are why.
 
     state_msg.Yaw = yaw;
     state_msg.Target_yaw = desired_angle_yaw;
