@@ -2,7 +2,7 @@
 
 ## 1. 개요
 
-**agent-jetson**은 NVIDIA Jetson TX2 보드에서 실행되는 UUV(무인수중선) 자세 제어 및 조작 플랫폼이다. 이 스택은 4개 ROS 패키지로 구성되어 있다: (1) **hero_msgs** — 공유 메시지 정의 및 메시지 생명주기 관리, (2) **hero_agent** — 키보드 텔레오프 + 상태 모니터링 + 궤적 로깅 (50 Hz CSV, rosbag), (3) **albc_control** — 저수준 자세 피드백 제어 + 2-DOF 팔 역기구학 + Dynamixel 드라이버, (4) **albc_rl** — 50 Hz로 실행되는 RL 정책 추론 (torch-free numpy 순전파, 69D 정책 관측, 6개 스러스터 + 2개 팔 관절 명령). 이 파이프라인은 MicroStrain 3DM-GX5 AHRS(MIP 프로토콜, IMU 자이로 포함) → rosserial 브릿지 → ROS 토픽 → 자세 제어기 또는 RL 정책 → Dynamixel 팔 드라이버 + ESC 스러스터 혼합기로 이어진다.
+**agent-jetson**은 NVIDIA Jetson TX2 보드에서 실행되는 UUV(무인수중선) 자세 제어 및 조작 플랫폼이다. 이 스택은 4개 ROS 패키지로 구성되어 있다: (1) **hero_msgs** — 공유 메시지 정의 및 메시지 생명주기 관리, (2) **hero_agent** — 키보드 텔레오프 + 상태 모니터링 + 궤적 로깅 (50 Hz CSV, rosbag), (3) **albc_control** — 저수준 자세 피드백 제어 + 2-DOF 팔 역기구학 + Dynamixel 드라이버, (4) **albc_rl** — 50 Hz로 실행되는 RL 정책 추론 (torch-free numpy 순전파, 72D 정책 관측, 6개 스러스터 + 2개 팔 관절 명령). 이 파이프라인은 MicroStrain 3DM-GX5 AHRS(MIP 프로토콜, IMU 자이로 포함) → rosserial 브릿지 → ROS 토픽 → 자세 제어기 또는 RL 정책 → Dynamixel 팔 드라이버 + ESC 스러스터 혼합기로 이어진다.
 
 ```mermaid
 graph TB
@@ -262,7 +262,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 
 ### 2.4 albc_rl
 
-**목적**: agent-jetson TX2 보드에서 50 Hz로 RL 학생 정책 추론 실행 (torch-free numpy 순전파). 69D 자세-only 정책에서 관찰 → 8D 액션 (2개 팔 관절 + 6개 스러스터).
+**목적**: agent-jetson TX2 보드에서 50 Hz로 RL 학생 정책 추론 실행 (torch-free numpy 순전파). 72D 자세-only 정책에서 관찰 → 8D 액션 (2개 팔 관절 + 6개 스러스터).
 
 **책임**:
 - IMU (오일러 + 자이로) 수신 → rotate_imu/rotate_gyro로 보드-프레임 보정

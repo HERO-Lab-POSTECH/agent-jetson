@@ -1,14 +1,14 @@
 // Production header: StatusPublisher — owns the three output topics of
-// albc_controller and encapsulates the joint-angle + /albc_status publish.
+// albc_controller and encapsulates the joint-angle + /albc/status publish.
 //
 // Absorbs the former main()-local publishers (albc_controller.cpp):
 //   - angle_pub_1 / angle_pub_2 : /hero_agent/active_joint{1,2}_position_controller/command
-//   - status_pub                : /albc_status
+//   - status_pub                : /albc/status
 // and the two publish blocks (joint angles + status) from the control loop.
 //
 // ⚠️ CONTRACT (must stay byte-identical):
 //   - joint angle topics, type std_msgs/Float64, queue 1000, value mapTo2Pi(theta).
-//   - /albc_status: std_msgs/Float64MultiArray, queue 10, 11 fields in the EXACT
+//   - /albc/status: std_msgs/Float64MultiArray, queue 10, 11 fields in the EXACT
 //     order/units of the former status_msg.data:
 //       0 RAD2DEG(target_roll)   1 RAD2DEG(current_roll)
 //       2 RAD2DEG(target_pitch)  3 RAD2DEG(current_pitch)
@@ -53,7 +53,7 @@ public:
         angle_pub_2_.publish(ros_theta2);
     }
 
-    // Publish /albc_status. The 11 fields are assembled in the EXACT former order
+    // Publish /albc/status. The 11 fields are assembled in the EXACT former order
     // and units (RAD2DEG on the four attitude angles; raw x/y and angular vels).
     void publishStatus(double target_roll, double current_roll,
                        double target_pitch, double current_pitch,

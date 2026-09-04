@@ -14,7 +14,7 @@ csv_rate_hz: 50
 # Toggle debounce gate (seconds)
 debounce_sec: 0.5
 
-# Logging output period (ROS_INFO_THROTTLE seconds)
+# HUD refresh period (s)
 log_period: 0.5
 
 # Results output base directory (trajectory/ and rosbags/ created under it)

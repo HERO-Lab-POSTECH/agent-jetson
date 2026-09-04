@@ -1,7 +1,7 @@
-"""ProprioBuilder: robot sensors -> 69D-policy proprioception block (the sim-to-real surface).
+"""ProprioBuilder: robot sensors -> 72D-policy proprioception block (the sim-to-real surface).
 
 Concrete implementation of build_proprio() for the agent-jetson UUV board, for the
-69D attitude-only policy (full lin-vel-tracking removal). Depends ONLY on numpy
+72D attitude-only policy (full lin-vel-tracking removal). Depends ONLY on numpy
 (board has 1.11.0, Python 3.5) so the same file runs on the robot and is unit-tested
 on a dev machine without ROS/torch.
 
@@ -18,7 +18,7 @@ against the sim in marinegym-isaaclab @ ksm-ubuntu, 2026-06-08):
     [13]    manipulability index [0,1]                <- Yoshikawa from joint2
     [14:20] thruster filtered output T0..T5           <- previous action[2:8] echo
 
-NO linear velocity anywhere -- not in the command, not in the body state. The 69D policy
+NO linear velocity anywhere -- not in the command, not in the body state. The 72D policy
 removed lin-vel tracking entirely (att-only), so the DVL-absence problem that plagued the
 87D deploy (zero placeholder at obs 12:15) is gone at the model level.
 
@@ -37,7 +37,7 @@ runtime (numpy_port np_policy), which must replicate the sim recurrence:
     I     = clamp(I, -2.0, +2.0)           integral_clamp = 2.0, integral_gated = True
 
 These constants are from attitude_only/config.py (verified, not guessed) -- the board
-numpy runtime must use them (the old 87D INTEGRAL_CLAMP=1.0 / no-gate was WRONG for 69D).
+numpy runtime must use them (the old 87D INTEGRAL_CLAMP=1.0 / no-gate was WRONG for 72D).
 The 46D temporal history is likewise the runtime's responsibility.
 
 WHAT IS ESTIMATED, NOT MEASURED (and why it still matches sim-to-real)
@@ -54,7 +54,7 @@ L_LINK = 0.233          # HERO_AGENT_ALBC_LINK1/2_LENGTH (l1 == l2)
 CONTROL_DT = 0.02       # 50 Hz
 LPF_ALPHA = 0.2         # board attitude_controller.h LPF on derived rates
 
-PROPRIO_DIM = 20        # 69D attitude-only current proprioception
+PROPRIO_DIM = 20        # 72D attitude-only current proprioception
 
 # ---- thruster first-order lag (obs echo 14:20 -- must match sim byte-for-byte) ----
 # The sim feeds obs[14:20] the FILTERED thruster state, not the raw command:

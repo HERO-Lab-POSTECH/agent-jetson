@@ -2,7 +2,7 @@
 <package format="2">
   <name>albc_rl</name>
   <version>1.0.0</version>
-  <description>RL student-policy inference node (69D attitude-only, torch-free numpy runtime)</description>
+  <description>RL student-policy inference node (72D attitude-only, torch-free numpy runtime)</description>
 
   <maintainer email="luckkim123@gmail.com">Seungmin Kim</maintainer>
 
@@ -15,10 +15,8 @@
   <depend>hero_msgs</depend>
   <depend>dynamic_reconfigure</depend>
 
-  <!-- b1_thruster_probe.launch brings up rostopic/rosbag nodes + the
-       albc_control joint driver -->
   <exec_depend>rosbag</exec_depend>
-  <exec_depend>rostopic</exec_depend>
+  <exec_depend>python-numpy</exec_depend>
   <exec_depend>albc_control</exec_depend>
 
 </package>

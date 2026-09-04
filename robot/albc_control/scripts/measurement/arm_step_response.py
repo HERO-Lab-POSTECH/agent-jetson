@@ -411,7 +411,7 @@ def parse_args():
     p.add_argument("--settle", type=float, default=1.5, help="각 step 정착 대기·로깅 시간(초)")
     p.add_argument("--port", default=DEFAULT_PORT)
     p.add_argument("--baud", type=int, default=DEFAULT_BAUD,
-                   help="baud. 기본 57600(배포동일, ~90Hz). 1000000 등으로 올리면 200Hz+")
+                   help="baud. 기본 1000000(배포동일, 200Hz+). 57600이면 ~90Hz")
     p.add_argument("--no-hold", action="store_true",
                    help="다른 관절 nominal hold 비활성(기본은 hold ON)")
     p.add_argument("--data-base", default=None,

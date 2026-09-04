@@ -137,11 +137,10 @@ class StudentTCN:
         self.h3_w, self.h3_b = w["head.3.weight"], w["head.3.bias"]
 
     def forward(self, win):
-        """win: (batch, H, obs) -> latent (batch, latent).
-
-        The window must ALREADY BE NORMALIZED with the teacher's normalizer -- the
-        student is distilled on normalized input and carries no normalizer of its own.
-        """
+        """win: (batch, H, obs) RAW 72D observations -- NOT normalized. The student is
+        consumed exactly as DeployedStudentPolicy does it: raw obs into the encoder,
+        teacher-normalized obs into the actor. Pinned by the torch e2e golden
+        (golden_e2e_{tcn,gru}.npz, 9.5e-7, re-verified 2026-09-04)."""
         b, h, d = win.shape
         x = elu(linear(win.reshape(b * h, d), self.ct_w, self.ct_b)).reshape(b, h, -1)
         x = np.transpose(x, (0, 2, 1))          # (b, 32, H)
@@ -171,7 +170,12 @@ class StudentGRU:
         return np.zeros((batch, self.hidden_size), dtype=np.float32)
 
     def step(self, x_t, hidden):
-        """x_t: (batch, obs) NORMALIZED, hidden: (batch, 128). Returns (latent, new hidden)."""
+        """x_t: (batch, obs) RAW 72D observation for ONE step -- NOT normalized.
+        hidden: (batch, 128). Returns (latent, new hidden).
+
+        The student is consumed exactly as DeployedStudentPolicy does it: raw obs
+        into the encoder, teacher-normalized obs into the actor. Pinned by the
+        torch e2e golden (golden_e2e_{tcn,gru}.npz, 9.5e-7, re-verified 2026-09-04)."""
         hidden = gru_cell(x_t, hidden, self.w_ih, self.w_hh, self.b_ih, self.b_hh)
         x = elu(linear(hidden, self.h0_w, self.h0_b))
         x = layer_norm(x, self.ln_g, self.ln_b)

@@ -32,3 +32,7 @@ catkin_install_python(PROGRAMS
   scripts/hold_joint.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
+
+install(DIRECTORY launch/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch)
+install(DIRECTORY numpy_port/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/numpy_port)
+install(FILES scripts/deployed_tam.json DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)

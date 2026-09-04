@@ -9,7 +9,7 @@
 //
 // Hardware-pinned values (do NOT "modernize" or retune without intent):
 //   - Motor IDs 11 / 12 on a single RS-485 bus.
-//   - Baud 57600, Protocol 2.0, udev alias /dev/ttyDynamixel.
+//   - Baud 1000000 (EEPROM addr 8 = 3, 2026-07-03), Protocol 2.0, udev alias /dev/ttyDynamixel.
 //   - Control-table addresses are MX(Protocol 2.0) register offsets.
 //   - 2048 ticks = pi rad (a half-turn) for the 4096-tick/rev encoder.
 //   - Present-current LSB ~= 2.69 mA (CURRENT_TO_MA).

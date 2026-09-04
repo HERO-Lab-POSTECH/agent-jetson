@@ -1,4 +1,4 @@
-"""TDD spec for ProprioBuilder: sensors -> 20D proprio block (69D attitude-only policy).
+"""TDD spec for ProprioBuilder: sensors -> 20D proprio block (72D attitude-only policy).
 
 This is the ONE sim-to-real surface. Every axis/sign/frame/order here is checked against
 the sim reference compute_policy_obs() (attitude_only/mdp/observations.py @ marinegym-isaaclab)
@@ -193,9 +193,9 @@ def test_jointvel_falls_back_to_diff_without_supplied():
     np.testing.assert_allclose(out[11:13], expected, atol=ATOL)
 
 
-# ----------------------------------------------- no linear velocity anywhere (69D)
+# ----------------------------------------------- no linear velocity anywhere (72D)
 def test_no_linvel_in_proprio():
-    # 69D attitude-only: there is NO lin-vel command and NO measured lin-vel block.
+    # 72D attitude-only: there is NO lin-vel command and NO measured lin-vel block.
     # proprio is exactly 20D, ending at the thruster echo -- nothing past index 20.
     b = ProprioBuilder()
     out = b.build(_sensors())

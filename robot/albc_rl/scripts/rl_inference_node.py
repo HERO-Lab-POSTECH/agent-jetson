@@ -3,7 +3,7 @@
 
 Subscribes to the board sensors, applies the board-frame IMU correction
 (build_proprio.rotate_imu, oracle: albc_control imu_rotation.h), assembles the
-20D proprio block (build_proprio.py) for the 69D attitude-only policy, runs the
+20D proprio block (build_proprio.py) for the 72D attitude-only policy, runs the
 torch-free numpy policy (../numpy_port/np_policy.py), and publishes the arm
 joint TARGET plus the 6 thruster channels. Pure numpy + rospy -- no torch on
 the board (ROS lunar rosrun => Python 2.7.12, numpy 1.11).
@@ -52,7 +52,7 @@ ROSPARAMS (all defaults are field-safe)
   ~encoder_type       : "tcn" | "gru"             (default gru)
   ~weights_dir        : dir with weights_*.npz    (default ../numpy_port)
   ~control_hz         : 50
-  ~use_board_rates    : false  (true => trust /albc_status angular vel [8:11];
+  ~use_board_rates    : false  (true => trust /albc/status angular vel [8:11];
                                 that topic is std_msgs/Float64MultiArray)
   ~imu_yaw_offset_deg : 102.0  IMU mounting yaw offset (albc_controller.yaml).
                                 CONFIRMED 2026-08-12. Was -78.0 (2026-08-11),
@@ -172,7 +172,7 @@ class RLInferenceNode(object):
         self._gyro = None        # board-frame corrected raw gyro (p,q,r); None until first GYRO sample
         self._joint_pos = np.zeros(2, dtype=np.float32)
         self._joint_vel = None            # driver-differentiated, None until seen
-        self._board_rates = None          # set if use_board_rates and /albc_status seen
+        self._board_rates = None          # set if use_board_rates and /albc/status seen
         self._last_sensor_t = None        # rospy time of last GOOD imu sample
         self._last_joints_t = None        # rospy time of last GOOD joint state
 
@@ -252,7 +252,7 @@ class RLInferenceNode(object):
         rospy.Subscriber("/joint_currents", Float32MultiArray,
                          self._on_currents, queue_size=1)
         if self.use_board_rates:
-            # /albc_status is advertised as Float64MultiArray (status_publisher.h)
+            # /albc/status is advertised as Float64MultiArray (status_publisher.h)
             rospy.Subscriber("/albc/status", Float64MultiArray,
                              self._on_albc_status, queue_size=1)
         # optional external setpoint: [roll_att, pitch_att, yaw_rate]
@@ -601,7 +601,7 @@ class RLInferenceNode(object):
     # ------------------------------------------------------------- startup
     def _log_startup_banner(self, weights_dir, student_npz, teacher_npz):
         rospy.loginfo("=============================================")
-        rospy.loginfo(" RL inference node  (69D attitude-only)")
+        rospy.loginfo(" RL inference node  (72D attitude-only)")
         rospy.loginfo("  encoder      : %s   control: %.0f Hz", self.encoder_type, self.hz)
         rospy.loginfo("  joint gain   : delta_scale %.4f/tick -> %.3f rad/s at full "
                       "action%s", self.policy.delta_scale,
@@ -707,7 +707,7 @@ class RLInferenceNode(object):
         self._last_cur_t = rospy.get_time()
 
     def _on_albc_status(self, msg):
-        # /albc_status layout (status_publisher.h): indices [8,9,10] = ang vel p,q,r.
+        # /albc/status layout (status_publisher.h): indices [8,9,10] = ang vel p,q,r.
         if len(msg.data) >= 11:
             self._board_rates = np.array(msg.data[8:11], dtype=np.float32)
 
@@ -786,7 +786,7 @@ class RLInferenceNode(object):
                           "gyro passthrough ignored (set use_board_rates=false)")
             proprio[6:9] = self._board_rates
 
-        # 69D attitude-only: command [roll_att, pitch_att, yaw_rate] passes straight
+        # 72D attitude-only: command [roll_att, pitch_att, yaw_rate] passes straight
         # through; the policy runtime does cmd - measured internally and carries the
         # leaky integral as a state buffer (the 87D reorder step no longer exists).
         action = self.policy.act(proprio, self._command)
