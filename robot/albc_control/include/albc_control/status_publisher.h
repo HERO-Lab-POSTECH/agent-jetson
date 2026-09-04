@@ -2,7 +2,7 @@
 // albc_controller and encapsulates the joint-angle + /albc/status publish.
 //
 // Absorbs the former main()-local publishers (albc_controller.cpp):
-//   - angle_pub_1 / angle_pub_2 : /hero_agent/active_joint{1,2}_position_controller/command
+//   - angle_pub_1 / angle_pub_2 : /albc/joint{1,2}_cmd
 //   - status_pub                : /albc/status
 // and the two publish blocks (joint angles + status) from the control loop.
 //
@@ -26,6 +26,7 @@
 #include <ros/ros.h>
 #include <std_msgs/Float64.h>
 #include <std_msgs/Float64MultiArray.h>
+#include "hero_msgs/topics.h"
 #include "albc_control/albc_kinematics.h"  // mapTo2Pi, RAD2DEG
 
 namespace albc {
@@ -36,11 +37,11 @@ public:
     // byte-identical to the former main() advertises (angle 1000, status 10).
     void advertise(ros::NodeHandle& nh) {
         angle_pub_1_ = nh.advertise<std_msgs::Float64>(
-            "/hero_agent/active_joint1_position_controller/command", 1000);
+            hero_msgs::topics::JOINT1_CMD, 1000);
         angle_pub_2_ = nh.advertise<std_msgs::Float64>(
-            "/hero_agent/active_joint2_position_controller/command", 1000);
+            hero_msgs::topics::JOINT2_CMD, 1000);
         status_pub_ = nh.advertise<std_msgs::Float64MultiArray>(
-            "/albc/status", 10);
+            hero_msgs::topics::ALBC_STATUS, 10);
     }
 
     // Publish the two joint angles. Byte-identical to the former block:

@@ -226,7 +226,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 | `/albc/status` | out | std_msgs/Float64MultiArray[11] |
 | `/hero_agent/active_joint{1,2}_position_controller/command` | out | std_msgs/Float64 (rad, mapTo2Pi) |
 | `/albc/joint_states` | out | sensor_msgs/JointState |
-| `/joint_currents` | in | std_msgs/Float32MultiArray |
+| `/albc/joint_currents` | in | std_msgs/Float32MultiArray |
 | `/albc_controller/imu_yaw_offset` | param | double (default 45.0°, 공유) |
 | `/albc_controller/control_mode` | param | int (1=TDC, 2=PID, 3=FIXED, 4=MANUAL) |
 | `/albc_controller/loop_rate_hz` | param | int (default 50) |
@@ -234,7 +234,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 | `/dynamic_reconfigure` (ALBCControllerConfig) | service | 런타임 튜닝 |
 
 **내부 설계** (v2.0.0 composition 재설계):
-메인 루프 (albc_controller.cpp:262-341)는 6개 클래스를 50 Hz에서 오케스트레이션: (1) ModeManager (FSM + 터미널 raw-mode), (2) ImuProcessor (/hero_agent/sensors 구독, rotate_imu 오라클 위임), (3) AttitudeController (오류 → integralStep freeze/clamp → dampedDerivative gate/LPF → computeControlOutputOracle 4-모드 스위치), (4) InverseKinematics (DLS loop + radial saturation), (5) StatusPublisher (11-field /albc_status), (6) JointCurrentMonitor (/joint_currents 캐시). 모든 제어 수학은 바이트-일치 오라클 (control_law.h, feedback_filters.h, dls_ik.h, imu_rotation.h)에 위임 — 재구현 없음. 모터 드라이버 (joint_angle_command.cpp): 10 Hz 루프, Dynamixel SDK, 시작 ramp (20 RPM × 5s), 측정 위치 누적 + 속도 미분 (true dt), RL 배포 게이트 (queue_size=1, 읽기 실패 시 발행 스킵).
+메인 루프 (albc_controller.cpp:262-341)는 6개 클래스를 50 Hz에서 오케스트레이션: (1) ModeManager (FSM + 터미널 raw-mode), (2) ImuProcessor (/hero_agent/sensors 구독, rotate_imu 오라클 위임), (3) AttitudeController (오류 → integralStep freeze/clamp → dampedDerivative gate/LPF → computeControlOutputOracle 4-모드 스위치), (4) InverseKinematics (DLS loop + radial saturation), (5) StatusPublisher (11-field /albc_status), (6) JointCurrentMonitor (/albc/joint_currents 캐시). 모든 제어 수학은 바이트-일치 오라클 (control_law.h, feedback_filters.h, dls_ik.h, imu_rotation.h)에 위임 — 재구현 없음. 모터 드라이버 (joint_angle_command.cpp): 10 Hz 루프, Dynamixel SDK, 시작 ramp (20 RPM × 5s), 측정 위치 누적 + 속도 미분 (true dt), RL 배포 게이트 (queue_size=1, 읽기 실패 시 발행 스킵).
 
 **데이터 계약**:
 - 자세: [roll, pitch, yaw] (rad, body-frame FRD)
@@ -295,7 +295,7 @@ v2.0.0 단일-노드 재설계 (이전 3-노드 파이프라인 병합). 제어 
 | `/hero_agent/sensors` | in | hero_msgs/hero_agent_sensor (raw imu frame) |
 | `/albc/joint_states` | in | sensor_msgs/JointState (10 Hz driver) |
 | `/albc/status` | in | std_msgs/Float64MultiArray (data[8:11] if use_board_rates) |
-| `/rl/command` | in | std_msgs/Float32MultiArray (att cmd) |
+| `/albc/rl_command` | in | std_msgs/Float32MultiArray (att cmd) |
 | `/hero_agent/active_joint{1,2}_position_controller/command` | out | std_msgs/Float64 (절대 누적 PD) |
 | `/albc/thruster_cmd` | out | std_msgs/Float32MultiArray[6] |
 | `~encoder_type` | param | string ('tcn' \| 'gru', default 'tcn') |
@@ -440,7 +440,7 @@ joint_angle_command (10 Hz)
 | joint_angle_command | 10 Hz | LOOP_HZ=10.0 |
 | /albc/joint_states | 10 Hz | driver publish rate |
 | CSV trajectory | 50 Hz | hero_agent (div=100/50=2) |
-| rosbag | 5 topics | /albc/status, /hero_agent/state, /hero_agent/sensors, /hero_agent/dvl, /joint_currents |
+| rosbag | 5 topics | /albc/status, /hero_agent/state, /hero_agent/sensors, /hero_agent/dvl, /albc/joint_currents |
 
 **CRITICAL RATE MISMATCH**: 
 - IMU 도착은 ~25 Hz이지만 RL 정책은 50 Hz 제어_dt에서 train됨 → /hero_agent/sensors는 각 정책 tick에서 최대 2번 consumed (last-wins 캐시, aliasing/지연 소지).

@@ -75,12 +75,12 @@
           plain rosparam, so there is no arg-splitting or YAML-quoting to break.
           Absolute-angle command, so republishing never drifts. -->
   <node pkg="albc_rl" type="hold_joint.py" name="hold_joint1" output="screen">
-    <param name="topic" value="/hero_agent/active_joint1_position_controller/command" />
+    <param name="topic" value="/albc/joint1_cmd" />
     <param name="angle" value="$(arg hold_j1)" />
     <param name="rate"  value="$(arg hold_hz)" />
   </node>
   <node pkg="albc_rl" type="hold_joint.py" name="hold_joint2" output="screen">
-    <param name="topic" value="/hero_agent/active_joint2_position_controller/command" />
+    <param name="topic" value="/albc/joint2_cmd" />
     <param name="angle" value="$(arg hold_j2)" />
     <param name="rate"  value="$(arg hold_hz)" />
   </node>
@@ -93,5 +93,5 @@
           command vs attitude change. Camera excluded (size).
           Files land in ~/albc_bags/b1probe_TIMESTAMP.bag (fixed dir). -->
   <node pkg="rosbag" type="record" name="b1probe_recorder" output="screen"
-        args="-o /home/nvidia/albc_bags/b1probe /albc/joint_states /hero_agent/active_joint1_position_controller/command /hero_agent/active_joint2_position_controller/command /hero_agent/thruster_pwm /hero_agent/sensors /joint_currents /rosout_agg" />
+        args="-o /home/nvidia/albc_bags/b1probe /albc/joint_states /albc/joint1_cmd /albc/joint2_cmd /hero_agent/thruster_pwm /hero_agent/sensors /albc/joint_currents /rosout_agg" />
 </launch>

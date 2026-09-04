@@ -551,3 +551,122 @@ if __name__ == "__main__":
                 fails += 1
                 print("FAIL %s\n     %s" % (name, e))
     raise SystemExit(1 if fails else 0)
+
+
+# ---------------------------------------------------------------------------
+# Topic-name SSOT parity (2026-09-04)
+#
+# Three files declare topic names for three languages, and nothing used to stop
+# them from drifting: hero_msgs/topics.h (C++), albc_rl/contract.py (python),
+# firmware/agent/config.h (Arduino). A rename that lands in two of the three is
+# a silently dead subscription, which is exactly the failure this file exists
+# for. Launch files and shell scripts carry the names as bare strings, so they
+# are checked against the SSOTs rather than trusted.
+#
+# The three sets are deliberately NOT equal: the firmware knows nothing about
+# the Jetson-internal /albc/* topics, and still carries four 2022 legacy topics
+# (result, cont_xy_darknet, cont_para, dvl_velocity) that are removed with the
+# dead DVL/darknet callbacks. What must hold is that every name declared in two
+# places is spelled the same in both.
+# ---------------------------------------------------------------------------
+REPO = os.path.normpath(os.path.join(ROBOT, ".."))
+CPP_TOPICS_H = os.path.join(ROBOT, "hero_msgs", "include", "hero_msgs", "topics.h")
+FW_CONFIG_H = os.path.join(REPO, "firmware", "agent", "config.h")
+CONTRACT_PY = os.path.join(ROBOT, "albc_rl", "src", "albc_rl", "contract.py")
+
+_CPP_CONST = re.compile(
+    r'static\s+const\s+char\s*\*\s*const\s+([A-Z0-9_]+)\s*=\s*"([^"]+)"')
+
+
+def _cpp_topics():
+    with open(CPP_TOPICS_H) as fh:
+        return dict(_CPP_CONST.findall(fh.read()))
+
+
+def _firmware_topics():
+    """TOPIC_FOO -> value, keyed by the FOO part so it lines up with the C++ names."""
+    with open(FW_CONFIG_H) as fh:
+        pairs = _CPP_CONST.findall(fh.read())
+    return dict((name[len("TOPIC_"):], value)
+                for name, value in pairs if name.startswith("TOPIC_"))
+
+
+def _python_topics():
+    """Read contract.TOPICS without importing numpy (board python may lack it here)."""
+    with open(CONTRACT_PY) as fh:
+        tree = ast.parse(fh.read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == "TOPICS":
+                    return ast.literal_eval(node.value)
+    raise AssertionError("contract.py declares no TOPICS dict")
+
+
+def _strings_in(path):
+    with open(path) as fh:
+        return set(re.findall(r'/(?:hero_agent|albc)/[a-z0-9_]+', fh.read()))
+
+
+def test_cpp_and_python_topic_ssots_are_identical():
+    cpp = _cpp_topics()
+    py = _python_topics()
+    assert cpp, "hero_msgs/topics.h declared no topics -- regex drifted?"
+    assert set(cpp.keys()) == set(k.upper() for k in py.keys()), (
+        "C++ and python topic SSOTs declare different names:\n  C++    %s\n  python %s"
+        % (sorted(cpp.keys()), sorted(k.upper() for k in py.keys())))
+    for name, value in cpp.items():
+        assert py[name.lower()] == value, (
+            "%s disagrees: C++ %r vs python %r" % (name, value, py[name.lower()]))
+
+
+def test_firmware_agrees_with_the_cpp_ssot_where_they_overlap():
+    cpp = _cpp_topics()
+    fw = _firmware_topics()
+    assert fw, "firmware config.h declared no TOPIC_* constants -- regex drifted?"
+    shared = set(cpp) & set(fw)
+    assert shared, "firmware and C++ SSOT share no topic at all -- one of them moved"
+    for name in sorted(shared):
+        assert fw[name] == cpp[name], (
+            "%s disagrees: firmware %r vs C++ %r" % (name, fw[name], cpp[name]))
+
+
+def test_launch_and_shell_topics_all_come_from_a_ssot():
+    known = set(_cpp_topics().values()) | set(_firmware_topics().values())
+    carriers = []
+    for pkg in ("albc_rl", "hero_agent", "albc_control"):
+        launch_dir = os.path.join(ROBOT, pkg, "launch")
+        if os.path.isdir(launch_dir):
+            carriers += [os.path.join(launch_dir, f)
+                         for f in sorted(os.listdir(launch_dir)) if f.endswith(".launch")]
+    dryrun = os.path.join(ROBOT, "albc_control", "scripts", "start_tdc_dryrun.sh")
+    if os.path.exists(dryrun):
+        carriers.append(dryrun)
+    assert carriers, "found no launch/shell file to check -- path drifted?"
+    for path in carriers:
+        for topic in sorted(_strings_in(path)):
+            assert topic in known, (
+                "%s names %r, which no topic SSOT declares"
+                % (os.path.relpath(path, REPO), topic))
+
+
+def test_the_renamed_topics_left_no_old_spelling_behind():
+    """The 2026-09-04 rename (D13 plan A). Sources only -- history keeps the old names."""
+    # /albc/joint_currents contains the old name as a substring, hence the lookbehind.
+    stale = (r'(?<!/albc)/joint_currents', r'active_joint', r'/rl/command')
+    skip_dirs = (".git", ".graphify", "__pycache__", "notes", "perception")
+    offenders = []
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for fname in files:
+            if not fname.endswith((".py", ".cpp", ".h", ".ino", ".launch", ".sh", ".yaml")):
+                continue
+            if fname == os.path.basename(__file__):
+                continue
+            path = os.path.join(root, fname)
+            with open(path) as fh:
+                text = fh.read()
+            for pattern in stale:
+                if re.search(pattern, text):
+                    offenders.append((os.path.relpath(path, REPO), pattern))
+    assert not offenders, "old topic spellings survive: %s" % (offenders,)

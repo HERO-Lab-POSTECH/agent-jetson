@@ -5,6 +5,17 @@
 #define AGENT_CONFIG_H
 #include <stdint.h>
 
+// ── ROS topics (wire names are firmware ABI; rename only with a coordinated flash) ──
+static const char* const TOPIC_STATE = "/hero_agent/state";
+static const char* const TOPIC_SENSORS = "/hero_agent/sensors";
+static const char* const TOPIC_RESULT = "/hero_agent/result";
+static const char* const TOPIC_COMMAND = "/hero_agent/command";
+static const char* const TOPIC_THRUSTER_PWM = "/hero_agent/thruster_pwm";
+static const char* const TOPIC_CONT_XY_DARKNET = "/hero_agent/cont_xy_darknet";
+static const char* const TOPIC_DVL = "/hero_agent/dvl";
+static const char* const TOPIC_CONT_PARA = "/hero_agent/cont_para";
+static const char* const TOPIC_DVL_VELOCITY = "/hero_agent/dvl_velocity";
+
 // ── 핀 (원본 #define) ──
 static const uint8_t PIN_RELAY = 15;
 static const uint8_t PIN_GRIPPER_SIG = 20;

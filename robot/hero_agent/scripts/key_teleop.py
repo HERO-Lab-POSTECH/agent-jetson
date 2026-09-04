@@ -11,6 +11,7 @@ Usage:
 """
 import rospy
 from std_msgs.msg import Int8
+from albc_rl.contract import TOPICS
 import sys
 import tty
 import termios
@@ -78,9 +79,9 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     rospy.init_node('key_teleop', anonymous=True, disable_signals=True)
-    pub = rospy.Publisher('/hero_agent/key_input', Int8, queue_size=10)
+    pub = rospy.Publisher(TOPICS["key_input"], Int8, queue_size=10)
     # Toggle keys bypass the agent node and hit the firmware command topic directly.
-    pub_cmd = rospy.Publisher('/hero_agent/command', Int8, queue_size=10)
+    pub_cmd = rospy.Publisher(TOPICS["command"], Int8, queue_size=10)
 
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)

@@ -19,7 +19,7 @@ namespace albc {
 
 class JointCurrentMonitor {
 public:
-    // /joint_currents subscriber callback. Byte-identical to the former
+    // /albc/joint_currents subscriber callback. Byte-identical to the former
     // jointCurrentsCallback: only updates when at least two values are present.
     void onJointCurrents(const std_msgs::Float32MultiArray::ConstPtr& msg) {
         if (msg->data.size() >= 2) {

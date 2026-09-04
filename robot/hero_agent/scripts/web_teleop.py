@@ -29,6 +29,7 @@ from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 from urlparse import urlparse, parse_qs
 
 from key_teleop import KEY_TABLE, DIRECT_CMD, REPEAT_GUARD_KEYS, REPEAT_GUARD_SEC
+from albc_rl.contract import TOPICS
 
 # Allow-list derived from key_teleop's KEY_TABLE, so the two cannot diverge.
 # Entries pack several keys per row ("w/s", "c/v/b"), one char each.
@@ -171,8 +172,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     global _pub, _pub_cmd
     rospy.init_node("web_teleop", anonymous=True, disable_signals=True)
-    _pub = rospy.Publisher("/hero_agent/key_input", Int8, queue_size=10)
-    _pub_cmd = rospy.Publisher("/hero_agent/command", Int8, queue_size=10)
+    _pub = rospy.Publisher(TOPICS["key_input"], Int8, queue_size=10)
+    _pub_cmd = rospy.Publisher(TOPICS["command"], Int8, queue_size=10)
 
     port = int(rospy.get_param("~port", 8080))
     srv = HTTPServer(("0.0.0.0", port), Handler)

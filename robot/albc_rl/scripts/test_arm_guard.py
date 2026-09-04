@@ -232,7 +232,7 @@ def main():
         # publish and reports a false FAIL. Caught by this check failing on correct code.
         check(re.search(r'if \(cur_ok\)\s*\{.{0,300}?current_pub\.publish', cpp_src, re.S)
               is not None,
-              'the /joint_currents publish is GATED on that success')
+              'the /albc/joint_currents publish is GATED on that success')
         # Scoped to readCurrent's OWN body, and ordered within it. The first version of
         # this check asserted `'return false;' in cpp_src` (true of the whole file --
         # readPosition has one) AND an index ordering that is trivially true whenever

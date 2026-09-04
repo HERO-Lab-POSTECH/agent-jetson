@@ -28,8 +28,8 @@
 
 set -e
 
-J1_REAL="/hero_agent/active_joint1_position_controller/command"
-J2_REAL="/hero_agent/active_joint2_position_controller/command"
+J1_REAL="/albc/joint1_cmd"
+J2_REAL="/albc/joint2_cmd"
 J1_FAKE="/tdc_dryrun/joint1_cmd"
 J2_FAKE="/tdc_dryrun/joint2_cmd"
 

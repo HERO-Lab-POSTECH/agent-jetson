@@ -31,7 +31,22 @@ THR_TAU_UP = 0.1
 THR_TAU_DOWN = 0.05
 THR_FILTER_DT = 0.02
 
-TOPICS = {}
+TOPICS = {
+    "sensors": "/hero_agent/sensors",
+    "state": "/hero_agent/state",
+    "command": "/hero_agent/command",
+    "key_input": "/hero_agent/key_input",
+    "dvl": "/hero_agent/dvl",
+    "thruster_pwm": "/hero_agent/thruster_pwm",
+    "joint_states": "/albc/joint_states",
+    "joint_currents": "/albc/joint_currents",
+    "joint_guard": "/albc/joint_guard",
+    "albc_status": "/albc/status",
+    "thruster_cmd": "/albc/thruster_cmd",
+    "joint1_cmd": "/albc/joint1_cmd",
+    "joint2_cmd": "/albc/joint2_cmd",
+    "rl_command": "/albc/rl_command",
+}
 
 
 def wrap_angle(a):

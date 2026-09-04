@@ -17,11 +17,12 @@ the driver just keeps the target where it is.
 """
 import rospy
 from std_msgs.msg import Float64
+from albc_rl.contract import TOPICS
 
 
 def main():
     rospy.init_node("hold_joint")
-    topic = rospy.get_param("~topic")
+    topic = rospy.get_param("~topic", TOPICS["joint1_cmd"])
     angle = float(rospy.get_param("~angle"))
     rate_hz = float(rospy.get_param("~rate", 10.0))
 

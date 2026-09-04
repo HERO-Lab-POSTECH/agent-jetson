@@ -45,9 +45,9 @@ hero_msgs::hero_agent_state state_msg;            // state
 hero_msgs::hero_agent_sensor sensors_msg;         // sensors
 hero_msgs::hero_agent_position_result result_msg; // sensors
 
-ros::Publisher pub_state("/hero_agent/state", &state_msg);
-ros::Publisher pub_sensors("/hero_agent/sensors", &sensors_msg);
-ros::Publisher pub_result("/hero_agent/result", &result_msg);
+ros::Publisher pub_state(TOPIC_STATE, &state_msg);
+ros::Publisher pub_sensors(TOPIC_SENSORS, &sensors_msg);
+ros::Publisher pub_result(TOPIC_RESULT, &result_msg);
 
 //--------------------------------------
 
@@ -359,7 +359,7 @@ void messageCommand(const std_msgs::Int8 &command_msg)
   }
 }
 
-ros::Subscriber<std_msgs::Int8> sub_command("/hero_agent/command",
+ros::Subscriber<std_msgs::Int8> sub_command(TOPIC_COMMAND,
                                             &messageCommand);
 
 // RL thruster: map one action ch in [-1,1] to a constrained ESC PWM.
@@ -413,15 +413,15 @@ void messageThruster(const hero_msgs::hero_agent_thruster_cmd &msg)
   last_rl_msg_ms = millis();
 }
 
-ros::Subscriber<hero_msgs::hero_agent_thruster_cmd> sub_thruster("/hero_agent/thruster_pwm",
+ros::Subscriber<hero_msgs::hero_agent_thruster_cmd> sub_thruster(TOPIC_THRUSTER_PWM,
                                                                  &messageThruster);
 
-ros::Subscriber<hero_msgs::hero_agent_cont_xy> sub_cont_xy_darknet("/hero_agent/cont_xy_darknet",
+ros::Subscriber<hero_msgs::hero_agent_cont_xy> sub_cont_xy_darknet(TOPIC_CONT_XY_DARKNET,
                                                                    &msgCallback_cont_xy_darknet);
 
-ros::Subscriber<hero_msgs::hero_agent_dvl> sub_dvl("/hero_agent/dvl", &msgCallback_dvl);
-ros::Subscriber<hero_msgs::hero_agent_cont_para> sub_cont_para("/hero_agent/cont_para", &msgCallback_cont_para);
-ros::Subscriber<hero_msgs::hero_agent_dvl_velocity> sub_dvl_velocity("/hero_agent/dvl_velocity", &msgCallback_dvl_velocity);
+ros::Subscriber<hero_msgs::hero_agent_dvl> sub_dvl(TOPIC_DVL, &msgCallback_dvl);
+ros::Subscriber<hero_msgs::hero_agent_cont_para> sub_cont_para(TOPIC_CONT_PARA, &msgCallback_cont_para);
+ros::Subscriber<hero_msgs::hero_agent_dvl_velocity> sub_dvl_velocity(TOPIC_DVL_VELOCITY, &msgCallback_dvl_velocity);
 
 //--------------------------------------------
 //--------------------------------------------

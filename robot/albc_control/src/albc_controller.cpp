@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include "hero_msgs/hero_agent_sensor.h"
+#include "hero_msgs/topics.h"
 #include <ros/topic.h>                // waitForMessage (measured-angle seed)
 #include <sensor_msgs/JointState.h>   // /albc/joint_states (measured arm state)
 #include "albc_control/albc_kinematics.h"
@@ -185,7 +186,7 @@ int main(int argc, char **argv) {
     {
         sensor_msgs::JointStateConstPtr js =
             ros::topic::waitForMessage<sensor_msgs::JointState>(
-                "/albc/joint_states", nh, ros::Duration(seed_timeout_s));
+                hero_msgs::topics::JOINT_STATES, nh, ros::Duration(seed_timeout_s));
         // A NaN would pass every ordered comparison downstream (NaN < x is false,
         // so the singularity guard would wave it through), so an unusable message
         // is rejected HERE rather than after the kinematics.
@@ -305,9 +306,9 @@ int main(int argc, char **argv) {
                                       &mode_mgr, &attitude, &ik, &imu_proc));
 
     // Subscribers
-    ros::Subscriber imu_sub     = nh.subscribe("/hero_agent/sensors", 50,
+    ros::Subscriber imu_sub     = nh.subscribe(hero_msgs::topics::SENSORS, 50,
                                                &ImuProcessor::onImu, &imu_proc);
-    ros::Subscriber current_sub = nh.subscribe("/joint_currents", 10,
+    ros::Subscriber current_sub = nh.subscribe(hero_msgs::topics::JOINT_CURRENTS, 10,
                                                &JointCurrentMonitor::onJointCurrents, &current_mon);
 
     // Publishers

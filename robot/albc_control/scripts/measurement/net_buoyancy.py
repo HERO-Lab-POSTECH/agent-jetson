@@ -41,6 +41,7 @@ import time
 try:
     import rospy
     from hero_msgs.msg import hero_agent_state
+    from albc_rl.contract import TOPICS
 except ImportError as exc:
     sys.stderr.write(
         "[FATAL] rospy/hero_msgs import 실패 (%s). ROS 환경 source 후 "
@@ -173,7 +174,7 @@ def main():
 
     rospy.init_node("net_buoyancy_meter", anonymous=True)
     logger = DepthLogger()
-    rospy.Subscriber("/hero_agent/state", hero_agent_state, logger.callback, queue_size=200)
+    rospy.Subscriber(TOPICS["state"], hero_agent_state, logger.callback, queue_size=200)
 
     print("=" * 60)
     print(" ALBC NET BUOYANCY 계측 (측정2)")

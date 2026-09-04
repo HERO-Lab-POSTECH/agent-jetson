@@ -46,6 +46,7 @@
 #include "std_msgs/Float64MultiArray.h"      // RL-DEPLOY 2026-08-17 (/albc/joint_guard)
 #include "sensor_msgs/JointState.h"          // RL-DEPLOY
 #include "dynamixel_sdk/dynamixel_sdk.h"
+#include "hero_msgs/topics.h"
 
 #include "albc_control/dynamixel_config.h"
 #include "albc_control/joint_unwrap.h"       // RL-DEPLOY 2026-08-17 (cable-break fix)
@@ -338,9 +339,9 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "joint_angle_command");
     ros::NodeHandle nh;
 
-    ros::Publisher current_pub = nh.advertise<std_msgs::Float32MultiArray>("/joint_currents", 10);
+    ros::Publisher current_pub = nh.advertise<std_msgs::Float32MultiArray>(hero_msgs::topics::JOINT_CURRENTS, 10);
     // RL-DEPLOY: arm state for the RL inference node (pos = measured, vel = differentiated here)
-    ros::Publisher joint_state_pub = nh.advertise<sensor_msgs::JointState>("/albc/joint_states", 10);
+    ros::Publisher joint_state_pub = nh.advertise<sensor_msgs::JointState>(hero_msgs::topics::JOINT_STATES, 10);
     // RL-DEPLOY 2026-08-17: constraint metering + guard state. Every controller
     // (TDC, classic PID, RL, B1 probe) drives the arm through THIS node, so a
     // counter here measures all of them on one instrument and they stay
@@ -354,16 +355,16 @@ int main(int argc, char **argv) {
     //                     singularity side; metered only, never enforced)
     //   3 j2_abs_max    : max |measured theta2| this run (rad)
     //   4 abort_flag    : 1.0 once the cable guard has latched, else 0.0
-    ros::Publisher guard_pub = nh.advertise<std_msgs::Float64MultiArray>("/albc/joint_guard", 10);
+    ros::Publisher guard_pub = nh.advertise<std_msgs::Float64MultiArray>(hero_msgs::topics::JOINT_GUARD, 10);
 
     // RL-DEPLOY: queue_size 1 -- the RL node publishes at 50 Hz but this loop drains
     // callbacks at 10 Hz; with queue 10 every cycle replayed ~5 stale commands per
     // joint, each one a serial goal write. Keeping only the LATEST command caps the
     // serial traffic at one goal write per joint per cycle.
     ros::Subscriber joint1_sub = nh.subscribe<std_msgs::Float64>(
-        "/hero_agent/active_joint1_position_controller/command", 1, joint1Callback);
+        hero_msgs::topics::JOINT1_CMD, 1, joint1Callback);
     ros::Subscriber joint2_sub = nh.subscribe<std_msgs::Float64>(
-        "/hero_agent/active_joint2_position_controller/command", 1, joint2Callback);
+        hero_msgs::topics::JOINT2_CMD, 1, joint2Callback);
 
     port_handler   = dynamixel::PortHandler::getPortHandler(SERIAL_PORT);
     packet_handler = dynamixel::PacketHandler::getPacketHandler(PROTOCOL);

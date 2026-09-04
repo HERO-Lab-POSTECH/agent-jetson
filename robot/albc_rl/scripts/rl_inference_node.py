@@ -16,7 +16,7 @@ DATA FLOW (one 50 Hz tick)
                                                          v
                      NumpyStudentPolicy.act(proprio_20, command_3) -> action(8)
                                                          v
-    policy.joint_target (ABSOLUTE rad)  -> /hero_agent/active_joint{1,2}_position_controller/command
+    policy.joint_target (ABSOLUTE rad)  -> /albc/joint{1,2}_cmd
     action[2:8] * thruster_scale        -> /albc/thruster_cmd   [wire to your thruster mixer]
 
 JOINT COMMAND CONTRACT (never publish the raw action)
@@ -39,7 +39,7 @@ WHAT THIS NODE OWNS vs DELEGATES
   * thruster echo (obs 14:20) ................ builder echoes set_last_action()
   * history(20:66) + integral(66:69)
     + bias_ema(69:72) ........................ NumpyStudentPolicy (state buffers)
-  * command setpoint (obs 0:3) ............... this node (_command, via /rl/command)
+  * command setpoint (obs 0:3) ............... this node (_command, via /albc/rl_command)
   * staleness / non-finite gates ............. this node (_tick gates; holds = no publish)
 
 The 3D integral is the policy runtime's responsibility (leak=0.99, clamp=2.0,
@@ -98,6 +98,7 @@ from sensor_msgs.msg import JointState
 from hero_msgs.msg import hero_agent_sensor
 
 from albc_rl.build_proprio import ProprioBuilder, rotate_imu, rotate_gyro
+from albc_rl.contract import TOPICS
 # pure predicate, deliberately rospy-free so test_arm_guard.py can run it
 # ANYWHERE rather than only on the board -- see arm_guard.py's header
 from albc_rl.arm_guard import over_current_held
@@ -227,7 +228,7 @@ class RLInferenceNode(object):
         self._halt_reason = ""
         self._start_checked = False       # tilt re-checked on the first publishing tick
 
-        # command setpoint (obs 0:3). Default = hold (zero). Wire /rl/command to change.
+        # command setpoint (obs 0:3). Default = hold (zero). Wire /albc/rl_command to change.
         # [roll_att_cmd, pitch_att_cmd, yaw_rate_cmd]  (attitude-only)
         self._command = np.zeros(3, dtype=np.float32)
 
@@ -238,29 +239,29 @@ class RLInferenceNode(object):
         self._tick_ms_ema = 0.0
 
         # --- subscribers ---
-        rospy.Subscriber("/hero_agent/sensors", hero_agent_sensor,
+        rospy.Subscriber(TOPICS["sensors"], hero_agent_sensor,
                          self._on_sensor, queue_size=1)
-        rospy.Subscriber("/albc/joint_states", JointState,
+        rospy.Subscriber(TOPICS["joint_states"], JointState,
                          self._on_joints, queue_size=1)
         # joint_angle_command has published this all along; nothing consumed it, so
         # the 1323.5 mA that preceded the 2026-08-25 arm2 fracture was measured,
         # logged, bagged -- and unwatched.
-        rospy.Subscriber("/joint_currents", Float32MultiArray,
+        rospy.Subscriber(TOPICS["joint_currents"], Float32MultiArray,
                          self._on_currents, queue_size=1)
         if self.use_board_rates:
             # /albc/status is advertised as Float64MultiArray (status_publisher.h)
-            rospy.Subscriber("/albc/status", Float64MultiArray,
+            rospy.Subscriber(TOPICS["albc_status"], Float64MultiArray,
                              self._on_albc_status, queue_size=1)
         # optional external setpoint: [roll_att, pitch_att, yaw_rate]
-        rospy.Subscriber("/rl/command", Float32MultiArray,
+        rospy.Subscriber(TOPICS["rl_command"], Float32MultiArray,
                          self._on_command, queue_size=1)
 
         # --- publishers ---
         self._pub_j1 = rospy.Publisher(
-            "/hero_agent/active_joint1_position_controller/command", Float64, queue_size=1)
+            TOPICS["joint1_cmd"], Float64, queue_size=1)
         self._pub_j2 = rospy.Publisher(
-            "/hero_agent/active_joint2_position_controller/command", Float64, queue_size=1)
-        self._pub_thr = rospy.Publisher("/albc/thruster_cmd", Float32MultiArray, queue_size=1)
+            TOPICS["joint2_cmd"], Float64, queue_size=1)
+        self._pub_thr = rospy.Publisher(TOPICS["thruster_cmd"], Float32MultiArray, queue_size=1)
 
         self._log_startup_banner(weights_dir, student_npz, teacher_npz)
 
@@ -336,7 +337,7 @@ class RLInferenceNode(object):
             rospy.logwarn("start-pose gate DISABLED (~joint1_start_max_rad = %.3f)", limit)
             return True
         try:
-            msg = rospy.wait_for_message("/albc/joint_states", JointState, timeout=5.0)
+            msg = rospy.wait_for_message(TOPICS["joint_states"], JointState, timeout=5.0)
         except rospy.ROSException:
             # Not a reason to abort: the driver being down is a different failure,
             # and _tick already HOLDs while joint_states is stale.
@@ -388,7 +389,7 @@ class RLInferenceNode(object):
 
         if self.start_att_max > 0.0:
             try:
-                msg = rospy.wait_for_message("/hero_agent/sensors",
+                msg = rospy.wait_for_message(TOPICS["sensors"],
                                              hero_agent_sensor, timeout=5.0)
             except rospy.ROSException:
                 # REFUSE, do not skip. This launch deliberately does not start the IMU
@@ -462,7 +463,7 @@ class RLInferenceNode(object):
         A peak-triggered cap fires on every normal transition, which is exactly the
         failure e1_fold_sweep.py hit before its cap was split.
 
-        A missing /joint_currents WARNS and skips rather than halting: an absent
+        A missing /albc/joint_currents WARNS and skips rather than halting: an absent
         signal is a different failure from an over-current one, and halting on it
         would brick every run against an older driver. That is a known gap -- the
         current guard is only live once the driver is publishing. A signal that
@@ -509,7 +510,7 @@ class RLInferenceNode(object):
         if self.cur_max_ma > 0.0 and self.cur_max_s > 0.0:
             if self._joint_cur is None:
                 rospy.logwarn_throttle(
-                    10.0, "no /joint_currents yet -- the over-current guard is NOT "
+                    10.0, "no /albc/joint_currents yet -- the over-current guard is NOT "
                           "active. Is joint_angle_command publishing it?")
             else:
                 now = rospy.get_time()
@@ -524,7 +525,7 @@ class RLInferenceNode(object):
                 # indefinitely with no over-current protection and no word about it.
                 if stale:
                     rospy.logwarn_throttle(
-                        2.0, "/joint_currents STALE %.2f s -- the over-current guard "
+                        2.0, "/albc/joint_currents STALE %.2f s -- the over-current guard "
                              "is running on the last known value (J1 %.0f / J2 %.0f mA). "
                              "The driver logs the read failure; check rosout."
                         % (now - (self._last_cur_t or now),
@@ -640,7 +641,7 @@ class RLInferenceNode(object):
     def _on_reconfigure(self, config, level):
         # live-tune the IMU mounting yaw offset (euler + gyro share this).
         self.imu_yaw_offset = float(np.deg2rad(config.imu_yaw_offset_deg))
-        # policy setpoint (obs 0:3). The /rl/command topic writes the same field;
+        # policy setpoint (obs 0:3). The /albc/rl_command topic writes the same field;
         # last writer wins, both log, and the log line says which. See GyroOffset.cfg
         # for why there is no hidden precedence rule.
         self._command = np.array([

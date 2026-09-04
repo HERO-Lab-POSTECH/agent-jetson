@@ -81,6 +81,7 @@ import os
 import rospy
 from std_msgs.msg import Float32MultiArray
 from hero_msgs.msg import hero_agent_thruster_cmd
+from albc_rl.contract import TOPICS
 
 NUM_THR = 6
 
@@ -417,9 +418,9 @@ class ThrusterMixer(object):
         # stall drops intermediate commands AND may trip the firmware's 300ms
         # watchdog to NEUTRAL -- both fail-safe. Do NOT enlarge the queue (that
         # reintroduces stale-command latency).
-        self._pub = rospy.Publisher("/hero_agent/thruster_pwm",
+        self._pub = rospy.Publisher(TOPICS["thruster_pwm"],
                                     hero_agent_thruster_cmd, queue_size=1)
-        rospy.Subscriber("/albc/thruster_cmd", Float32MultiArray,
+        rospy.Subscriber(TOPICS["thruster_cmd"], Float32MultiArray,
                          self._on_cmd, queue_size=1)
         rospy.loginfo("thruster_mixer up: order(fw<-sim)=%s sign=%s  "
                       "/albc/thruster_cmd -> /hero_agent/thruster_pwm "

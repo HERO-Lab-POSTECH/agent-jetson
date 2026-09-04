@@ -48,6 +48,7 @@ USAGE (on the board, after `source devel/setup.bash`):
 """
 import rospy
 from hero_msgs.msg import hero_agent_thruster_cmd
+from albc_rl.contract import TOPICS
 
 NUM_THR = 6
 RATE_HZ = 20.0   # >3.3 Hz so the firmware 300ms watchdog stays armed
@@ -175,7 +176,7 @@ def main():
             rospy.logwarn("b1_channel_probe: param cleanup failed for %s: %s "
                           "(next run may inherit it)", _p, _e)
 
-    pub = rospy.Publisher("/hero_agent/thruster_pwm",
+    pub = rospy.Publisher(TOPICS["thruster_pwm"],
                           hero_agent_thruster_cmd, queue_size=1)
 
     neutral = build_msg(-1, 0.0)

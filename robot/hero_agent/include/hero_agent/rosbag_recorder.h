@@ -5,6 +5,7 @@
 // 무변경 리팩터: start_rosbag_record/stop_rosbag_record 본문·토픽 인자·폴링 횟수 보존.
 
 #include <ros/ros.h>
+#include "hero_agent/topics.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -30,11 +31,11 @@ public:
         if (rosbag_pid < 0) { rosbag_status_msg = "Fork failed"; return; }
         if (rosbag_pid == 0) {
             execlp("rosbag", "rosbag", "record", "-O", rosbag_file_path.c_str(),
-                   "/albc/status",
-                   "/hero_agent/state",
-                   "/hero_agent/sensors",
-                   "/hero_agent/dvl",
-                   "/joint_currents",
+                   topics::ALBC_STATUS,
+                   topics::STATE,
+                   topics::SENSORS,
+                   topics::DVL,
+                   topics::JOINT_CURRENTS,
                    NULL);
             _exit(1);
         }

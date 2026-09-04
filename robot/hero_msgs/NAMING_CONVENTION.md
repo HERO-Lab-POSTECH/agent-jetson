@@ -27,8 +27,8 @@
 | 펌웨어 센서/상태 | `/hero_agent/sensors`, `/hero_agent/state`, `/hero_agent/dvl`, `/hero_agent/command`, `/hero_agent/key_input` | 📋 RULE-ONLY (펌웨어 계약, flash) |
 | RL 입출력 | `/albc/joint_states`, `/albc/thruster_cmd` | ✅ (이미 모범) |
 | 제어기 상태 | `/albc/status` (구 `/albc_status`) | ✅ APPLIED |
-| RL 명령 | `/rl/command` → `/albc/command` 권장 | 📋 RULE-ONLY (현재 publisher 부재) |
-| 관절 전류 | `/joint_currents` | ✅ APPLIED (절대경로 통일) |
+| RL 명령 | `/albc/rl_command` | ✅ APPLIED |
+| 관절 전류 | `/albc/joint_currents` | ✅ APPLIED |
 
 **근거**: Autoware.Auto Naming Guidelines — "Topics should be namespaced based on the
 function of the node which produces them and not the node(s) which consume them."
@@ -43,8 +43,8 @@ prefix는 멀티로봇·중복 인스턴스를 깨므로 최소화한다. 단 �
 
 **금지: 상대 publish vs 절대 subscribe 불일치** (네임스페이스에 따라 연결이 끊김).
 
-- ✅ `/joint_currents` : publisher(`joint_angle_command.cpp`)·subscriber(`albc_controller.cpp`)
-  모두 절대경로 `/joint_currents` 통일 (구: publisher가 상대 `joint_currents`라 불일치 잠재버그).
+- ✅ `/albc/joint_currents` : publisher(`joint_angle_command.cpp`)·subscriber(`albc_controller.cpp`)
+  모두 절대경로 `/albc/joint_currents` 통일.
 
 **근거**: REP-135 Driver Namespace Practices; leggedrobotics — "Global names should be
 avoided as much as possible."
@@ -59,7 +59,7 @@ avoided as much as possible."
 - 기존 SSOT: `hero_agent/include/hero_agent/topics.h` (`hero::topics::*` 네임스페이스)
 - ✅ `ALBC_STATUS` 상수가 `/albc/status`를 정의하고, publisher가 이 상수를 참조
 - 📋 albc_control·albc_rl의 나머지 raw 리터럴(`/albc/joint_states`, `/albc/thruster_cmd`,
-  `/rl/command` 등)은 점진적으로 이 SSOT 또는 패키지별 상수로 이관
+  `/albc/rl_command` 등)은 점진적으로 이 SSOT 또는 패키지별 상수로 이관
 
 ---
 
