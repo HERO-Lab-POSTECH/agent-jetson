@@ -659,12 +659,14 @@ def test_the_renamed_topics_left_no_old_spelling_behind():
         for fname in files:
             # .md is in the list because leaving it out is what let the rename
             # survive in docs/ARCHITECTURE.md: a reader following that doc would
-            # rostopic-echo a name no node publishes. docs/adr/ is skipped below
-            # -- those files narrate the rename and quote the old names on purpose.
+            # rostopic-echo a name no node publishes.
             if not fname.endswith((".py", ".cpp", ".h", ".ino", ".launch", ".sh",
                                    ".yaml", ".md")):
                 continue
-            if fname == os.path.basename(__file__):
+            # Two files spell the old names on purpose, because finding them IS
+            # the job: this scanner, and the board gate that greps `rostopic list`
+            # for them on the robot. Anything else spelling one is a leak.
+            if fname in (os.path.basename(__file__), "board_gate.sh"):
                 continue
             path = os.path.join(root, fname)
             with open(path) as fh:

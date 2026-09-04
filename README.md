@@ -55,3 +55,17 @@ That runs the ROS-free C++ characterization suite under `tests/characterization/
 plus every pytest suite. The characterization tests pin current behaviour of the
 control law, kinematics, IMU rotation, joint unwrap, and the teleop keymap; they
 exist so a refactor that changes the robot's numbers fails loudly.
+
+Everything above runs anywhere, which is also its limit -- it never touches ROS,
+the board's Python, or the AVR toolchain. The gate that does is board-only:
+
+```bash
+bash tests/board_gate.sh                 # on agent-jetson, before merging
+```
+
+It rebuilds the workspace from clean, re-runs the suite under the board's
+python2.7 + numpy 1.11, brings the three launch layers up as a stack and holds
+them for 30 s each while checking sensor rate, the start gates, the 72D banner
+and that no old topic name is left on the graph, then compiles the firmware and
+records the hex md5 and size. Dry only: it refuses to start if `thruster_scale`
+is not 0, and it never flashes.
