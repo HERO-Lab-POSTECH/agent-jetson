@@ -64,24 +64,12 @@ if _numpy_version_tuple() < _NUMPY_MIN:
     )
 
 
-# Reference band on joint1's accumulated target, for documentation and tests.
-# 4*pi is the TRAINING constraint (joint1_position_cost, limit_rad = 4*pi,
-# budget 0.01 in the deployed run's params/env.yaml). It is NOT enforced here.
-#
-# 2026-08-17: the former np.clip at 6*pi is REMOVED, deliberately.
-#   1. It hid the metric. Truncating the target destroys "how far did this
-#      controller actually try to go", which is exactly the quantity used to
-#      compare TDC / classic PID / RL. The driver now COUNTS it instead, on
-#      /albc/joint_guard, where all controllers pass through one instrument.
-#   2. It manufactured a step command. On a seed already outside the band the
-#      clip turned the first published target into a multi-radian jump
-#      (measured 2026-08-13: seed -21.953 -> first command -18.755, a 3.2 rad
-#      step), and no unwrap rule can absorb a jump larger than pi.
-#   3. The sim has no clamp either (albc_env.py _joint_pos_targets), so this was
-#      a deploy-only divergence from training.
-# The physical ceiling now lives one layer down, in joint_angle_command
-# (~joint1_abort_rad, default 6*pi = 3 turns), which ABORTS the run rather than
-# silently truncating it -- and checks the measured angle, not just the command.
+# joint1's accumulated target carries NO clamp here. 4*pi is the TRAINING
+# constraint (joint1_position_cost, limit_rad = 4*pi) and is documented, not
+# enforced. The former np.clip at 6*pi was removed 2026-08-17 because it hid the
+# comparison metric and manufactured multi-radian step commands; the physical
+# ceiling lives in the driver (~joint1_abort_rad), which ABORTS instead of
+# truncating. Full reasoning: docs/adr/001-joint-unwrap-cable-break.md
 class NumpyStudentPolicy:
     """Drop-in numpy replacement for DeployedStudentPolicy (72D attitude-only).
 
@@ -252,20 +240,8 @@ class NumpyStudentPolicy:
         #   1) accumulate joint PD target with this step's arm action
         #   2) remember this action as prev_action for the next history feature
         # No clamp -- byte-for-byte what the sim does (albc_env.py
-        # _joint_pos_targets += delta). The former np.clip at 6*pi was removed
-        # 2026-08-17 for three reasons, and none of them have changed:
-        #   1. It hid the metric. Truncating the target destroys "how far did this
-        #      controller actually try to go", the quantity used to compare
-        #      TDC / classic PID / RL. The driver COUNTS it instead, on
-        #      /albc/joint_guard, where every controller passes one instrument.
-        #   2. It manufactured a step command. On a seed already outside the band
-        #      the clip turned the first published target into a multi-radian jump
-        #      (measured 2026-08-13: seed -21.953 -> first command -18.755, a
-        #      3.2 rad step), and no unwrap rule absorbs a jump larger than pi.
-        #   3. The sim has no clamp either, so this was a deploy-only divergence.
-        # The physical ceiling lives one layer down in joint_angle_command
-        # (~joint1_abort_rad, default 6*pi = 3 turns), which ABORTS rather than
-        # silently truncating -- and checks the measured angle, not the command.
+        # _joint_pos_targets += delta). The ceiling is the driver's abort, not a
+        # clip here; see the module header and docs/adr/001.
         self._joint_target = self._joint_target + self.delta_scale * action[:2]
         self._prev_action = action.copy()
         return action

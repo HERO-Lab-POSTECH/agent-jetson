@@ -4,33 +4,16 @@
 // exercise it with a bare compiler (no ROS, no catkin), the same way
 // imu_rotation.h and albc_kinematics.h are exercised.
 //
-// WHY THIS EXISTS — the 2026-08-13 J1->J2 cable break
-// ---------------------------------------------------------------------------
-// The driver follows the command topic by accumulating unwrapped deltas into a
-// running absolute_angle. Its init seeded the two halves in DIFFERENT
-// representations of the same angle:
-//     absolute_angle = angle0                         (cumulative encoder value)
-//     prev_commanded = fmod(angle0, 2pi) in [0, 2pi)  (WRAPPED)
-// They differ by k*2pi. The RL node's first command is the CUMULATIVE measured
-// angle, so the first delta is k*2pi -- and the old unwrap removed at most ONE
-// 2pi, leaking (k-1) turns straight into absolute_angle on that first command.
+// CONVENTION (do NOT "fix" without intent): unwrapNearest() removes ANY number
+// of whole turns, not at most one. That is what makes the first command after a
+// seed exact for every k, and it is IDENTICAL to the old single-step rule
+// whenever |delta| < pi -- which is every steady-state tick.
 //
-// Recomputed from the 14 recorded bags of that session this fired at +1, -1 and
-// -3 turns. On the last run the driver's goal was -37.6 rad while the policy had
-// asked for -18.755 -- a value the policy CANNOT produce (its own accumulator is
-// bounded). J1 stalled at -35.54 rad with HW error 0x20 OVERLOAD, having twisted
-// the J1->J2 daisy-chain cable apart.
-//
-// It hid for months because in the normal case the bug returns EXACTLY ZERO: for
-// |angle0| < 2pi the two representations differ by exactly one 2pi and the
-// single-step unwrap cancels it perfectly. 11 of those 14 runs show 0.000. An
-// error that is conditionally zero cannot be found by coverage -- only by
-// feeding it an out-of-band input, which is what test_joint_unwrap.cpp does.
-//
-// unwrapNearest() removes ANY number of turns, so the first-command residual is
-// 0 for every k, and it is IDENTICAL to the old rule whenever |delta| < pi --
-// which is every steady-state tick (the RL accumulator moves at most
-// DELTA_SCALE = 0.10 rad/tick, and the classic publisher is continuous).
+// It replaced a rule that leaked turns into the driver's baseline and twisted
+// the J1->J2 cable apart on 2026-08-13. The failure returns exactly zero in the
+// normal case, which is why it hid for months and why the out-of-band cases in
+// test_joint_unwrap.cpp are the only thing that catches it:
+//   docs/adr/001-joint-unwrap-cable-break.md
 #ifndef ALBC_CONTROL_JOINT_UNWRAP_H
 #define ALBC_CONTROL_JOINT_UNWRAP_H
 
