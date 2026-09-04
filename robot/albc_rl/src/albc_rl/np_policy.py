@@ -28,8 +28,8 @@ from albc_rl import npforward as npf
 from albc_rl.contract import (
     ACTION_DIM, BIAS_EMA_ALPHA, BIAS_EMA_DIM, CONTROL_DT, DELTA_SCALE,
     HIST_ACTION_LEN, HIST_FEAT_DIM, HIST_JB_DIM, HIST_LEN, HIST_STRIDE,
-    INTEGRAL_CLAMP, INTEGRAL_DIM, INTEGRAL_GATED, INTEGRAL_LEAK,
-    INTEGRAL_SIGMA, JOINT1_TRAIN_LIMIT, LATENT_DIM, NOMINAL_JOINT_POS,
+    INTEGRAL_CLAMP, INTEGRAL_DIM, INTEGRAL_LEAK,
+    INTEGRAL_SIGMA, LATENT_DIM, NOMINAL_JOINT_POS,
     POLICY_OBS_DIM, PROPRIO_DIM, TCN_HISTORY, wrap_angle,
 )
 
@@ -252,9 +252,20 @@ class NumpyStudentPolicy:
         #   1) accumulate joint PD target with this step's arm action
         #   2) remember this action as prev_action for the next history feature
         # No clamp -- byte-for-byte what the sim does (albc_env.py
-        # _joint_pos_targets += delta). The cable ceiling is enforced by the
-        # driver, which aborts; see JOINT1_TRAIN_LIMIT above for why truncating
-        # here was both a metric loss and a source of step commands.
+        # _joint_pos_targets += delta). The former np.clip at 6*pi was removed
+        # 2026-08-17 for three reasons, and none of them have changed:
+        #   1. It hid the metric. Truncating the target destroys "how far did this
+        #      controller actually try to go", the quantity used to compare
+        #      TDC / classic PID / RL. The driver COUNTS it instead, on
+        #      /albc/joint_guard, where every controller passes one instrument.
+        #   2. It manufactured a step command. On a seed already outside the band
+        #      the clip turned the first published target into a multi-radian jump
+        #      (measured 2026-08-13: seed -21.953 -> first command -18.755, a
+        #      3.2 rad step), and no unwrap rule absorbs a jump larger than pi.
+        #   3. The sim has no clamp either, so this was a deploy-only divergence.
+        # The physical ceiling lives one layer down in joint_angle_command
+        # (~joint1_abort_rad, default 6*pi = 3 turns), which ABORTS rather than
+        # silently truncating -- and checks the measured angle, not the command.
         self._joint_target = self._joint_target + self.delta_scale * action[:2]
         self._prev_action = action.copy()
         return action
@@ -299,11 +310,11 @@ class NumpyStudentPolicy:
             self._reset_frame = False
         else:
             self._integral = INTEGRAL_LEAK * self._integral
-            if INTEGRAL_GATED:
-                gate = (np.abs(err) < INTEGRAL_SIGMA).astype(np.float32)
-                self._integral = self._integral + gate * err * CONTROL_DT
-            else:
-                self._integral = self._integral + err * CONTROL_DT
+            # Gated accumulation: only error already inside INTEGRAL_SIGMA feeds
+            # the integral. This is the 72D contract -- the ungated form belonged
+            # to 87D and was never reachable here.
+            gate = (np.abs(err) < INTEGRAL_SIGMA).astype(np.float32)
+            self._integral = self._integral + gate * err * CONTROL_DT
             np.clip(self._integral, -INTEGRAL_CLAMP, INTEGRAL_CLAMP, out=self._integral)
 
             # --- ungated EMA bias on the same err3, updated right after the integral ---

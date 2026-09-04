@@ -128,6 +128,12 @@ class RLInferenceNode(object):
         self.use_board_rates = rospy.get_param("~use_board_rates", False)
         self.imu_yaw_offset = float(np.deg2rad(
             float(rospy.get_param("~imu_yaw_offset_deg", 102.0))))
+        # command setpoint (obs 0:3). Default = hold (zero). Wire /albc/rl_command
+        # to change. [roll_att_cmd, pitch_att_cmd, yaw_rate_cmd]  (attitude-only)
+        # Declared BEFORE the dynamic_reconfigure server: Server() fires
+        # _on_reconfigure synchronously with the initial config, so anything that
+        # callback touches has to already exist.
+        self._command = np.zeros(3, dtype=np.float32)
         self._dyn_srv = Server(GyroOffsetConfig, self._on_reconfigure)
         self.sensor_timeout = float(rospy.get_param("~sensor_timeout_s", 0.2))
         self.joint_timeout = float(rospy.get_param("~joint_timeout_s", 0.5))
@@ -227,10 +233,6 @@ class RLInferenceNode(object):
         self._halted = False              # latched: an arm guard tripped
         self._halt_reason = ""
         self._start_checked = False       # tilt re-checked on the first publishing tick
-
-        # command setpoint (obs 0:3). Default = hold (zero). Wire /albc/rl_command to change.
-        # [roll_att_cmd, pitch_att_cmd, yaw_rate_cmd]  (attitude-only)
-        self._command = np.zeros(3, dtype=np.float32)
 
         # terminal status bookkeeping (1 Hz line so the operator can SEE it run)
         self._tick_count = 0
@@ -428,7 +430,7 @@ class RLInferenceNode(object):
 
         return ok
 
-    def _arm_guard(self, target):
+    def _arm_guard(self):
         """Per-tick arm protection. Returns True while it is safe to command joints.
 
         Trips are LATCHED. A guard that only suppresses the offending tick is no
@@ -763,9 +765,13 @@ class RLInferenceNode(object):
             return False
 
         # --- assemble obs and run the policy ------------------------------------
+        # One snapshot per tick. The /albc/rl_command subscriber rebinds
+        # self._command from another thread, so reading it three times could build
+        # the observation from one setpoint and the action from the next.
+        cmd = self._command.copy()
         sensors = {
-            "cmd_att": self._command[0:2],           # roll_att, pitch_att
-            "cmd_yawrate": float(self._command[2]),  # yaw_rate
+            "cmd_att": cmd[0:2],                     # roll_att, pitch_att
+            "cmd_yawrate": float(cmd[2]),            # yaw_rate
             "euler": self._euler,
             "joint_pos": self._joint_pos,
             # no "thruster" key: builder echoes set_last_action()[2:8] itself
@@ -786,7 +792,7 @@ class RLInferenceNode(object):
         # 72D attitude-only: command [roll_att, pitch_att, yaw_rate] passes straight
         # through; the policy runtime does cmd - measured internally and carries the
         # leaky integral as a state buffer (the 87D reorder step no longer exists).
-        action = self.policy.act(proprio, self._command)
+        action = self.policy.act(proprio, cmd)
         if not np.all(np.isfinite(action)):
             rospy.logerr_throttle(
                 1.0, "non-finite action -- resetting policy+builder state, no publish")
@@ -797,7 +803,7 @@ class RLInferenceNode(object):
 
         # --- arm protection, BEFORE anything reaches the joints -------------------
         target = self.policy.joint_target
-        if not self._arm_guard(target):
+        if not self._arm_guard():
             # Zero the thrusters explicitly instead of leaving it to the firmware
             # B2 watchdog: the watchdog needs RL_TIMEOUT_MS of silence to NEUTRAL,
             # and a halt should be immediate. Then publish NOTHING to the joints --

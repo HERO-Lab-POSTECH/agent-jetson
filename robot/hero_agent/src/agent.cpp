@@ -87,9 +87,9 @@ std_msgs::Int8 command_msg;
 // ==============================
 // Teleop (in-process — replaces the old translated-key topic round-trip)
 // Constructed with the prior hardcoded defaults (0.05 / 0.01); main re-applies
-// the teleop/xy_step and teleop/z_step params via setSteps() after loading them.
+// the teleop/z_step param via setSteps() after loading it.
 // ==============================
-TeleopController g_teleop(0.05, 0.01);
+TeleopController g_teleop(0.01);
 std::atomic<bool> g_target_dirty(false);
 
 // Signal flag (async-signal-safe)
@@ -121,7 +121,10 @@ void key_input_callback(const std_msgs::Int8::ConstPtr& msg)
     // 정확: firmware가 State_all→/hero_agent/state.State_addit로 실제 상태를 되보내고
     // state_monitor.onState가 그걸 미러하므로(노드 로컬 추론 아님).
     if (ch == 'R') {
-        csv_logger.toggle();
+        // Debounced like every other toggle. This branch returns before the
+        // KEYMAP lookup, so it used to skip the gate entirely and a key repeat
+        // could open and close the CSV file within one keypress.
+        if (debounce_ok(ch)) csv_logger.toggle();
         return;
     }
 
@@ -160,20 +163,18 @@ int main(int argc, char** argv)
     // the prior hardcoded values, preserving behavior when no YAML is present.
     // ==============================
     ros::NodeHandle pnh("~");
-    double xy_step, z_step;
+    double z_step;
     int loop_rate_hz, csv_rate_hz;
     double debounce_sec, log_period;
     std::string base_results;
-    pnh.param<double>("teleop/xy_step", xy_step, 0.05);
     pnh.param<double>("teleop/z_step", z_step, 0.01);
     pnh.param<int>("loop_rate_hz", loop_rate_hz, 100);
     pnh.param<int>("csv_rate_hz", csv_rate_hz, 50);
     pnh.param<double>("debounce_sec", debounce_sec, 0.5);
     pnh.param<double>("log_period", log_period, 0.5);
     pnh.param<std::string>("results_dir", base_results, std::string("/home/nvidia/catkin_ws/agent_results"));
-    (void)log_period;  // monitor render does not throttle yet; param reserved for future use
 
-    g_teleop.setSteps(xy_step, z_step);
+    g_teleop.setSteps(z_step);
     DEBOUNCE_SEC = debounce_sec;
     // CSV gating divisor: prior code wrote every 2nd 100Hz iter (100/50). Generalize.
     int csv_div = (csv_rate_hz > 0) ? (loop_rate_hz / csv_rate_hz) : 1;
@@ -210,6 +211,7 @@ int main(int argc, char** argv)
 
     ros::Rate loop_rate(loop_rate_hz);
     int csv_counter = 0;
+    ros::Time last_hud = ros::Time::now();   // HUD repaint pacing (log_period)
     int prev_record_flag = 0;
 
     printf("\n  Agent Initialized (V3 key translation + teleop + monitor)\n\n");
@@ -226,7 +228,7 @@ int main(int argc, char** argv)
                 rosbag_recorder.start(rosbag_file_path);
                 rosbag_recorder.setStatus(rosbag_recorder.active() ? "Recording started" : "Rosbag failed, CSV only");
                 // Open CSV independently of rosbag
-                csv_logger.open(albc_csv_path, state_monitor);
+                csv_logger.open(albc_csv_path);
                 // Reset ALBC active flag for new recording
                 state_monitor.resetAlbc();
             } else {
@@ -242,8 +244,8 @@ int main(int argc, char** argv)
         if (g_target_dirty.exchange(false)) {
             hero_msgs::hero_agent_dvl msg_target;
             msg_target.command = 0;
-            msg_target.TARGET_X = g_teleop.x();
-            msg_target.TARGET_Y = g_teleop.y();
+            msg_target.TARGET_X = 0.0;   // teleop never moved xy (see TeleopController)
+            msg_target.TARGET_Y = 0.0;
             msg_target.TARGET_Z = g_teleop.z();
             pub_target.publish(msg_target);
         }
@@ -254,7 +256,15 @@ int main(int argc, char** argv)
             csv_counter = 0;
         }
 
-        state_monitor.print(csv_logger.flag(), rosbag_recorder.rosbag_status(), csv_logger.csv_status());
+        // HUD at log_period (yaml default 0.5 s), not at loop_rate_hz. The whole
+        // screen was being repainted 100x a second to show values that change far
+        // more slowly; log_period was already declared for exactly this and had
+        // been parsed and discarded.
+        if ((ros::Time::now() - last_hud).toSec() >= log_period) {
+            state_monitor.print(csv_logger.flag(), rosbag_recorder.rosbag_status(),
+                                csv_logger.csv_status());
+            last_hud = ros::Time::now();
+        }
         loop_rate.sleep();
     }
 

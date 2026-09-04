@@ -48,7 +48,6 @@ public:
         sensor_roll  = static_cast<float>(out.roll);
         sensor_pitch = static_cast<float>(out.pitch);
         sensor_yaw   = msg->YAW;
-        sensor_depth = msg->DEPTH;
     }
 
     // ==============================
@@ -167,7 +166,6 @@ private:
 
     // IMU 캐시 (/hero_agent/sensors)
     float sensor_roll = 0.0f, sensor_pitch = 0.0f, sensor_yaw = 0.0f;
-    float sensor_depth = 0.0f;
     // 102.0 deg CONFIRMED 2026-08-12 (was -78.0, itself 180 deg out; before that
     // 45.0). Overwritten at startup from /albc_controller/imu_yaw_offset; this is
     // only the fallback.

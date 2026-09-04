@@ -115,9 +115,10 @@ struct MeasuredState {
     double abs_meas;            // unwrapped cumulative measured angle (rad)
     double vel;                 // differentiated velocity (rad/s)
     bool   init;
+    ros::Time last_ok;          // stamp of the last SUCCESSFUL read of THIS joint
 };
-static MeasuredState meas1 = {0.0, 0.0, 0.0, false};
-static MeasuredState meas2 = {0.0, 0.0, 0.0, false};
+static MeasuredState meas1 = {0.0, 0.0, 0.0, false, ros::Time()};
+static MeasuredState meas2 = {0.0, 0.0, 0.0, false, ros::Time()};
 
 static dynamixel::PortHandler*   port_handler   = nullptr;
 static dynamixel::PacketHandler* packet_handler = nullptr;
@@ -227,9 +228,16 @@ bool readPosition(uint8_t id, int32_t* out) {
 // loop period, measured by the caller). Mirrors the sim's raw-cumulative joint_pos.
 // Returns false when the serial read failed -- the caller must skip publishing this
 // cycle so a glitch never corrupts the RL observation.
-bool updateMeasured(MeasuredState& m, uint8_t id, double dt) {
+bool updateMeasured(MeasuredState& m, uint8_t id, const ros::Time& now_t) {
     int32_t raw_pos = 0;
     if (!readPosition(id, &raw_pos)) return false;
+    // dt spans THIS joint's last successful read, not the loop period. When one
+    // joint's read fails, its next delta covers two cycles; dividing that by one
+    // cycle reported a velocity spike twice the real one. Same clamps as before,
+    // so a run with no read failures is numerically unchanged.
+    double dt = (now_t - m.last_ok).toSec();
+    if (dt < 0.005) dt = 0.005;
+    if (dt > 1.0)   dt = 1.0;
     double wrapped = DXL_TO_RAD(raw_pos);               // raw reading, may wrap at +-pi/2pi
     // normalize to [0, 2pi) for a stable wrap comparison
     double w = fmod(wrapped, 2.0 * M_PI);
@@ -239,6 +247,7 @@ bool updateMeasured(MeasuredState& m, uint8_t id, double dt) {
         m.abs_meas = wrapped;     // seed cumulative with the raw reading
         m.vel = 0.0;
         m.init = true;
+        m.last_ok = now_t;
         return true;
     }
     // same rule as updateJoint(). Consecutive readings are always well under pi
@@ -248,6 +257,7 @@ bool updateMeasured(MeasuredState& m, uint8_t id, double dt) {
     m.abs_meas += delta;
     m.vel = delta / dt;
     m.prev_meas_wrapped = w;
+    m.last_ok = now_t;
     return true;
 }
 
@@ -270,6 +280,14 @@ void tripAbort(const char* what, double value) {
 }
 
 void updateJoint(JointState& joint, double commanded_angle) {
+    // Every comparison below fails open for NaN, so a non-finite command would
+    // reach DXL_FROM_RAD() and be written to the servo. This is the last
+    // boundary before the wire; drop it here. Finite commands are unaffected.
+    if (!std::isfinite(commanded_angle)) {
+        ROS_WARN_THROTTLE(1.0, "joint ID %d: non-finite command dropped", joint.dxl_id);
+        return;
+    }
+
     // Guard latched: stop following the topic. Holding the last goal is the
     // abort behaviour -- see tripAbort().
     if (g_abort_latched) return;
@@ -460,7 +478,6 @@ int main(int argc, char **argv) {
     // RL-DEPLOY: differentiate with the MEASURED loop period, not 1/LOOP_HZ -- when
     // the loop runs long (serial latency) a fixed dt systematically overestimates
     // the published joint velocity, which feeds the RL observation.
-    ros::Time prev_loop_t = ros::Time::now();
 
     while (ros::ok()) {
         // Restore full speed after startup ramp completes (timer starts on first command)
@@ -489,12 +506,8 @@ int main(int argc, char **argv) {
 
         // RL-DEPLOY: read measured positions, accumulate + differentiate, publish JointState.
         ros::Time now_t = ros::Time::now();
-        double dt = (now_t - prev_loop_t).toSec();
-        prev_loop_t = now_t;
-        if (dt < 0.005) dt = 0.005;          // clamp against timer glitches; the init
-        if (dt > 1.0)   dt = 1.0;            // path ignores dt entirely
-        bool ok1 = updateMeasured(meas1, JOINT1_ID, dt);
-        bool ok2 = updateMeasured(meas2, JOINT2_ID, dt);
+        bool ok1 = updateMeasured(meas1, JOINT1_ID, now_t);
+        bool ok2 = updateMeasured(meas2, JOINT2_ID, now_t);
         if (ok1 && ok2) {
             consecutive_read_fail = 0;   // RL-DEPLOY: a good read clears the outage counter
             sensor_msgs::JointState js;

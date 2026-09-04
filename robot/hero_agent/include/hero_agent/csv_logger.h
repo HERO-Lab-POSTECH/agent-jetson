@@ -34,7 +34,7 @@ public:
     //   col  2.. 9  : data[0..7]  target/current roll·pitch, target/current x·y
     //   col 10..12  : data[8..10] angular_vel_roll/pitch/yaw
     //   col 13..17  : targetDepth, currentDepth, sensorRoll, sensorPitch, sensorYaw
-    void open(const std::string& path, StateMonitor& /*mon*/)
+    void open(const std::string& path)
     {
         albc_csv_path = path;
         std::lock_guard<std::mutex> lock(csv_mutex);
@@ -67,7 +67,7 @@ public:
         double current_time = ros::Time::now().toSec();
         double data[11] = {0};
         {
-            bool active = false;
+            bool active = false;   // copyAlbc's out-param; the CSV row does not carry it
             mon.copyAlbc(data, active);
         }
 

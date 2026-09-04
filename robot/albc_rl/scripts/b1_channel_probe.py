@@ -244,8 +244,6 @@ def main():
             rospy.logerr("b1_channel_probe: ~channels=%r parsed empty -- ALL-NEUTRAL", channels_str)
             send_neutral()
             return
-        if not levels:
-            levels = [level]
         # pad levels: repeat last value (or single value for all channels)
         if len(levels) < len(channels):
             levels = levels + [levels[-1]] * (len(channels) - len(levels))

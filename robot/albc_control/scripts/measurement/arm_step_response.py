@@ -444,13 +444,15 @@ def main():
 
     meter = StepResponseMeter(args.port, args.baud, args.joint, other_hold=not args.no_hold)
 
-    # SIGINT -> 즉시 e-stop
+    # SIGINT/SIGTERM/SIGHUP -> 즉시 e-stop. SIGINT 만 잡던 시절엔 kill(기본
+    # SIGTERM)이나 터미널 종료(SIGHUP)로 죽으면 torque 가 켜진 채 남았다.
     def _sigint(signum, frame):
         print("\n[INT] 인터럽트 — e-stop 실행")
         meter.emergency_stop()
         meter.close()
         sys.exit(130)
-    signal.signal(signal.SIGINT, _sigint)
+    for _sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(_sig, _sigint)
 
     log_rows = []
     achieved_rates = []
