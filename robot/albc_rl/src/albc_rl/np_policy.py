@@ -3,8 +3,8 @@
 Mirror of student_inference.py's DeployedStudentPolicy, but torch-free. Loads weights
 from the .npz produced by export_golden.py. Runs on Jetson TX2 (Python 3.5, numpy 1.11).
 
-The contract constants are duplicated here (frozen at training time) so this module is
-self-contained on the robot -- it does NOT import student_inference.py (which needs torch).
+The frozen contract is shared through albc_rl.contract; this module does NOT import
+student_inference.py (which needs torch).
 
 72D attitude-only contract (extracted from the marinegym-isaaclab attitude_only sim):
   policy obs dim : 72  (20 proprio + 46 history + 3 integral + 3 bias_ema)
@@ -24,7 +24,14 @@ from collections import deque
 
 import numpy as np
 
-import npforward as npf
+from albc_rl import npforward as npf
+from albc_rl.contract import (
+    ACTION_DIM, BIAS_EMA_ALPHA, BIAS_EMA_DIM, CONTROL_DT, DELTA_SCALE,
+    HIST_ACTION_LEN, HIST_FEAT_DIM, HIST_JB_DIM, HIST_LEN, HIST_STRIDE,
+    INTEGRAL_CLAMP, INTEGRAL_DIM, INTEGRAL_GATED, INTEGRAL_LEAK,
+    INTEGRAL_SIGMA, JOINT1_TRAIN_LIMIT, LATENT_DIM, NOMINAL_JOINT_POS,
+    POLICY_OBS_DIM, PROPRIO_DIM, TCN_HISTORY, wrap_angle,
+)
 
 
 # ---- numpy version floor (board deploy = 1.11; dev = 2.x) ----------------------------
@@ -57,28 +64,6 @@ if _numpy_version_tuple() < _NUMPY_MIN:
     )
 
 
-# ---- frozen contract constants (must match student_inference.py / attitude_only sim) ----
-POLICY_OBS_DIM = 72
-PROPRIO_DIM = 20
-LATENT_DIM = 9
-ACTION_DIM = 8
-CONTROL_DT = 0.02
-
-HIST_LEN = 3
-HIST_ACTION_LEN = 2
-HIST_STRIDE = 3
-HIST_FEAT_DIM = 18          # per-step history feature width
-HIST_JB_DIM = 10            # joint+body slice [0:10] used for jb_hist
-INTEGRAL_DIM = 3
-INTEGRAL_LEAK = 0.99
-INTEGRAL_CLAMP = 2.0
-INTEGRAL_GATED = True
-INTEGRAL_SIGMA = np.array([0.10, 0.10, 0.10], dtype=np.float32)  # [att_rp, att_rp, yaw_vel]
-BIAS_EMA_DIM = 3
-BIAS_EMA_ALPHA = 0.99       # cfg.reward.bias_ema_alpha (incumbent env.yaml:389)
-NOMINAL_JOINT_POS = np.array([0.0, np.pi / 2.0], dtype=np.float32)
-DELTA_SCALE = 0.10
-TCN_HISTORY = 9
 # Reference band on joint1's accumulated target, for documentation and tests.
 # 4*pi is the TRAINING constraint (joint1_position_cost, limit_rad = 4*pi,
 # budget 0.01 in the deployed run's params/env.yaml). It is NOT enforced here.
@@ -97,14 +82,6 @@ TCN_HISTORY = 9
 # The physical ceiling now lives one layer down, in joint_angle_command
 # (~joint1_abort_rad, default 6*pi = 3 turns), which ABORTS the run rather than
 # silently truncating it -- and checks the measured angle, not just the command.
-JOINT1_TRAIN_LIMIT = 4.0 * np.pi
-
-
-def _wrap_angle(a):
-    """Wrap to [-pi, pi] via atan2(sin, cos) (matches torch sim exactly)."""
-    return np.arctan2(np.sin(a), np.cos(a))
-
-
 class NumpyStudentPolicy:
     """Drop-in numpy replacement for DeployedStudentPolicy (72D attitude-only).
 
@@ -283,8 +260,12 @@ class NumpyStudentPolicy:
         return action
 
     def _assemble_obs(self, proprio_20, cmd_3):
-        assert proprio_20.shape == (PROPRIO_DIM,)
-        assert cmd_3.shape == (INTEGRAL_DIM,)
+        if proprio_20.shape != (PROPRIO_DIM,):
+            raise ValueError("proprio_20 shape %s != (%d,)"
+                             % (proprio_20.shape, PROPRIO_DIM))
+        if cmd_3.shape != (INTEGRAL_DIM,):
+            raise ValueError("cmd_3 shape %s != (%d,)"
+                             % (cmd_3.shape, INTEGRAL_DIM))
         proprio_20 = proprio_20.astype(np.float32)
 
         euler = proprio_20[3:6]                 # roll, pitch, yaw
@@ -294,7 +275,7 @@ class NumpyStudentPolicy:
 
         # --- history feature (18D), computed with q_des_{t-1} (pre-PD-update target) ---
         joint_pos_error = self._joint_target - joint_pos                  # [0:2]
-        att_rp_err = _wrap_angle(cmd_3[:2] - euler[:2])                   # [4:6]
+        att_rp_err = wrap_angle(cmd_3[:2] - euler[:2])                    # [4:6]
         yaw_rate_err = cmd_3[2] - ang_vel_b[2]                            # [6]
         feat = np.concatenate([
             joint_pos_error,                     # 2
@@ -337,7 +318,9 @@ class NumpyStudentPolicy:
         jb_hist = np.concatenate([f[:HIST_JB_DIM] for f in buf])               # 10 x 3 = 30
         act_hist = np.concatenate([f[HIST_JB_DIM:] for f in buf[-HIST_ACTION_LEN:]])  # 8 x 2 = 16
         obs = np.concatenate([proprio_20, jb_hist, act_hist, self._integral, self._bias_ema])
-        assert obs.shape[0] == POLICY_OBS_DIM, obs.shape[0]
+        if obs.shape[0] != POLICY_OBS_DIM:
+            raise ValueError("obs dim %d != POLICY_OBS_DIM %d"
+                             % (obs.shape[0], POLICY_OBS_DIM))
 
         # --- stride ring buffer: record AFTER assembling, every HIST_STRIDE-th step ---
         # The sim records in _pre_physics_step (albc_env.py:751), so a feature derived

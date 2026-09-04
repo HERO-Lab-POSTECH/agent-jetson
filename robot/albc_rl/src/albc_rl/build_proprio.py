@@ -28,7 +28,7 @@ The 87D build recomputed the leaky integral from proprio indices (measured_indic
 command_to_integral_order). The attitude_only sim does NOT: it carries `_error_integral`
 as a STATE BUFFER updated each step (albc_env.py _get_rewards), not derived from proprio.
 So this builder produces ONLY the 20D proprio; the 3D integral is owned by the policy
-runtime (numpy_port np_policy), which must replicate the sim recurrence:
+runtime (albc_rl.np_policy), which must replicate the sim recurrence:
 
     err   = [roll_att_err, pitch_att_err, yaw_rate_err]   (cmd - measured)
             measured = euler[roll,pitch], ang_vel_b[2]
@@ -49,12 +49,10 @@ PhysX ground-truth rates; we accept the noise-characteristic gap as part of sim-
 """
 import numpy as np
 
-# ---- frozen geometry / estimator constants (must match sim + board) ----
-L_LINK = 0.233          # HERO_AGENT_ALBC_LINK1/2_LENGTH (l1 == l2)
-CONTROL_DT = 0.02       # 50 Hz
-LPF_ALPHA = 0.2         # board attitude_controller.h LPF on derived rates
-
-PROPRIO_DIM = 20        # 72D attitude-only current proprioception
+from albc_rl.contract import (
+    CONTROL_DT, L_LINK, LPF_ALPHA, PROPRIO_DIM, THR_FILTER_DT,
+    THR_TAU_DOWN, THR_TAU_UP, wrap_angle,
+)
 
 # ---- thruster first-order lag (obs echo 14:20 -- must match sim byte-for-byte) ----
 # The sim feeds obs[14:20] the FILTERED thruster state, not the raw command:
@@ -80,16 +78,6 @@ PROPRIO_DIM = 20        # 72D attitude-only current proprioception
 #     "verified 2026-07-02" pin here predates 9a2768c9 and was never re-checked
 #     against it.
 #   target = raw command clamped to [-1, 1]; recurrence: s += (dt/tau)*(target - s).
-THR_TAU_UP = 0.1
-THR_TAU_DOWN = 0.05
-THR_FILTER_DT = 0.02
-
-
-def _wrap(a):
-    """Wrap angle(s) to (-pi, pi]. Used so yaw-rate across the +-pi seam is small."""
-    return np.arctan2(np.sin(a), np.cos(a))
-
-
 def rotate_imu(ROLL, PITCH, YAW, offset_rad):
     """Board-frame IMU correction. Transcription of imu_rotation.h rotateImu().
 
@@ -216,7 +204,7 @@ class ProprioBuilder:
         # minute of yawing (measured 12.5 rad = 7.71 sigma out). Wrapping HERE fixes all
         # four sites at once: proprio obs[5] plus its three history copies obs[29,39,49],
         # which carry `euler` whole. .copy() because s["euler"] may be the caller's array.
-        euler[2] = _wrap(euler[2])
+        euler[2] = wrap_angle(euler[2])
         jpos = np.asarray(s["joint_pos"], dtype=np.float32).reshape(2)
 
         # angular velocity (obs 6:9): prefer the firmware raw gyro (sim root_ang_vel_b
@@ -264,7 +252,9 @@ class ProprioBuilder:
             np.array([manip], np.float32),       # 13   manipulability
             thr,                                 # 14:20 thruster echo
         ]).astype(np.float32)
-        assert out.shape[0] == PROPRIO_DIM, (out.shape[0], PROPRIO_DIM)
+        if out.shape[0] != PROPRIO_DIM:
+            raise ValueError("proprio dim %d != PROPRIO_DIM %d"
+                             % (out.shape[0], PROPRIO_DIM))
         return out
 
     # ------------------------------------------------------------------ internals
@@ -298,7 +288,7 @@ class ProprioBuilder:
         """
         if prev is None:
             return np.zeros_like(cur)
-        delta = _wrap(cur - prev) if wrap else (cur - prev)
+        delta = wrap_angle(cur - prev) if wrap else (cur - prev)
         raw = delta / CONTROL_DT
         lpf_state[:] = (1.0 - LPF_ALPHA) * lpf_state + LPF_ALPHA * raw
         return lpf_state.copy()

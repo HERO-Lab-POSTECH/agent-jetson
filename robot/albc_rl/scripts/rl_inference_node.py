@@ -50,7 +50,7 @@ straight through; it does NOT reorder or recompute either buffer.
 ROSPARAMS (all defaults are field-safe)
 ---------------------------------------
   ~encoder_type       : "tcn" | "gru"             (default gru)
-  ~weights_dir        : dir with weights_*.npz    (default ../numpy_port)
+  ~weights_dir        : dir with weights_*.npz    (default albc_rl/numpy_port)
   ~control_hz         : 50
   ~use_board_rates    : false  (true => trust /albc/status angular vel [8:11];
                                 that topic is std_msgs/Float64MultiArray)
@@ -91,21 +91,17 @@ import traceback
 
 import numpy as np
 import rospy
+import rospkg
 from std_msgs.msg import Float64, Float32MultiArray, Float64MultiArray
 from sensor_msgs.msg import JointState
 
 from hero_msgs.msg import hero_agent_sensor
 
-# local modules (numpy_port is a sibling of ros_node/)
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, _HERE)                                   # build_proprio
-sys.path.insert(0, os.path.join(_HERE, "..", "numpy_port")) # np_policy, npforward
-
-from build_proprio import ProprioBuilder, rotate_imu, rotate_gyro  # noqa: E402
+from albc_rl.build_proprio import ProprioBuilder, rotate_imu, rotate_gyro
 # pure predicate, deliberately rospy-free so test_arm_guard.py can run it
 # ANYWHERE rather than only on the board -- see arm_guard.py's header
-from arm_guard import over_current_held  # noqa: E402
-from np_policy import NumpyStudentPolicy, DELTA_SCALE  # noqa: E402
+from albc_rl.arm_guard import over_current_held
+from albc_rl.np_policy import NumpyStudentPolicy, DELTA_SCALE
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
 
@@ -126,7 +122,7 @@ class RLInferenceNode(object):
         # numpy_port/ predates the bias_ema obs and would fail the contract check.
         self.encoder_type = rospy.get_param("~encoder_type", "gru")
         weights_dir = rospy.get_param(
-            "~weights_dir", os.path.join(_HERE, "..", "numpy_port"))
+            "~weights_dir", rospkg.RosPack().get_path('albc_rl') + '/numpy_port')
         self.hz = float(rospy.get_param("~control_hz", 50.0))
         self.use_board_rates = rospy.get_param("~use_board_rates", False)
         self.imu_yaw_offset = float(np.deg2rad(

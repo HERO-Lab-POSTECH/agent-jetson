@@ -15,9 +15,10 @@ import os
 import numpy as np
 import pytest
 
-from np_policy import NumpyStudentPolicy, NOMINAL_JOINT_POS, DELTA_SCALE
+from albc_rl.np_policy import NumpyStudentPolicy, NOMINAL_JOINT_POS, DELTA_SCALE
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+WEIGHTS_DIR = os.path.join(HERE, "..", "numpy_port")
 
 
 @pytest.fixture(scope="module", params=["gru", "tcn"])
@@ -26,8 +27,8 @@ def pol(request):
     # fallback. Every API guard below must hold for whichever one the node loads.
     enc = request.param
     return NumpyStudentPolicy(
-        os.path.join(HERE, "weights_%s.npz" % enc),
-        os.path.join(HERE, "weights_teacher.npz"),
+        os.path.join(WEIGHTS_DIR, "weights_%s.npz" % enc),
+        os.path.join(WEIGHTS_DIR, "weights_teacher.npz"),
         enc,
     )
 
@@ -114,7 +115,7 @@ def test_no_runaway_when_arm_fixed_and_attitude_level(pol):
 def test_bias_ema_tracks_err3_and_lands_at_obs_69_72(pol):
     # The 72D bump: obs[69:72] is an ungated EMA over the SAME err3 the integral
     # uses (roll err, pitch err, yaw-rate err), alpha=0.99, zeroed on reset.
-    from np_policy import POLICY_OBS_DIM, BIAS_EMA_ALPHA
+    from albc_rl.np_policy import POLICY_OBS_DIM, BIAS_EMA_ALPHA
     pol.reset()
     proprio = np.zeros(20, dtype=np.float32)
     proprio[3:6] = [0.1, -0.2, 0.0]     # euler: roll, pitch, yaw
@@ -153,7 +154,7 @@ def test_history_is_never_same_tick_fresh(pol):
     history 20 ms fresher than anything training produced. act_hist is the sharpest
     probe: it is the stored prev_action verbatim, so a same-tick leak shows up exactly.
     """
-    from np_policy import HIST_STRIDE
+    from albc_rl.np_policy import HIST_STRIDE
     pol.reset()
     proprio = np.zeros(20, dtype=np.float32)
     proprio[10] = np.pi / 2.0

@@ -23,7 +23,7 @@ Run on this Mac (pure numpy, no ROS, no torch):
 import numpy as np
 import pytest
 
-from build_proprio import ProprioBuilder, manipulability, L_LINK, PROPRIO_DIM
+from albc_rl.build_proprio import ProprioBuilder, manipulability, L_LINK, PROPRIO_DIM
 
 ATOL = 1e-6
 DT = 0.02            # 50 Hz, CONTROL_DT
@@ -212,20 +212,20 @@ def test_no_linvel_in_proprio():
 # the same correction before building proprio, or the policy sees a frame it
 # was never trained on.
 def test_rotate_imu_zero_offset_negates_pitch():
-    from build_proprio import rotate_imu
+    from albc_rl.build_proprio import rotate_imu
     # offset 0: roll passes, PITCH is NEGATED (pinned sign), yaw passes.
     out = rotate_imu(0.1, 0.2, 0.3, 0.0)
     np.testing.assert_allclose(out, [0.1, -0.2, 0.3], atol=ATOL)
 
 
 def test_rotate_imu_yaw_passthrough_any_offset():
-    from build_proprio import rotate_imu
+    from albc_rl.build_proprio import rotate_imu
     out = rotate_imu(0.5, -0.4, 1.234, np.deg2rad(45.0))
     assert out[2] == pytest.approx(1.234, abs=ATOL)
 
 
 def test_rotate_imu_45deg_pinned_golden():
-    from build_proprio import rotate_imu
+    from albc_rl.build_proprio import rotate_imu
     # hand-computed against imu_rotation.h: raw=(0.1, -0.2), c=s=sqrt(2)/2
     #   roll  = ( 0.1 - 0.2) * 0.70710678 = -0.0707106781
     #   pitch = (-0.1 - 0.2) * 0.70710678 = -0.2121320344
@@ -235,7 +235,7 @@ def test_rotate_imu_45deg_pinned_golden():
 
 
 def test_rotate_imu_matches_cpp_reference_sweep():
-    from build_proprio import rotate_imu
+    from albc_rl.build_proprio import rotate_imu
 
     def ref(ROLL, PITCH, YAW, off):
         # independent transcription of imu_rotation.h rotateImu()
@@ -376,7 +376,7 @@ def test_reset_clears_rate_estimators():
 # Key invariant: r (=GYRO_Z, yaw rate) is the rotation-axis component of the
 # z-axis yaw offset and is therefore INVARIANT -- passed through verbatim.
 # This is the policy's only yaw-tracking signal (obs[8]).
-from build_proprio import rotate_gyro
+from albc_rl.build_proprio import rotate_gyro
 
 
 def test_rotate_gyro_zero_offset_only_pitch_negated():

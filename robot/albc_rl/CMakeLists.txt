@@ -9,6 +9,8 @@ find_package(catkin REQUIRED COMPONENTS
   dynamic_reconfigure
 )
 
+catkin_python_setup()
+
 generate_dynamic_reconfigure_options(
   cfg/GyroOffset.cfg
 )
@@ -25,8 +27,6 @@ catkin_package(
 # Python-only package: install the node + helper scripts.
 catkin_install_python(PROGRAMS
   scripts/rl_inference_node.py
-  scripts/build_proprio.py
-  scripts/arm_guard.py
   scripts/thruster_mixer.py
   scripts/b1_channel_probe.py
   scripts/hold_joint.py

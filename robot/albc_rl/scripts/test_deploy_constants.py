@@ -35,6 +35,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROBOT = os.path.normpath(os.path.join(HERE, "..", ".."))   # .../robot
 TAM_JSON = os.path.join(HERE, "deployed_tam.json")
 MIXER = os.path.join(HERE, "thruster_mixer.py")
+NUMPY_PORT = os.path.join(ROBOT, "albc_rl", "numpy_port")
 
 # Every site that carries an imu_yaw_offset number, and how to pull it out.
 # path relative to robot/, regex whose group(1) is the number.
@@ -161,6 +162,17 @@ def test_deployed_tam_carries_its_provenance():
     for k in ("run_path", "checkpoint", "checkpoint_sha256", "source_file_sha256", "trained"):
         assert p.get(k), "provenance.%s is missing" % k
     assert len(p["checkpoint_sha256"]) == 64
+
+
+def test_pack_manifest_never_ships_board_code():
+    """Deployment packs carry artifacts, never executable board policy code."""
+    manifests = [fn for fn in os.listdir(NUMPY_PORT)
+                 if fn.startswith("MANIFEST.") and fn.endswith(".json")]
+    assert manifests, "numpy_port has no deployment manifests"
+    for fn in manifests:
+        with open(os.path.join(NUMPY_PORT, fn)) as f:
+            files = json.load(f)["files"]
+        assert "np_policy.py" not in files, "%s ships board code" % fn
 
 
 # --------------------------------------------------------------------------

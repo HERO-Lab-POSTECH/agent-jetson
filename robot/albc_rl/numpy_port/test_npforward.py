@@ -9,7 +9,7 @@ import os
 import numpy as np
 import pytest
 
-import npforward as npf
+from albc_rl import npforward as npf
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ATOL = 1e-5
@@ -48,7 +48,7 @@ def test_tcn():
     g = _load("golden/golden_tcn.npz")
     # The shipped TCN pack is 69D (pre-bias_ema plant); the contract is now 72D. Passing
     # this test on an artifact the loader would reject is a false green, so skip loudly.
-    from np_policy import POLICY_OBS_DIM
+    from albc_rl.np_policy import POLICY_OBS_DIM
     if g["input_window"].shape[-1] != POLICY_OBS_DIM:
         print("  [SKIP] TCN pack is %dD, contract is %dD -- stale, not deployable"
               % (g["input_window"].shape[-1], POLICY_OBS_DIM))
@@ -88,7 +88,7 @@ def test_tcn():
 
 def _tcn_pack_is_current():
     """True only if the TCN golden input matches the current POLICY_OBS_DIM."""
-    from np_policy import POLICY_OBS_DIM
+    from albc_rl.np_policy import POLICY_OBS_DIM
     try:
         g = _load("golden/golden_tcn.npz")
     except IOError:
@@ -124,7 +124,7 @@ def test_gru():
 
 def _gru_golden_is_current():
     """True only if the GRU golden/weights match the current POLICY_OBS_DIM (72)."""
-    from np_policy import POLICY_OBS_DIM
+    from albc_rl.np_policy import POLICY_OBS_DIM
     try:
         g = _load("golden/golden_gru.npz")
         w = _load("weights_gru.npz")
@@ -139,7 +139,7 @@ if __name__ == "__main__":
     if _tcn_pack_is_current():
         test_tcn()
     else:
-        from np_policy import POLICY_OBS_DIM
+        from albc_rl.np_policy import POLICY_OBS_DIM
         g = _load("golden/golden_tcn.npz")
         print("== student TCN encoder ==")
         print("  [SKIP] TCN pack is %dD, contract is %dD -- stale, not deployable"

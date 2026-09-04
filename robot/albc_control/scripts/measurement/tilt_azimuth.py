@@ -93,10 +93,10 @@ import numpy as np
 
 # rotate_imu lives in the albc_rl package; import it rather than re-transcribe.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_RL_SCRIPTS = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "albc_rl", "scripts"))
-if _RL_SCRIPTS not in sys.path:
-    sys.path.insert(0, _RL_SCRIPTS)
-from build_proprio import rotate_imu  # noqa: E402
+_RL_SRC = os.path.normpath(os.path.join(_HERE, "..", "..", "..", "albc_rl", "src"))
+if _RL_SRC not in sys.path:
+    sys.path.insert(0, _RL_SRC)
+from albc_rl.build_proprio import rotate_imu  # noqa: E402
 
 # J1 Homing Offset (EEPROM addr 20) the `check` suggestions are measured against.
 # CONFIRMED 2026-08-12 by two link1 points 90 deg apart (residual 0.3 deg).

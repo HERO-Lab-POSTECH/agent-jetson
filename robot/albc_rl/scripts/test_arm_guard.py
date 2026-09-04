@@ -161,8 +161,7 @@ def main():
     # off-board too. It used to sit inside rl_inference_node, and importing that drags
     # in rospy, so this test ran only on the board -- the most intricate logic in the
     # change was gated behind an import it does not need.
-    sys.path.insert(0, HERE)
-    from arm_guard import over_current_held   # noqa: E402
+    from albc_rl.arm_guard import over_current_held   # noqa: E402
     CAP, HOLD = 900.0, 0.5
 
     def run(samples, cap=CAP):
@@ -259,8 +258,8 @@ def main():
     # failures. Third instance of the same class as the XML bug and the two blind
     # spots: only a mechanical check finds it.
     for fn in ('over_current_held',):
-        check(re.search(r'from arm_guard import[^\n]*%s' % fn, node_src) is not None,
-              'rl_inference_node imports %s from arm_guard' % fn)
+        check(re.search(r'from albc_rl\.arm_guard import[^\n]*%s' % fn, node_src) is not None,
+              'rl_inference_node imports %s from albc_rl.arm_guard' % fn)
     # This is the half that catches Mutation D. An import the node then shadows with
     # its own definition is worse than no import: it reads as wired and is not.
     shadow = re.search(r'^def over_current_held', node_src, re.M)
