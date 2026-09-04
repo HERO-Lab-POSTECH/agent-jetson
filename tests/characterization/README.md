@@ -12,16 +12,16 @@
 
 두 가지 경로가 있다. 둘 다 같은 standalone `.cpp`를 빌드한다 (gtest 아님).
 
-**로컬/보드 (ROS·catkin 불필요)** — 로컬 C++ 컴파일러만:
+**로컬/보드 (ROS·catkin 불필요)** — 모든 안전망을 한 번에:
 
 ```bash
-tests/characterization/run.sh        # 전부 빌드+실행, 하나라도 실패 시 non-zero
+bash tests/run_all.sh                # 전부 빌드+실행, 하나라도 실패 시 non-zero
 ```
 
 **catkin (보드 워크스페이스)** — `characterization_tests` 패키지로 통합됨:
 
 ```bash
-catkin_make run_tests                 # 8종 일괄 실행 (CTest 요약에 표시)
+catkin_make run_tests                 # 12종 일괄 실행 (CTest 요약에 표시)
 # 빠지면 fallback: catkin_make tests && (cd build/characterization_tests && ctest)
 ```
 
@@ -51,6 +51,10 @@ exported include를 상속한다. 테스트 `.cpp`는 package-style include(`her
 | `test_dls_ik.cpp` | `albc_controller.cpp:155-199` (updateJointAngles) | DLS 역기구학 1스텝 (λ 가변댐핑·JᵀJ+λ²I·pseudo-inverse·특이점 클램프) |
 | `test_control_law.cpp` | `albc_controller.cpp:385-433` (computeControlOutput) | 4모드 제어식 (TDC common_factor·PID·FIXED·MANUAL no-op·equilibrium hold) |
 | `test_damping_integral.cpp` | `albc_controller.cpp:674-702` (피드백 파이프라인) | asymmetric damping gate(sign-only, RAW)·integral freeze+clamp·derivative LPF |
+| `test_deadband_gate.cpp` | `control_law.h`·`feedback_filters.h` | target 0에서 기존 measured-angle gate와 bit-identical, nonzero target에서 error gate가 명령을 내는지 |
+| `test_ee_seed_guard.cpp` | `albc_controller.cpp:main()` 시드 경로 | raw-cumulative 관절값의 wrap 시드와 접힌 특이점 EE 반경 guard |
+| `test_joint_unwrap.cpp` | `joint_unwrap.h` | 현장 replay의 첫 명령 unwrap·3-turn guard·기존 single-step 결함 재현 |
+| `test_yaw_deadband_ff.cpp` | `firmware/agent/pid.cpp`·`agent.ino` | yaw deadband feed-forward·I clamp·모터 채널 적용 |
 
 ## oracle 의 정직성
 

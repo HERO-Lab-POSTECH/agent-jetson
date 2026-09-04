@@ -7,6 +7,7 @@ Each assertion is a layer-by-layer parity check so any mismatch localizes the bu
 """
 import os
 import numpy as np
+import pytest
 
 import npforward as npf
 
@@ -51,7 +52,8 @@ def test_tcn():
     if g["input_window"].shape[-1] != POLICY_OBS_DIM:
         print("  [SKIP] TCN pack is %dD, contract is %dD -- stale, not deployable"
               % (g["input_window"].shape[-1], POLICY_OBS_DIM))
-        return
+        pytest.skip("TCN pack is %dD, contract is %dD" %
+                    (g["input_window"].shape[-1], POLICY_OBS_DIM))
     enc = npf.StudentTCN(w)
 
     # submodule-by-submodule, reusing torch intermediates as inputs where useful
@@ -73,7 +75,6 @@ def test_tcn():
     xf = x.reshape(b, -1)
     _check("after_flatten", xf, g["after_flatten"])
 
-    xh = npf.linear(npf.elu(npf.linear(xf, enc.h0_w, enc.h0_b)), enc.h3_w, enc.h3_b)
     xh = npf.linear(
         npf.layer_norm(npf.elu(npf.linear(xf, enc.h0_w, enc.h0_b)), enc.ln_g, enc.ln_b),
         enc.h3_w, enc.h3_b,
@@ -83,6 +84,16 @@ def test_tcn():
     # full forward
     z = enc.forward(win)
     _check("latent (full forward)", z, g["latent"])
+
+
+def _tcn_pack_is_current():
+    """True only if the TCN golden input matches the current POLICY_OBS_DIM."""
+    from np_policy import POLICY_OBS_DIM
+    try:
+        g = _load("golden/golden_tcn.npz")
+    except IOError:
+        return False
+    return g["input_window"].shape[-1] == POLICY_OBS_DIM
 
 
 def test_gru():
@@ -125,7 +136,14 @@ def _gru_golden_is_current():
 
 if __name__ == "__main__":
     test_teacher()
-    test_tcn()
+    if _tcn_pack_is_current():
+        test_tcn()
+    else:
+        from np_policy import POLICY_OBS_DIM
+        g = _load("golden/golden_tcn.npz")
+        print("== student TCN encoder ==")
+        print("  [SKIP] TCN pack is %dD, contract is %dD -- stale, not deployable"
+              % (g["input_window"].shape[-1], POLICY_OBS_DIM))
     if _gru_golden_is_current():
         test_gru()
     else:

@@ -21,7 +21,7 @@ static int failures = 0, checks = 0;
 static void expect_near(double got, double want, const char* desc)
 {
     checks++;
-    if (std::fabs(got - want) > 1e-9) {
+    if (!std::isfinite(got) || std::fabs(got - want) > 1e-9) {
         failures++;
         std::printf("FAIL [%s]: got %.12f want %.12f\n", desc, got, want);
     }

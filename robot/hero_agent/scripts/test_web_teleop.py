@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import web_teleop as W
 
 
-def check():
+def main():
     # --- allow-list is derived from key_teleop's KEY_TABLE, not hand-written ---
     assert ord('w') in W.ALLOWED, "jog key missing"
     assert ord('1') in W.ALLOWED, "relay toggle missing"
@@ -66,7 +66,12 @@ def check():
     assert 'data-c="%d">' % ord('1') in page, "toggle key must not be holdable"
 
     print("test_web_teleop: OK (%d keys allowed)" % len(W.ALLOWED))
+    return 0
+
+
+def test_web_teleop():
+    assert main() == 0
 
 
 if __name__ == '__main__':
-    check()
+    sys.exit(main())
