@@ -16,9 +16,10 @@ Two things are tested differently:
 The 3D integral and 46D history are NOT built here -- they are the policy runtime's
 responsibility (np_policy). build_proprio is purely sensor->20D-proprio.
 
-Run on this Mac (pure numpy, no ROS, no torch):
-    python3 -m pytest test_build_proprio.py -v
-    # or: python3 test_build_proprio.py
+Run on this Mac (pure numpy, no ROS, no torch). albc_rl lives in ../src since
+T3, so the import needs PYTHONPATH -- or source devel/setup.bash on the board:
+    PYTHONPATH=../src python3 -m pytest test_build_proprio.py -v
+    # every test at once: bash tests/run_all.sh (sets the same PYTHONPATH)
 """
 import numpy as np
 import pytest

@@ -14,7 +14,7 @@
 #ifndef AGENT_DVL_POSITION_H
 #define AGENT_DVL_POSITION_H
 #include "config.h"
-#include "pid.h"   // depth, desired_angle_depth, Th_*, darknet_Th_* (extern) + ahrs.h 경유 yaw·acc_x·acc_count
+#include "pid.h"   // depth, desired_angle_depth (extern) + ahrs.h 경유 yaw·acc_x·acc_count
 
 // 콜백 시그니처용 ROS 메시지 헤더
 #include "hero_msgs/hero_agent_dvl.h"

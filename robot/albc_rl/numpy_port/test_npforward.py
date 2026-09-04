@@ -1,7 +1,8 @@
 """Check the numpy port against torch-produced golden vectors to atol=1e-5.
 
-Run on the dev machine (numpy only, no torch needed):
-    python3 test_npforward.py
+Run on the dev machine (numpy only, no torch needed). albc_rl lives in ../src
+since T3, so the import needs PYTHONPATH:
+    PYTHONPATH=../src python3 -m pytest test_npforward.py -v
 
 Each assertion is a layer-by-layer parity check so any mismatch localizes the bug.
 """

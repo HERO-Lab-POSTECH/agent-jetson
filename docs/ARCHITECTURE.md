@@ -153,7 +153,6 @@ graph TB
 | `/albc/status` | in | std_msgs/Float64MultiArray[11] |
 | `/hero_agent/command` | out | std_msgs/Int8 (fw_char) |
 | `/hero_agent/dvl` | out | hero_msgs/hero_agent_dvl |
-| `teleop/xy_step` | param | double (default 0.05 m) |
 | `teleop/z_step` | param | double (default 0.01 m) |
 | `loop_rate_hz` | param | int (default 100) |
 | `csv_rate_hz` | param | int (default 50) |
