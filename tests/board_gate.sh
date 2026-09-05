@@ -78,9 +78,14 @@ fi
 #     open / first read, albc_controller exits at its 3 s seed timeout, roslaunch
 #     stays alive, and a pid-only liveness check passes a dead stack (review 151 B2);
 #   - theta2 more than 12.3 deg away from 180 (albc_controller refuses inside);
-#   - |joint1| <= pi (rl_inference_node start-pose gate refuses beyond).
-# Thrusters stay neutral throughout: albc_controller commands joints only, and
-# thruster_scale is pinned to 0.0 statically and dynamically below.
+#   - |joint1| <= pi (rl_inference_node start-pose gate refuses beyond). Layer 2
+#     moves joint1 in air, so it can END beyond pi and Layer 3 then refuses with
+#     "START REFUSED" -- a false FAIL in the safe direction; unwind
+#     (~/albc_diag/j1_unwind.py) and rerun.
+# Thrusters are POWERED (relay ON) but stay neutral: albc_controller commands
+# joints only, thruster_scale is pinned to 0.0 statically and dynamically below,
+# and every roslaunch here gets stdin from /dev/null so key_teleop (Layer 1)
+# cannot read a stray keypress from the operator's terminal.
 if [ "${BOARD_GATE_ARM_ACK:-}" != "1" ]; then
     echo "[-] Gate C will MOVE THE ARM in air (TDC). Check the preconditions in the header" >&2
     echo "    comment, put a person at the relay, then rerun with BOARD_GATE_ARM_ACK=1." >&2
@@ -141,13 +146,28 @@ check_legacy_topics() {
     return 0
 }
 
-# Liveness by NODE NAME. roslaunch outlives every node it started (nothing here is
-# required="true"), so `kill -0` on its process group passes with joint_angle_command
-# and albc_controller both dead -- which is exactly what a relay-OFF run looks like.
+# Liveness by NODE NAME, via `rosnode ping`. roslaunch outlives every node it started
+# (nothing here is required="true"), so `kill -0` on its process group passes with
+# joint_angle_command and albc_controller both dead -- which is exactly what a
+# relay-OFF run looks like. `rosnode list` is not enough either: it reads the
+# master's registry, where a node that died without unregistering stays listed.
+# ping talks to the node's own XML-RPC server, so a dead process cannot answer.
 node_alive() {
     # Herestring, not a pipe: with `pipefail`, grep -q exiting on the first match
     # can SIGPIPE the producer and turn a live node into a false negative.
-    grep -qx "$1" <<<"$(rosnode list 2>/dev/null)"
+    grep -q "xmlrpc reply" <<<"$(rosnode ping -c 1 "$1" 2>&1)"
+}
+
+# topic_role <topic> <Publishers|Subscribers> <node>: the node appears under THAT
+# section of `rostopic info`. A bare grep for the node name would also match it
+# in the other section, so an inverted contract (subscribing where it should
+# publish) would pass.
+topic_role() {
+    awk -v sec="$2:" -v node=" * $3 " '
+        index($0, sec) == 1 { on = 1; next }
+        /^[A-Z][a-z]+:/    { on = 0 }
+        on && index($0, node) { found = 1 }
+        END { exit found ? 0 : 1 }' <<<"$(rostopic info "$1" 2>/dev/null)"
 }
 
 # Static safety check: verify default thruster_scale in launch file before any launch
@@ -164,7 +184,7 @@ echo "[+] Static check passed: thruster_scale default is 0.0"
 # Layer 1. agent_launch: verify sensor publishing frequency at ~91 Hz (81 - 101 Hz) and keep running
 echo "--- Launch 1/3 (Layer 1): hero_agent agent_launch.launch ---"
 log_agent=$(mktemp /tmp/hero_agent_launch.XXXXXX.log)
-setsid roslaunch hero_agent agent_launch.launch > "$log_agent" 2>&1 &
+setsid roslaunch hero_agent agent_launch.launch < /dev/null > "$log_agent" 2>&1 &
 pid_agent=$!
 SPAWNED_PGIDS+=("$pid_agent")
 
@@ -196,7 +216,7 @@ echo "[+] Layer 1 (hero_agent) active and healthy after 30s"
 # Layer 2. albc: launch on top of agent_launch, verify process stays alive continuously for 30s
 echo "--- Launch 2/3 (Layer 2): albc_control albc.launch ---"
 log_albc=$(mktemp /tmp/albc_launch.XXXXXX.log)
-setsid roslaunch albc_control albc.launch > "$log_albc" 2>&1 &
+setsid roslaunch albc_control albc.launch < /dev/null > "$log_albc" 2>&1 &
 pid_albc=$!
 SPAWNED_PGIDS+=("$pid_albc")
 
@@ -223,21 +243,23 @@ fi
 # seed-accepted witness (it exits on no joint_states or theta2 inside 12.3 deg of 180).
 if ! node_alive /joint_angle_command; then
     cat "$log_albc"
-    fail_gate "C" "joint_angle_command not in rosnode list -- is the relay ON (it powers the Dynamixel bus)?"
+    fail_gate "C" "joint_angle_command does not answer rosnode ping -- is the relay ON (it powers the Dynamixel bus)?"
 fi
 if ! node_alive /albc_controller; then
     cat "$log_albc"
-    fail_gate "C" "albc_controller not in rosnode list -- seed refused? (no /albc/joint_states, or theta2 within 12.3 deg of 180)"
+    fail_gate "C" "albc_controller does not answer rosnode ping -- seed refused? (no /albc/joint_states, or theta2 within 12.3 deg of 180)"
 fi
 if ! timeout 10 rostopic echo -n 1 /albc/joint_states >/dev/null 2>&1; then
     cat "$log_albc"
     fail_gate "C" "No message on /albc/joint_states from joint_angle_command"
 fi
-# The renamed command topic must be the CONTROLLER's, not just present (the driver
-# subscribes to it, so `rostopic list` alone would show it with nobody publishing).
-if ! grep -q albc_controller <<<"$(rostopic info /albc/joint1_cmd 2>/dev/null)"; then
-    fail_gate "C" "albc_controller is not publishing /albc/joint1_cmd"
-fi
+# The renamed command topics must be PUBLISHED by the controller and SUBSCRIBED by
+# the driver -- not just present (`rostopic list` shows a topic with nobody
+# publishing as long as someone subscribes).
+for t in /albc/joint1_cmd /albc/joint2_cmd; do
+    topic_role "$t" Publishers /albc_controller || fail_gate "C" "albc_controller is not publishing $t"
+    topic_role "$t" Subscribers /joint_angle_command || fail_gate "C" "joint_angle_command is not subscribed to $t"
+done
 check_legacy_topics || fail_gate "C" "Legacy topic name found with Layer 2 active"
 echo "[+] Layer 2 (albc) and Layer 1 (hero_agent) running successfully for 30s"
 
@@ -261,7 +283,7 @@ echo "[+] albc_controller stopped; joint driver kept for Layer 3"
 # Layer 3. albc_rl on the driver only: verify dynamic thruster_scale and joint_delta_scale, banner 72D, start gates, renamed topics, and joint currents
 echo "--- Launch 3/3 (Layer 3): albc_rl albc_rl.launch joint_delta_scale:=0.0 ---"
 log_rl=$(mktemp /tmp/albc_rl_launch.XXXXXX.log)
-setsid roslaunch albc_rl albc_rl.launch joint_delta_scale:=0.0 > "$log_rl" 2>&1 &
+setsid roslaunch albc_rl albc_rl.launch joint_delta_scale:=0.0 < /dev/null > "$log_rl" 2>&1 &
 pid_rl=$!
 SPAWNED_PGIDS+=("$pid_rl")
 
@@ -338,13 +360,13 @@ if ! timeout 10 rostopic echo -n 1 /albc/joint_currents >/dev/null 2>&1; then
     cat "$log_rl"
     fail_gate "C" "Failed to receive message on /albc/joint_currents"
 fi
-# Renamed RL-side topics, bound to the node that owns them.
-if ! grep -q rl_inference_node <<<"$(rostopic info /albc/joint1_cmd 2>/dev/null)"; then
-    fail_gate "C" "rl_inference_node is not publishing /albc/joint1_cmd"
-fi
-if ! grep -q rl_inference_node <<<"$(rostopic info /albc/rl_command 2>/dev/null)"; then
-    fail_gate "C" "rl_inference_node is not subscribed to /albc/rl_command"
-fi
+# Renamed RL-side topics, bound to the node that owns them and to the section it
+# should occupy.
+for t in /albc/joint1_cmd /albc/joint2_cmd; do
+    topic_role "$t" Publishers /rl_inference_node || fail_gate "C" "rl_inference_node is not publishing $t"
+done
+topic_role /albc/rl_command Subscribers /rl_inference_node || fail_gate "C" "rl_inference_node is not subscribed to /albc/rl_command"
+topic_role /albc/thruster_cmd Subscribers /thruster_mixer || fail_gate "C" "thruster_mixer is not subscribed to /albc/thruster_cmd"
 echo "[+] albc_rl banner, start gates, renamed topics, and joint currents topic verified"
 
 # Check underlying stack survival again -- by node name for the three that matter.
@@ -353,8 +375,9 @@ if ! kill -0 -- "-$pid_agent" 2>/dev/null || ! kill -0 -- "-$pid_albc" 2>/dev/nu
 fi
 for n in /joint_angle_command /rl_inference_node /thruster_mixer; do
     if ! node_alive "$n"; then
-        cat "$log_rl"
-        fail_gate "C" "$n not in rosnode list at the end of the Layer 3 run"
+        # The driver was started by Layer 2, so its log is the albc one.
+        if [ "$n" = /joint_angle_command ]; then cat "$log_albc"; else cat "$log_rl"; fi
+        fail_gate "C" "$n does not answer rosnode ping at the end of the Layer 3 run"
     fi
 done
 echo "[+] All 3 layers ran successfully for 30s"

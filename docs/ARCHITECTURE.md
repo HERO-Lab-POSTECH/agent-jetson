@@ -888,8 +888,11 @@ agent-jetson/                           (보드 clone -> ~/catkin_ws/src)
 │
 ├── tests/                              (안전망. ROS 불필요)
 │   ├── run_all.sh                      (15,  **유일한 진입점**. PYTHON=python2.7 로 보드에서도)
-│   ├── board_gate.sh                   (309, **병합 게이트**: A 클린 재빌드 → B py2.7 run_all
-│   │                                          → C 3층 스택 건식 기동 → D 펌웨어 컴파일)
+│   ├── board_gate.sh                   (~420, **병합 게이트**: A 클린 재빌드 → B py2.7 run_all
+│   │                                          → C 건식 기동: 1+2층 스택 → TDC 정지 → RL(delta 0) 단독,
+│   │                                            노드는 rosnode ping · 토픽은 발행/구독 섹션으로 검사
+│   │                                          → D 펌웨어 컴파일(agent_gate, 기준 빌드 보존). relay ON 전제,
+│   │                                            팔이 움직이므로 BOARD_GATE_ARM_ACK=1 필수)
 │   └── characterization/               (13종 533 checks, standalone golden)
 │       ├── run.sh (35) · CMakeLists.txt (40) · README.md (86) · package.xml (17)
 │       ├── Arduino.h (39) · hero_msgs/hero_agent_dvl.h (24)   <- 호스트 컴파일 shim
