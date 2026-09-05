@@ -220,7 +220,7 @@ if pgrep -f "roslaunch hero_agent agent_launch" >/dev/null 2>&1; then
     log_agent=/dev/null
 else
     log_agent=$(mktemp /tmp/hero_agent_launch.XXXXXX.log)
-    setsid roslaunch hero_agent agent_launch.launch < /dev/null > "$log_agent" 2>&1 &
+    setsid env PYTHONUNBUFFERED=1 roslaunch hero_agent agent_launch.launch < /dev/null > "$log_agent" 2>&1 &
     pid_agent=$!
     SPAWNED_PGIDS+=("$pid_agent")
 fi
@@ -289,7 +289,7 @@ fi
 # Layer 2. albc: launch on top of agent_launch, verify process stays alive continuously for 30s
 echo "--- Launch 2/3 (Layer 2): albc_control albc.launch ---"
 log_albc=$(mktemp /tmp/albc_launch.XXXXXX.log)
-setsid roslaunch albc_control albc.launch < /dev/null > "$log_albc" 2>&1 &
+setsid env PYTHONUNBUFFERED=1 roslaunch albc_control albc.launch < /dev/null > "$log_albc" 2>&1 &
 pid_albc=$!
 SPAWNED_PGIDS+=("$pid_albc")
 
@@ -356,7 +356,7 @@ echo "[+] albc_controller stopped; joint driver kept for Layer 3"
 # Layer 3. albc_rl on the driver only: verify dynamic thruster_scale and joint_delta_scale, banner 72D, start gates, renamed topics, and joint currents
 echo "--- Launch 3/3 (Layer 3): albc_rl albc_rl.launch joint_delta_scale:=0.0 ---"
 log_rl=$(mktemp /tmp/albc_rl_launch.XXXXXX.log)
-setsid roslaunch albc_rl albc_rl.launch joint_delta_scale:=0.0 < /dev/null > "$log_rl" 2>&1 &
+setsid env PYTHONUNBUFFERED=1 roslaunch albc_rl albc_rl.launch joint_delta_scale:=0.0 < /dev/null > "$log_rl" 2>&1 &
 pid_rl=$!
 SPAWNED_PGIDS+=("$pid_rl")
 
@@ -413,6 +413,12 @@ if ! kill -0 -- "-$pid_rl" 2>/dev/null; then
 fi
 
 # Verify banner in stdout
+# rospy writes INFO to stdout, which is block-buffered once it is redirected
+# into a file, so a banner of a few hundred bytes never arrives while the gate
+# is looking -- measured on the board 2026-09-05: 0 hits over 12 s without
+# PYTHONUNBUFFERED, 1 with it, same launch. roscpp writes to stderr instead,
+# which is why the C++ layers' errors always showed up here and this check
+# looked like a missing banner rather than a missing pipe.
 if ! grep -q "72D" "$log_rl"; then
     cat "$log_rl"
     fail_gate "C" "Banner '72D' not found in albc_rl stdout"
