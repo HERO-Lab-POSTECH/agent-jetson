@@ -97,8 +97,15 @@ fi
 # Clean build is required because darknet_ros was removed; stale devel headers cause false passes
 # ==============================================================================
 echo "=== Gate A: Rebuild Catkin Workspace ==="
+# ROS env hooks READ variables before they set them -- catkin's
+# 1.ros_distro.sh tests $ROS_DISTRO on its line 3 and exports it on line 6 --
+# so sourcing them under `set -u` aborts this script on its first real line.
+# Measured on the board 2026-09-05: Gate A died at once, before catkin_make.
+# Relax the option across the sourcing only; everything else keeps it.
+set +u
 # shellcheck disable=SC1091
 source /opt/ros/lunar/setup.bash
+set -u
 cd "${HOME}/catkin_ws"
 catkin_make clean || fail_gate "A" "catkin_make clean failed"
 catkin_make || fail_gate "A" "catkin_make build failed"
@@ -108,8 +115,10 @@ catkin_make || fail_gate "A" "catkin_make build failed"
 # Verify Python 2.7 + NumPy 1.11 compatibility on board (local runs on Python 3.12)
 # ==============================================================================
 echo "=== Gate B: Interpreter Tests (Python 2.7) ==="
+set +u
 # shellcheck disable=SC1091
 source "${HOME}/catkin_ws/devel/setup.bash"
+set -u
 cd "${HOME}/catkin_ws/src"
 run_all_out=$(PYTHON=python2.7 bash tests/run_all.sh 2>&1) || {
     echo "$run_all_out"
