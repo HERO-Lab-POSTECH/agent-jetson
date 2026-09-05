@@ -69,6 +69,24 @@ if [ ! -f /opt/ros/lunar/setup.bash ]; then
     exit 1
 fi
 
+# Gate C MOVES THE ARM. Layer 2 runs the TDC controller in air, so the arm follows
+# the attitude error; Layer 3 then holds it (joint_delta_scale 0). Preconditions the
+# script cannot measure, acknowledged here so a 20-minute Gate A build is not spent
+# before the operator learns of them:
+#   - arm out of water and free to swing, a person at the relay;
+#   - relay ON. It powers the Dynamixel bus: with it OFF the driver exits at port
+#     open / first read, albc_controller exits at its 3 s seed timeout, roslaunch
+#     stays alive, and a pid-only liveness check passes a dead stack (review 151 B2);
+#   - theta2 more than 12.3 deg away from 180 (albc_controller refuses inside);
+#   - |joint1| <= pi (rl_inference_node start-pose gate refuses beyond).
+# Thrusters stay neutral throughout: albc_controller commands joints only, and
+# thruster_scale is pinned to 0.0 statically and dynamically below.
+if [ "${BOARD_GATE_ARM_ACK:-}" != "1" ]; then
+    echo "[-] Gate C will MOVE THE ARM in air (TDC). Check the preconditions in the header" >&2
+    echo "    comment, put a person at the relay, then rerun with BOARD_GATE_ARM_ACK=1." >&2
+    fail_gate "C" "BOARD_GATE_ARM_ACK=1 not set"
+fi
+
 # ==============================================================================
 # Gate A: Rebuild workspace
 # Clean build is required because darknet_ros was removed; stale devel headers cause false passes
@@ -98,7 +116,9 @@ if ! echo "$run_all_out" | grep -q "RUN_ALL: PASS"; then
 fi
 
 # ==============================================================================
-# Gate C: Dry run 3 launch configurations stacked (30s each, out-of-water, relay OFF)
+# Gate C: Dry run 3 launch configurations (30s each, out-of-water, relay ON).
+# Layers 1 and 2 stack; albc_controller is stopped before Layer 3 so TDC and RL
+# never command the same joints at once (see the Layer 3 comment).
 # ==============================================================================
 echo "=== Gate C: Dry Launches ==="
 
@@ -119,6 +139,15 @@ check_legacy_topics() {
         return 1
     fi
     return 0
+}
+
+# Liveness by NODE NAME. roslaunch outlives every node it started (nothing here is
+# required="true"), so `kill -0` on its process group passes with joint_angle_command
+# and albc_controller both dead -- which is exactly what a relay-OFF run looks like.
+node_alive() {
+    # Herestring, not a pipe: with `pipefail`, grep -q exiting on the first match
+    # can SIGPIPE the producer and turn a live node into a false negative.
+    grep -qx "$1" <<<"$(rosnode list 2>/dev/null)"
 }
 
 # Static safety check: verify default thruster_scale in launch file before any launch
@@ -190,12 +219,49 @@ if ! kill -0 -- "-$pid_albc" 2>/dev/null; then
     cat "$log_albc"
     fail_gate "C" "albc died before completing 30s run"
 fi
+# The two nodes, by name: the driver is the relay-ON witness, the controller is the
+# seed-accepted witness (it exits on no joint_states or theta2 inside 12.3 deg of 180).
+if ! node_alive /joint_angle_command; then
+    cat "$log_albc"
+    fail_gate "C" "joint_angle_command not in rosnode list -- is the relay ON (it powers the Dynamixel bus)?"
+fi
+if ! node_alive /albc_controller; then
+    cat "$log_albc"
+    fail_gate "C" "albc_controller not in rosnode list -- seed refused? (no /albc/joint_states, or theta2 within 12.3 deg of 180)"
+fi
+if ! timeout 10 rostopic echo -n 1 /albc/joint_states >/dev/null 2>&1; then
+    cat "$log_albc"
+    fail_gate "C" "No message on /albc/joint_states from joint_angle_command"
+fi
+# The renamed command topic must be the CONTROLLER's, not just present (the driver
+# subscribes to it, so `rostopic list` alone would show it with nobody publishing).
+if ! grep -q albc_controller <<<"$(rostopic info /albc/joint1_cmd 2>/dev/null)"; then
+    fail_gate "C" "albc_controller is not publishing /albc/joint1_cmd"
+fi
+check_legacy_topics || fail_gate "C" "Legacy topic name found with Layer 2 active"
 echo "[+] Layer 2 (albc) and Layer 1 (hero_agent) running successfully for 30s"
 
-# Layer 3. albc_rl: launch on top of stack, verify dynamic thruster_scale, banner 72D, start gates, and joint currents topic
-echo "--- Launch 3/3 (Layer 3): albc_rl albc_rl.launch ---"
+# Layer 3 must NOT run on top of a live TDC controller. Both publish
+# /albc/joint{1,2}_cmd to the same driver, and the RL joint target is an unbounded
+# integrator (np_policy.py: joint2 has no clamp; the dry-run wind-up to ~2 pi is on
+# record). Stop the controller, keep the driver -- the RL start-pose gate and the
+# /albc/joint_currents check below need it -- and run RL at joint_delta_scale 0 so
+# its command is the measured seed pose and nothing moves. review 151 B1.
+rosnode kill /albc_controller >/dev/null 2>&1 || fail_gate "C" "rosnode kill /albc_controller failed"
+sleep 3
+if node_alive /albc_controller; then
+    fail_gate "C" "albc_controller still alive after rosnode kill"
+fi
+if ! node_alive /joint_angle_command; then
+    cat "$log_albc"
+    fail_gate "C" "joint_angle_command died when albc_controller was stopped"
+fi
+echo "[+] albc_controller stopped; joint driver kept for Layer 3"
+
+# Layer 3. albc_rl on the driver only: verify dynamic thruster_scale and joint_delta_scale, banner 72D, start gates, renamed topics, and joint currents
+echo "--- Launch 3/3 (Layer 3): albc_rl albc_rl.launch joint_delta_scale:=0.0 ---"
 log_rl=$(mktemp /tmp/albc_rl_launch.XXXXXX.log)
-setsid roslaunch albc_rl albc_rl.launch > "$log_rl" 2>&1 &
+setsid roslaunch albc_rl albc_rl.launch joint_delta_scale:=0.0 > "$log_rl" 2>&1 &
 pid_rl=$!
 SPAWNED_PGIDS+=("$pid_rl")
 
@@ -224,6 +290,17 @@ if [ "$ts_dyn" != "0.0" ] && [ "$ts_dyn" != "0" ]; then
     fail_gate "C" "Dynamic check failed: rosparam /rl_inference_node/thruster_scale is non-zero ($ts_dyn)"
 fi
 echo "[+] Dynamic check passed: rosparam /rl_inference_node/thruster_scale is $ts_dyn"
+
+ds_dyn=$(rosparam get /rl_inference_node/joint_delta_scale 2>/dev/null) || {
+    cat "$log_rl"
+    fail_gate "C" "Failed to retrieve /rl_inference_node/joint_delta_scale from rosparam"
+}
+ds_dyn=$(echo "$ds_dyn" | tr -d '[:space:]')
+if [ "$ds_dyn" != "0.0" ] && [ "$ds_dyn" != "0" ]; then
+    cat "$log_rl"
+    fail_gate "C" "Dynamic check failed: rosparam /rl_inference_node/joint_delta_scale is non-zero ($ds_dyn) -- the RL target would integrate"
+fi
+echo "[+] Dynamic check passed: rosparam /rl_inference_node/joint_delta_scale is $ds_dyn"
 
 # 30s observation and validation of banner, start gates, and joint currents
 sleep 15
@@ -261,12 +338,25 @@ if ! timeout 10 rostopic echo -n 1 /albc/joint_currents >/dev/null 2>&1; then
     cat "$log_rl"
     fail_gate "C" "Failed to receive message on /albc/joint_currents"
 fi
-echo "[+] albc_rl banner, start gates, and joint currents topic verified"
+# Renamed RL-side topics, bound to the node that owns them.
+if ! grep -q rl_inference_node <<<"$(rostopic info /albc/joint1_cmd 2>/dev/null)"; then
+    fail_gate "C" "rl_inference_node is not publishing /albc/joint1_cmd"
+fi
+if ! grep -q rl_inference_node <<<"$(rostopic info /albc/rl_command 2>/dev/null)"; then
+    fail_gate "C" "rl_inference_node is not subscribed to /albc/rl_command"
+fi
+echo "[+] albc_rl banner, start gates, renamed topics, and joint currents topic verified"
 
-# Check underlying stack survival again
+# Check underlying stack survival again -- by node name for the three that matter.
 if ! kill -0 -- "-$pid_agent" 2>/dev/null || ! kill -0 -- "-$pid_albc" 2>/dev/null || ! kill -0 -- "-$pid_rl" 2>/dev/null; then
     fail_gate "C" "One or more layers died before completing full 30s run"
 fi
+for n in /joint_angle_command /rl_inference_node /thruster_mixer; do
+    if ! node_alive "$n"; then
+        cat "$log_rl"
+        fail_gate "C" "$n not in rosnode list at the end of the Layer 3 run"
+    fi
+done
 echo "[+] All 3 layers ran successfully for 30s"
 
 # Check legacy topics once with entire stack active
@@ -289,9 +379,12 @@ echo "    launch logs: $log_agent $log_albc $log_rl"
 # ==============================================================================
 echo "=== Gate D: Build Firmware (Compilation only) ==="
 cd "${HOME}/catkin_ws/src"
-bash firmware/build_firmware.sh "${HOME}/catkin_ws/src/firmware/agent" agent || fail_gate "D" "firmware build failed"
+# Output name agent_gate, NOT agent: build_firmware.sh does `rm -rf ~/fw_full_<name>`
+# first, and ~/fw_full_agent is the reference build of the firmware on the chip
+# (md5 6ea742730453078d5cc8d8e3325bfa20, readback-verified). review 151 M1.
+bash firmware/build_firmware.sh "${HOME}/catkin_ws/src/firmware/agent" agent_gate || fail_gate "D" "firmware build failed"
 
-fw_hex="${HOME}/fw_full_agent/agent.hex"
+fw_hex="${HOME}/fw_full_agent_gate/agent_gate.hex"
 if [ ! -f "$fw_hex" ]; then
     fail_gate "D" "Target hex file $fw_hex does not exist"
 fi
