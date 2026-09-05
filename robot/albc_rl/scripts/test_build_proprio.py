@@ -22,6 +22,11 @@ T3, so the import needs PYTHONPATH -- or source devel/setup.bash on the board:
     # every test at once: bash tests/run_all.sh (sets the same PYTHONPATH)
 """
 import numpy as np
+# NOTE: no pytest.approx anywhere in this file. The board runs pytest 2.8.7 on
+# python2.7 and approx arrived in pytest 3.0, so every use of it fails there --
+# measured 2026-09-05, 7 failures that blocked the board gate. build_proprio is
+# board-side logic (the RL node builds its observation with it), so the board has
+# to be able to run these. Use abs(a - b) < tol instead.
 import pytest
 
 from albc_rl.build_proprio import ProprioBuilder, manipulability, L_LINK, PROPRIO_DIM
@@ -34,19 +39,19 @@ LPF_ALPHA = 0.2      # board attitude_controller.h LPF on derived rates
 # --------------------------------------------------------------- manipulability
 def test_manipulability_singularity_at_zero():
     # sin(0)=0 -> w=0 (fully singular, arm straight)
-    assert manipulability(0.0) == pytest.approx(0.0, abs=ATOL)
+    assert abs(manipulability(0.0) - 0.0) < ATOL
 
 
 def test_manipulability_max_at_ninety_deg():
     # w = sqrt(|l1 l2 sin th2|)/sqrt(l1 l2); at th2=pi/2 sin=1 -> w=1
-    assert manipulability(np.pi / 2) == pytest.approx(1.0, abs=ATOL)
+    assert abs(manipulability(np.pi / 2) - 1.0) < ATOL
 
 
 def test_manipulability_matches_yoshikawa_formula():
     # exact sim formula: w = sqrt(|l1*l2*sin(th2)|)/sqrt(l1*l2), l1=l2=0.233
     th2 = 0.7
     expected = np.sqrt(abs(L_LINK * L_LINK * np.sin(th2))) / np.sqrt(L_LINK * L_LINK)
-    assert manipulability(th2) == pytest.approx(expected, abs=ATOL)
+    assert abs(manipulability(th2) - expected) < ATOL
 
 
 def test_manipulability_clamped_to_unit_range():
@@ -82,7 +87,7 @@ def test_command_block_passthrough_0_3():
     b = ProprioBuilder()
     out = b.build(_sensors(cmd_att=(0.44, 0.55), cmd_yawrate=0.66))
     np.testing.assert_allclose(out[0:2], [0.44, 0.55], atol=ATOL)
-    assert out[2] == pytest.approx(0.66, abs=ATOL)
+    assert abs(out[2] - 0.66) < ATOL, out[2]
 
 
 def test_euler_block_3_6():
@@ -123,7 +128,7 @@ def test_joint_pos_block_9_11():
 def test_manipulability_block_13_from_joint2():
     b = ProprioBuilder()
     out = b.build(_sensors(joint_pos=(0.0, np.pi / 2)))
-    assert out[13] == pytest.approx(1.0, abs=ATOL)   # th2=pi/2 -> w=1
+    assert abs(out[13] - 1.0) < ATOL, out[13]   # th2=pi/2 -> w=1
 
 
 def test_thruster_block_14_20_echo():
@@ -157,7 +162,7 @@ def test_angvel_yaw_wraps_pi():
     out = b.build(_sensors(euler=(0.0, 0.0, -3.13)))
     wrapped = np.arctan2(np.sin(-3.13 - 3.13), np.cos(-3.13 - 3.13))
     expected_r = LPF_ALPHA * (wrapped / DT)
-    assert out[8] == pytest.approx(expected_r, abs=1e-4)   # yaw rate at [8]
+    assert abs(out[8] - expected_r) < 1e-4, out[8]   # yaw rate at [8]
 
 
 # ----------------------------------------------- joint velocity = d/dt + LPF
@@ -222,7 +227,7 @@ def test_rotate_imu_zero_offset_negates_pitch():
 def test_rotate_imu_yaw_passthrough_any_offset():
     from albc_rl.build_proprio import rotate_imu
     out = rotate_imu(0.5, -0.4, 1.234, np.deg2rad(45.0))
-    assert out[2] == pytest.approx(1.234, abs=ATOL)
+    assert abs(out[2] - 1.234) < ATOL, out[2]
 
 
 def test_rotate_imu_45deg_pinned_golden():
