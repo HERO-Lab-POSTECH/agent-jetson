@@ -176,7 +176,19 @@
        Captures relay timing (/hero_agent/key_input), joint_states (the topic that
        dropped out in run 1), thruster_cmd (safety), IMU, currents, and /rosout_agg
        (every node log incl. read-fail reasons + STALE). Camera excluded (size).
-       Files land in ~/albc_bags/fieldtest_<timestamp>.bag (fixed dir, easy to find). -->
+       Files land in ~/albc_bags/fieldtest_<timestamp>.bag (fixed dir, easy to find).
+
+       2026-09-05: /albc/rl_command added (PLAN 4-5 item F). The attitude setpoint
+       [roll_att, pitch_att, yaw_rate] can be set two ways and only one of them was
+       readable after the fact. dynparam goes through the reconfigure callback,
+       which loginfo's the setpoint into /rosout_agg; that log line is the only
+       reason t4_step_analyze.py can segment the 09-02 bags at all. This topic had
+       no equivalent: rl_inference_node's _on_command just assigns self._command,
+       with no log line and no republish, and the node publishes only
+       joint1/joint2/thruster_cmd. So a run driven by rostopic pub was unreadable
+       while a dynparam run was readable, with nothing in the bag to say which.
+       Note the rename: the old name /rl/command no longer exists, so recording
+       that string would silently capture nothing. -->
   <node pkg="rosbag" type="record" name="albc_fieldtest_recorder" output="screen"
-        args="-o /home/nvidia/albc_bags/fieldtest /albc/joint_states /albc/joint1_cmd /albc/joint2_cmd /albc/thruster_cmd /hero_agent/thruster_pwm /hero_agent/key_input /hero_agent/sensors /albc/joint_currents /rosout_agg" />
+        args="-o /home/nvidia/albc_bags/fieldtest /albc/rl_command /albc/joint_states /albc/joint1_cmd /albc/joint2_cmd /albc/thruster_cmd /hero_agent/thruster_pwm /hero_agent/key_input /hero_agent/sensors /albc/joint_currents /rosout_agg" />
 </launch>
