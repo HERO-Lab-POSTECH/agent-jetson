@@ -198,13 +198,35 @@ echo "[+] Static check passed: thruster_scale default is 0.0"
 
 # Layer 1. agent_launch: verify sensor publishing frequency at ~91 Hz (81 - 101 Hz) and keep running
 echo "--- Launch 1/3 (Layer 1): hero_agent agent_launch.launch ---"
-log_agent=$(mktemp /tmp/hero_agent_launch.XXXXXX.log)
-setsid roslaunch hero_agent agent_launch.launch < /dev/null > "$log_agent" 2>&1 &
-pid_agent=$!
-SPAWNED_PGIDS+=("$pid_agent")
+# Layer 1 liveness, whoever owns it. When the gate started the stack we watch our
+# own process group; when we adopted the operator's we ask the process table.
+layer1_alive() {
+    if [ -n "$pid_agent" ]; then
+        kill -0 -- "-$pid_agent" 2>/dev/null
+    else
+        pgrep -f "roslaunch hero_agent agent_launch" >/dev/null 2>&1
+    fi
+}
+
+# Adopt a running agent_launch instead of starting a second one. ROS kills the
+# older node on a duplicate name, and the serial port closing with it resets the
+# Mega over DTR -- which switches the relay off (agent.ino:152, state_Relay = 0).
+# Measured 2026-09-05: the gate's own Layer 1 knocked out the relay the operator
+# had just switched on. Adopting keeps their relay, their TTY-attached key_teleop,
+# and leaves their stack running when this gate tears its own processes down.
+if pgrep -f "roslaunch hero_agent agent_launch" >/dev/null 2>&1; then
+    echo "[+] Layer 1 already running -- adopting the operator's agent_launch"
+    pid_agent=""
+    log_agent=/dev/null
+else
+    log_agent=$(mktemp /tmp/hero_agent_launch.XXXXXX.log)
+    setsid roslaunch hero_agent agent_launch.launch < /dev/null > "$log_agent" 2>&1 &
+    pid_agent=$!
+    SPAWNED_PGIDS+=("$pid_agent")
+fi
 
 sleep 10
-if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
+if ! layer1_alive; then
     cat "$log_agent"
     fail_gate "C" "hero_agent agent_launch died prematurely during startup"
 fi
@@ -222,7 +244,7 @@ fi
 echo "[+] Sensor rate verified: $hz_val Hz"
 
 sleep 10
-if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
+if ! layer1_alive; then
     cat "$log_agent"
     fail_gate "C" "hero_agent agent_launch died after 30s observation"
 fi
@@ -272,7 +294,7 @@ pid_albc=$!
 SPAWNED_PGIDS+=("$pid_albc")
 
 sleep 15
-if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
+if ! layer1_alive; then
     cat "$log_agent"
     fail_gate "C" "hero_agent agent_launch died while starting albc"
 fi
@@ -282,7 +304,7 @@ if ! kill -0 -- "-$pid_albc" 2>/dev/null; then
 fi
 
 sleep 15
-if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
+if ! layer1_alive; then
     cat "$log_agent"
     fail_gate "C" "hero_agent agent_launch died during albc 30s run"
 fi
@@ -340,7 +362,7 @@ SPAWNED_PGIDS+=("$pid_rl")
 
 # Dynamic check: verify thruster_scale parameter immediately after launch
 sleep 5
-if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
+if ! layer1_alive; then
     cat "$log_agent"
     fail_gate "C" "hero_agent agent_launch died during albc_rl startup"
 fi
@@ -377,7 +399,7 @@ echo "[+] Dynamic check passed: rosparam /rl_inference_node/joint_delta_scale is
 
 # 30s observation and validation of banner, start gates, and joint currents
 sleep 15
-if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
+if ! layer1_alive; then
     cat "$log_agent"
     fail_gate "C" "hero_agent agent_launch died during albc_rl run"
 fi
@@ -421,7 +443,7 @@ topic_role /albc/thruster_cmd Subscribers /thruster_mixer || fail_gate "C" "thru
 echo "[+] albc_rl banner, start gates, renamed topics, and joint currents topic verified"
 
 # Check underlying stack survival again -- by node name for the three that matter.
-if ! kill -0 -- "-$pid_agent" 2>/dev/null || ! kill -0 -- "-$pid_albc" 2>/dev/null || ! kill -0 -- "-$pid_rl" 2>/dev/null; then
+if ! layer1_alive || ! kill -0 -- "-$pid_albc" 2>/dev/null || ! kill -0 -- "-$pid_rl" 2>/dev/null; then
     fail_gate "C" "One or more layers died before completing full 30s run"
 fi
 for n in /joint_angle_command /rl_inference_node /thruster_mixer; do
