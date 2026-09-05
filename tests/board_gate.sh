@@ -73,10 +73,16 @@ fi
 # the attitude error; Layer 3 then holds it (joint_delta_scale 0). Preconditions the
 # script cannot measure, acknowledged here so a 20-minute Gate A build is not spent
 # before the operator learns of them:
-#   - arm out of water and free to swing, a person at the relay;
-#   - relay ON. It powers the Dynamixel bus: with it OFF the driver exits at port
-#     open / first read, albc_controller exits at its 3 s seed timeout, roslaunch
-#     stays alive, and a pid-only liveness check passes a dead stack (review 151 B2);
+#   - arm out of water and free to swing, and a person at the relay THROUGHOUT,
+#     not merely before the run: Layer 1 restarts the serial bridge, opening the
+#     port resets the Mega over DTR, and state_Relay is initialised to 0
+#     (agent.ino:152) -- so the relay the operator switched on beforehand is OFF
+#     by the time Layer 2 needs it. This gate therefore stops after Layer 1 and
+#     waits for that person to switch it back on. It never commands the relay
+#     itself; that stays the operator's hand (decided 2026-09-05).
+#     Without relay power the driver exits at port open / first read,
+#     albc_controller exits at its 3 s seed timeout, roslaunch stays alive, and a
+#     pid-only liveness check passes a dead stack (review 151 B2);
 #   - theta2 more than 12.3 deg away from 180 (albc_controller refuses inside);
 #   - |joint1| <= pi (rl_inference_node start-pose gate refuses beyond). Layer 2
 #     moves joint1 in air, so it can END beyond pi and Layer 3 then refuses with
@@ -221,6 +227,42 @@ if ! kill -0 -- "-$pid_agent" 2>/dev/null; then
     fail_gate "C" "hero_agent agent_launch died after 30s observation"
 fi
 echo "[+] Layer 1 (hero_agent) active and healthy after 30s"
+
+# The relay powers the Dynamixel bus and the ESCs, and it is an Arduino output
+# (firmware/agent/config.h PIN_RELAY) toggled by 'R' on /hero_agent/command
+# (agent.ino:190). Layer 1 just reset the Mega, so it is OFF now whatever the
+# operator did before the run -- measured 2026-09-05, Layer 2's driver died on
+# err=-3001 with the port free and the converter attached since boot. The gate
+# does not command it; it waits for a person and reads State_addit bit 2 back.
+relay_is_on() {
+    local bits
+    bits=$(timeout 5 rostopic echo -n1 /hero_agent/state/State_addit 2>/dev/null \
+           | head -n 1 | tr -dc '0-9-')
+    [ -n "$bits" ] && [ $(( bits & 4 )) -ne 0 ]
+}
+
+relay_wait_s="${RELAY_WAIT_S:-300}"
+if relay_is_on; then
+    echo "[+] Relay already ON (State_addit bit 2)"
+else
+    echo ""
+    echo "    ========= ACTION NEEDED: SWITCH THE RELAY ON ========="
+    echo "    Layer 1 reset the Mega, so the relay is off and the Dynamixel"
+    echo "    bus Layer 2 needs is unpowered. From another terminal on the board:"
+    echo "        rostopic pub -1 /hero_agent/command std_msgs/Int8 'data: 82'"
+    echo "    (82 = R, the toggle in agent.ino:190. key_teleop cannot serve here:"
+    echo "     this gate detaches its stdin so no stray keypress reaches it.)"
+    echo "    Waiting up to ${relay_wait_s} s ..."
+    echo "    ====================================================="
+    relay_deadline=$(( SECONDS + relay_wait_s ))
+    until relay_is_on; do
+        if [ "$SECONDS" -ge "$relay_deadline" ]; then
+            fail_gate "C" "relay still OFF after ${relay_wait_s} s"
+        fi
+        sleep 5
+    done
+    echo "[+] Relay switched ON by the operator (State_addit bit 2)"
+fi
 
 # Layer 2. albc: launch on top of agent_launch, verify process stays alive continuously for 30s
 echo "--- Launch 2/3 (Layer 2): albc_control albc.launch ---"
