@@ -344,7 +344,8 @@ class RLInferenceNode(object):
         try:
             self._runlog.publish_meta(
                 params=rospy.get_param("~", {}),
-                pack=pack_provenance(self._weights_dir),
+                pack=pack_provenance(self._weights_dir,
+                                     arch=self.encoder_type),
                 git=git_provenance(self._weights_dir),
                 mixer=rospy.get_param("/thruster_mixer", {}),
                 contract={

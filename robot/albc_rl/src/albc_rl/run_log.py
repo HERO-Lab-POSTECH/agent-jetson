@@ -84,13 +84,25 @@ def file_digest(path, algo="sha256"):
     return h.hexdigest()
 
 
-def pack_provenance(weights_dir):
+def pack_provenance(weights_dir, arch=None):
     """Deploy-pack identity, preferring the pack's OWN manifest to a re-hash.
 
-    Every pack ships MANIFEST.json carrying `tag`, the training checkpoint
-    paths, and a sha256 per file (05_deploy/pack_*/MANIFEST.json). That file is
-    the artifact; hashing the npz here is the fallback for a directory that has
-    weights but no manifest (the pre-2026-08 packs).
+    A pack ships a manifest carrying `tag`, the training checkpoint paths, and a
+    sha256 per file. Its NAME varies by where you look, which cost this function
+    its tag on the first live run: the archived packs under 05_deploy/pack_*/
+    use MANIFEST.json, but the board's own numpy_port/ holds one manifest PER
+    ENCODER -- MANIFEST.gru.json and MANIFEST.tcn.json side by side, because
+    both weight sets ship together and only ~encoder_type says which one is
+    loaded. Looking only for MANIFEST.json found nothing on the robot and fell
+    through to hashing, so the digests were right and the human-readable tag
+    (pack_r3a_p3b7500_gru_260906_145553) was silently None.
+
+    So: MANIFEST.json, else MANIFEST.<arch>.json, else the sole MANIFEST.*.json
+    if there is exactly one. With several and no `arch` we do NOT guess -- the
+    candidates are recorded and the digests still identify the weights.
+
+    Hashing the npz is the fallback for a directory with weights and no
+    manifest at all (the pre-2026-08 packs).
 
     Carries the manifest's sha256 table VERBATIM rather than recomputing it. A
     disagreement between the manifest and the file on disk is itself a finding,
@@ -102,11 +114,22 @@ def pack_provenance(weights_dir):
     out = {"weights_dir": os.path.abspath(weights_dir) if weights_dir else None,
            "manifest": None, "tag": None, "digests": {}}
     try:
-        man = os.path.join(weights_dir, "MANIFEST.json")
-        if os.path.isfile(man):
+        cands = [n for n in sorted(os.listdir(weights_dir))
+                 if n.startswith("MANIFEST") and n.endswith(".json")]
+        name = None
+        if "MANIFEST.json" in cands:
+            name = "MANIFEST.json"
+        elif arch and ("MANIFEST.%s.json" % arch) in cands:
+            name = "MANIFEST.%s.json" % arch
+        elif len(cands) == 1:
+            name = cands[0]
+        elif len(cands) > 1:
+            out["manifest_candidates"] = cands
+        man = os.path.join(weights_dir, name) if name else ""
+        if name and os.path.isfile(man):
             with open(man) as f:
                 m = json.load(f)
-            out["manifest"] = "MANIFEST.json"
+            out["manifest"] = name
             out["tag"] = m.get("tag")
             files = m.get("files", {})
             out["digests"] = dict(
@@ -385,6 +408,33 @@ def demo():
     assert file_digest("/no/such/file") is None
     assert isinstance(pack_provenance("/no/such/dir"), dict)
     assert isinstance(git_provenance("/no/such/dir"), dict)
+
+    # the board keeps one manifest PER ENCODER, not MANIFEST.json. Reading the
+    # 05_deploy archive's layout instead of the robot's cost the tag on the
+    # first live run: digests were right, tag was None, nothing errored.
+    import shutil
+    import tempfile
+    d = tempfile.mkdtemp()
+    try:
+        for a, tag in (("gru", "pack_gru_X"), ("tcn", "pack_tcn_Y")):
+            with open(os.path.join(d, "MANIFEST.%s.json" % a), "w") as f:
+                json.dump({"tag": tag, "checkpoints": {"student_%s" % a: {}},
+                           "files": {"weights_%s.npz" % a: {"sha256": "de" + a}}}, f)
+        got = pack_provenance(d, arch="gru")
+        assert got["tag"] == "pack_gru_X", got
+        assert got["manifest"] == "MANIFEST.gru.json", got
+        assert got["digests"] == {"weights_gru.npz": "degru"}, got
+        # two manifests and no arch: do NOT guess, and say what was found
+        amb = pack_provenance(d)
+        assert amb["tag"] is None, amb
+        assert amb["manifest_candidates"] == ["MANIFEST.gru.json",
+                                              "MANIFEST.tcn.json"], amb
+        # a single manifest under any name is unambiguous
+        os.remove(os.path.join(d, "MANIFEST.tcn.json"))
+        assert pack_provenance(d)["tag"] == "pack_gru_X"
+    finally:
+        shutil.rmtree(d)
+
     print("run_log: OK")
 
 
