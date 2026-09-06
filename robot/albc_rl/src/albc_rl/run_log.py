@@ -529,7 +529,12 @@ def demo():
     # the operator note has to survive the ONE route roslaunch cannot carry
     old = os.environ.get(NOTES_ENV)
     try:
-        os.environ[NOTES_ENV] = "\xed\x83\xb1\xed\x81\xac 3"    # UTF-8 bytes for "탱크 3"
+        # UTF-8 bytes for a 2-syllable Hangul word plus " 3". Written as
+        # escapes on purpose: no module in this package declares a PEP-263
+        # encoding, so a literal non-ASCII character here makes python 2
+        # refuse to IMPORT the file. That is how this line was written the
+        # first time, and it broke run_log on the board until it was run.
+        os.environ[NOTES_ENV] = "\xed\x83\xb1\xed\x81\xac 3"
         assert operator_notes("") == _text("\xed\x83\xb1\xed\x81\xac 3")
         assert operator_notes("explicit") == "explicit"   # param wins
         m = build_meta("x", "n", "tdc", notes=operator_notes(""))

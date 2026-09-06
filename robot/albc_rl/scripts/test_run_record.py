@@ -125,6 +125,39 @@ def check_data_launches_record():
                 "not start the recorder")
 
 
+def check_board_sources_are_ascii():
+    """No board python source may hold a non-ASCII byte.
+
+    Not a style rule. Python 2 refuses to COMPILE a file containing one unless
+    it declares a PEP-263 encoding, and no module in this package declares one.
+    So a single Korean character in a comment does not degrade anything -- it
+    makes the import fail, on the board only, and only when the file is next
+    loaded. Cost measured 2026-09-06: a comment written while fixing the
+    non-ASCII operator note took run_log.py out on the robot; the dev machine
+    (python 3) had said OK a moment earlier.
+    """
+    robot_dir = os.path.dirname(_PKG)
+    roots = [os.path.join(_PKG, "scripts"), os.path.join(_PKG, "src"),
+             os.path.join(robot_dir, "albc_control", "scripts")]
+    for root in roots:
+        for dirpath, _dirs, files in os.walk(root):
+            for fn in files:
+                if not fn.endswith(".py"):
+                    continue
+                full = os.path.join(dirpath, fn)
+                with open(full, "rb") as f:
+                    raw = f.read()
+                head = raw.split(b"\n")[:2]
+                if any(b"coding" in h for h in head):
+                    continue                    # declares its own encoding
+                for lineno, line in enumerate(raw.split(b"\n"), 1):
+                    assert all(b < 128 for b in bytearray(line)), (
+                        "%s:%d holds a non-ASCII byte and the file declares no "
+                        "PEP-263 encoding, so python 2 cannot import it. The "
+                        "board is python 2.7; this machine may not be."
+                        % (os.path.relpath(full, robot_dir), lineno))
+
+
 def _resolve_includes(path, seen=None):
     """Every launch file reachable from `path`, following $(find pkg) includes."""
     seen = seen if seen is not None else []
@@ -212,6 +245,7 @@ def check_schema():
 
 def main():
     check_no_double_hyphen_in_comments()
+    check_board_sources_are_ascii()
     recorded = check_every_topic_is_recorded()
     check_data_launches_record()
     check_one_recorder_per_graph()
