@@ -67,10 +67,12 @@
 
        WHAT IS RECORDED, and why each one is not optional:
 
-         /hero_agent/sensors      attitude + gyro, in the RAW imu frame. Every
+         /hero_agent/sensors      99.82 Hz measured 2026-09-06.
+                                  attitude + gyro, in the RAW imu frame. Every
                                   consumer applies rotate_imu itself and the
                                   analysis replays it. Never read raw.
-         /hero_agent/state        Depth, Target_depth, Yaw, Target_yaw,
+         /hero_agent/state        24.96 Hz measured 2026-09-06 (sd 0.5 ms).
+                                  Depth, Target_depth, Yaw, Target_yaw,
                                   Cont_state, State_addit. ADDED 2026-09-06.
                                   The descend/ascend half of the pick and place
                                   scenario lives ENTIRELY in this message and
@@ -101,6 +103,12 @@
                                   rather than clipped, so this topic is the
                                   constraint violation column of the comparison
                                   table. It was published and recorded nowhere.
+                                  Published by joint_angle_command (the DRIVER,
+                                  not the RL node) at 9.72 Hz, measured
+                                  2026-09-06 with the RL node not running. That
+                                  matters for the comparison: the column exists
+                                  on the TDC path too, so the constraint is
+                                  measured for BOTH controllers or neither.
          /albc/thruster_cmd       policy thrust request (already scaled)
          /hero_agent/thruster_pwm what actually reached the ESCs
          /hero_agent/dvl          ADDED 2026-09-06. TARGET_X/Y/Z. Low value

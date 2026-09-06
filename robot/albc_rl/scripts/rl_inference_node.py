@@ -134,8 +134,9 @@ class RLInferenceNode(object):
         # gru: the shipped 72D pack is GRU (pack_inc9998_gru). The 69D TCN pack in
         # numpy_port/ predates the bias_ema obs and would fail the contract check.
         self.encoder_type = rospy.get_param("~encoder_type", "gru")
+        self._pkg_dir = rospkg.RosPack().get_path('albc_rl')
         weights_dir = rospy.get_param(
-            "~weights_dir", rospkg.RosPack().get_path('albc_rl') + '/numpy_port')
+            "~weights_dir", self._pkg_dir + '/numpy_port')
         self.hz = float(rospy.get_param("~control_hz", 50.0))
         self.use_board_rates = rospy.get_param("~use_board_rates", False)
         self.imu_yaw_offset = float(np.deg2rad(
@@ -146,6 +147,7 @@ class RLInferenceNode(object):
         # _on_reconfigure synchronously with the initial config, so anything that
         # callback touches has to already exist.
         self._command = np.zeros(3, dtype=np.float32)
+        self._cmd_seen = False
         # Same rule as _command, and for a sharper reason: Server() fires
         # _on_reconfigure synchronously with the INITIAL config, and that
         # initial config is whatever dynparam values survived the last run.
@@ -274,6 +276,10 @@ class RLInferenceNode(object):
             self._publish_run_meta()
             self._runlog.guard("start_refused", gate="joint1_start_pose",
                                initial=self._initial)
+            # ...then wait for the recorder to connect. signal_shutdown here is
+            # immediate, and a latched topic dies with its publisher: without
+            # this the refusal record never reaches the bag.
+            self._runlog.wait_recorded()
             rospy.signal_shutdown("joint1 start-pose gate")
             return
 
@@ -285,6 +291,7 @@ class RLInferenceNode(object):
             self._publish_run_meta()
             self._runlog.guard("start_refused", gate="start_state",
                                initial=self._initial)
+            self._runlog.wait_recorded()               # see the gate above
             rospy.signal_shutdown("start-state gate")
             return
 
@@ -346,7 +353,12 @@ class RLInferenceNode(object):
                 params=rospy.get_param("~", {}),
                 pack=pack_provenance(self._weights_dir,
                                      arch=self.encoder_type),
-                git=git_provenance(self._weights_dir),
+                # the PACKAGE, not the weights dir. They coincide only while
+                # ~weights_dir keeps its default; point it at a deploy pack
+                # outside catkin_ws (which is what pack_* directories are for)
+                # and git_provenance returns all-None, which validate_meta now
+                # rejects rather than passing as a clean manifest.
+                git=git_provenance(self._pkg_dir),
                 mixer=rospy.get_param("/thruster_mixer", {}),
                 contract={
                     "POLICY_OBS_DIM": contract.POLICY_OBS_DIM,
@@ -809,7 +821,18 @@ class RLInferenceNode(object):
             # message would bury the run's actual segment boundaries under
             # thousands of identical rows. 1e-6 rad is far below any commanded
             # resolution and far above float32 noise.
-            if not np.allclose(new, self._command, atol=1e-6):
+            # rtol=0.0 so the stated 1e-6 rad is the ACTUAL threshold. The
+            # default rtol=1e-5 makes it amplitude dependent (6.2e-6 at a 30 deg
+            # setpoint) -- harmless at these magnitudes, but the comment above
+            # would be describing something the code does not do.
+            # _cmd_seen: the node starts with self._command all zeros, so a run
+            # opening on (0,0) - which every scenario does, and which a bare
+            # `rostopic pub` run consists of - compared equal and emitted
+            # nothing. The FIRST command is always an event.
+            if (not self._cmd_seen
+                    or not np.allclose(new, self._command,
+                                       rtol=0.0, atol=1e-6)):
+                self._cmd_seen = True
                 self._runlog.setpoint("rl_command", source=TOPICS["rl_command"],
                                       roll_deg=float(np.degrees(new[0])),
                                       pitch_deg=float(np.degrees(new[1])),

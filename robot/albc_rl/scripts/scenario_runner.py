@@ -60,6 +60,7 @@ SAFETY
 import argparse
 import json
 import random
+import select
 import sys
 import threading
 
@@ -182,7 +183,10 @@ def s1_steps(amplitudes, axes, hold_s, repeats, shuffle, seed):
         for axis, amp in order:
             roll = amp if axis == "roll" else 0.0
             pitch = amp if axis == "pitch" else 0.0
-            out.append(("step_%s_%+d" % (axis, amp), roll, pitch, hold_s,
+            # %+g, not %+d: --amplitudes is float, and %+d truncates, so 12.5
+            # and 12.4 both became step_roll_+12 and the analysis merged two
+            # different segments into one row without saying so.
+            out.append(("step_%s_%+g" % (axis, amp), roll, pitch, hold_s,
                         {"axis": axis, "amp_deg": amp, "repeat": rep}))
             out.append(("return_zero", 0.0, 0.0, hold_s,
                         {"axis": axis, "amp_deg": 0, "repeat": rep}))
@@ -333,6 +337,45 @@ class ScenarioRunner(object):
         self.setpoint.send(0.0, 0.0)
         return True
 
+    def _prompt(self):
+        """Read one line, WITHOUT blocking on it. -> text, "q", or None.
+
+        Two failures the plain readline() had, both silent:
+
+          * A guard trip during a phase set self._stop from the subscriber
+            thread while the main thread sat inside readline(). Nothing was
+            printed, the prompt looked normal, and the stop was only noticed
+            when the operator happened to press ENTER.
+          * With no tty -- which is what happens the moment this is put in a
+            launch file, and it is installed as a node now -- readline()
+            returns "" at EOF immediately. That is neither "q" nor a wait, so
+            every phase of S2/S3 marked itself within milliseconds and produced
+            a bag full of boundaries describing nothing.
+
+        So: poll, watch the stop flag and rospy shutdown, and treat EOF as an
+        abort rather than as ENTER.
+        """
+        while True:
+            if self._stop.is_set():
+                return None
+            if rospy.is_shutdown():
+                self._stop_reason = self._stop_reason or "rospy shutdown"
+                return None
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.2)
+            except (IOError, OSError):                 # EINTR on a signal
+                continue
+            if not ready:
+                continue
+            line = sys.stdin.readline()
+            if line == "":                             # EOF: no operator here
+                self._stop_reason = ("stdin closed (no terminal). This script "
+                                     "is operator driven and cannot mark "
+                                     "phases without one.")
+                self._stop.set()
+                return None
+            return line.strip().lower()
+
     def run_marked(self, phases, block_label=None, block_meta=None):
         """Operator-driven phases. The script marks; the human drives.
 
@@ -354,7 +397,10 @@ class ScenarioRunner(object):
                              "    press ENTER when it BEGINS (q to abort): "
                              % (name, description))
             sys.stdout.flush()
-            answer = sys.stdin.readline().strip().lower()
+            answer = self._prompt()
+            if answer is None:                         # guard tripped / shutdown
+                rospy.logerr("STOPPING: %s", self._stop_reason)
+                return False
             if answer == "q":
                 self._stop_reason = "operator aborted at %s" % name
                 self._stop.set()
@@ -413,8 +459,16 @@ class ScenarioRunner(object):
         try:
             ok = {"s1": self.run_s1, "s2": self.run_s2,
                   "s3": self.run_s3}[self.args.scenario]()
-        except KeyboardInterrupt:
-            self.log.phase("scenario_abort", reason="KeyboardInterrupt")
+        except (KeyboardInterrupt, rospy.ROSInterruptException) as exc:
+            # BOTH. rospy.init_node runs with disable_signals=False, so rospy
+            # installs its own SIGINT handler and calls signal_shutdown; the
+            # interpreter never raises KeyboardInterrupt. What surfaces is
+            # ROSInterruptException out of rate.sleep()/rospy.sleep(). Catching
+            # only KeyboardInterrupt meant an interrupted run ended with NO
+            # terminating mark, and the analysis could not tell "the operator
+            # stopped it" from "the bag was truncated". KeyboardInterrupt is
+            # kept because the stdin path below can still deliver one.
+            self.log.phase("scenario_abort", reason=type(exc).__name__)
             rospy.logwarn("aborted by operator. The partial run is still "
                           "segmented; the marks are in the bag.")
             return 130
@@ -433,12 +487,33 @@ def load_objects(path):
     with open(path) as f:
         objects = json.load(f)
     required = ("id", "mass_g", "volume_ml")
+    # Presence is not enough. The template row carries id/mass_g/volume_ml with
+    # zeros, so it passed a keys-only check and would have run the full 5-step
+    # S3 block for an object that does not exist -- 5 operator prompts of tank
+    # time and a payload event stamped mass_g 0. The file is installed into the
+    # package share now, so pointing --objects at the example is one typo away.
+    kept = []
     for obj in objects:
         missing = [k for k in required if k not in obj]
         if missing:
             raise SystemExit("object %r is missing %s"
                              % (obj.get("id", "?"), ", ".join(missing)))
-    return objects
+        oid = str(obj["id"])
+        if oid.startswith("_"):
+            continue                                   # _README / _TEMPLATE rows
+        for k in ("mass_g", "volume_ml"):
+            if not (float(obj[k]) > 0.0):
+                raise SystemExit(
+                    "object %r has %s=%r. Mass and volume are MEASUREMENTS and "
+                    "the disturbance axis is computed from them "
+                    "(W_net = (m - rho*V)g); a zero is an unfilled template, "
+                    "not a light object." % (oid, k, obj[k]))
+        kept.append(obj)
+    if not kept:
+        raise SystemExit(
+            "%s has no real objects (every id starts with '_'). Copy it and "
+            "fill in what you actually weighed." % path)
+    return kept
 
 
 def parse_args(argv):

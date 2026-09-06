@@ -57,12 +57,19 @@ fi
 # only on a clean shutdown. A SIGKILLed recorder leaves a .bag.active that has
 # to be reindexed before anything can read it.
 cleanup() {
+    # `|| true` on BOTH waits. `set -e` is on (line 12) and `wait` returns the
+    # child's status: 128+signum for a signalled child, non-zero for a roslaunch
+    # whose node died. Without it the shell exits INSIDE cleanup, before
+    # `kill "$JAC_PID"` runs, and joint_angle_command survives as an orphan.
+    # That is the most expensive fingerprint in this project: the next launch
+    # starts a node of the same name, ROS kills the older one without an error,
+    # and the dying one calls disableTorque() on the same physical motors.
     if [ -n "$REC_PID" ]; then
-        kill -INT "$REC_PID" 2>/dev/null
-        wait "$REC_PID" 2>/dev/null
+        kill -INT "$REC_PID" 2>/dev/null || true
+        wait "$REC_PID" 2>/dev/null || true
     fi
-    kill "$JAC_PID" 2>/dev/null
-    wait "$JAC_PID" 2>/dev/null
+    kill "$JAC_PID" 2>/dev/null || true
+    wait "$JAC_PID" 2>/dev/null || true
     exit
 }
 trap cleanup EXIT INT TERM

@@ -192,10 +192,31 @@ def make_run_id(prefix="run", now=None, nonce=None):
 
 
 # --------------------------------------------------------------- payloads
+def _text(v):
+    """py2: promote a UTF-8 byte string to unicode so json.dumps cannot raise.
+
+    An operator note in Korean (ALBC_NOTES) arrives from the parameter server
+    as a py2 `str` when the transport hands back bytes. json.dumps then throws
+    UnicodeDecodeError, _emit swallows it, and the run continues with NO
+    manifest and one throttled warning -- the silent-empty class this module
+    exists to remove. py3 str passes through untouched.
+    """
+    if isinstance(v, bytes) and bytes is not str:      # py3 bytes: leave alone
+        return v
+    try:
+        if isinstance(v, str):
+            return v.decode("utf-8")                   # py2 only; py3 str has no decode
+    except (UnicodeDecodeError, AttributeError):
+        pass
+    return v
+
+
 def build_meta(run_id, node, controller, scenario=None, params=None,
                pack=None, git=None, contract=None, initial=None,
                mixer=None, notes=None, wall_clock=None):
     """The run manifest. Pure -- no ROS, no I/O. Tested off-board."""
+    scenario = _text(scenario)
+    notes = _text(notes)
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -250,6 +271,12 @@ def validate_meta(meta):
     for key in ("run_id", "node", "controller"):
         if not meta.get(key):
             problems.append("missing %s" % key)
+    git = meta.get("git") or {}
+    if not git.get("head"):
+        # No code identity at all. Reachable when git_provenance was pointed at
+        # a path outside the repo (a deploy pack, say): every field comes back
+        # None and the manifest would otherwise validate clean.
+        problems.append("git.head missing -- nothing identifies the code that ran")
     if meta.get("controller") not in CONTROLLERS:
         problems.append("unknown controller %r (allowed: %s)"
                         % (meta.get("controller"), ", ".join(CONTROLLERS)))
@@ -328,19 +355,57 @@ class RunLogger(object):
 
     def event(self, kind, name, **data):
         """Emit one event. Returns the dict sent, or None if it was rejected."""
-        self._seq += 1
         try:
             t = self._rospy.get_time()
         except Exception:                              # noqa: BLE001
             t = None
+        # Build FIRST, then commit the sequence number. The header promises a
+        # monotonic seq, so an analyzer checks completeness with it; a number
+        # burned by a rejected event leaves a permanent hole that reads exactly
+        # like a dropped message.
         try:
-            evt = build_event(self._seq, kind, name, t=t, data=data)
+            evt = build_event(self._seq + 1, kind, name, t=t, data=data)
         except ValueError as exc:
             self._rospy.logerr("run_event rejected: %s", exc)
             return None
+        self._seq += 1
         evt["run_id"] = self.run_id
         self._emit(self._pub_evt, evt)
         return evt
+
+    def wait_recorded(self, timeout_s=3.0, poll_s=0.05):
+        """Block until BOTH publishers have a subscriber, or timeout. -> bool.
+
+        Only needed before an early exit. A latched topic is served by the
+        LIVE publisher, so a node that publishes its manifest and shuts down
+        immediately leaves nothing behind: the recorder connects about a second
+        into the launch and finds the publisher already gone. The event
+        publisher is worse -- it has no latch at all, so its first message goes
+        out before any connection is established and is simply dropped.
+
+        That is exactly the refusal path: publish manifest, mark the guard,
+        signal_shutdown. It produced a bag with no record of the refusal and no
+        sign that anything was missing -- the silent-empty failure this module
+        exists to remove, reintroduced one layer up.
+
+        Returns False on timeout; the caller should exit anyway. A refused run
+        that also hangs is worse than one that is not written down.
+        """
+        try:
+            deadline = self._rospy.get_time() + float(timeout_s)
+            while self._rospy.get_time() < deadline:
+                if (self._pub_meta.get_num_connections() > 0
+                        and self._pub_evt.get_num_connections() > 0):
+                    # connected: give the messages a tick to actually go out
+                    self._rospy.sleep(poll_s)
+                    return True
+                self._rospy.sleep(poll_s)
+        except Exception:                              # noqa: BLE001
+            return False
+        self._rospy.logwarn(
+            "run_meta/run_event have no subscriber after %.1f s -- this run "
+            "is not being recorded", timeout_s)
+        return False
 
     # the four names an analyzer segments on
     def phase(self, name, **data):

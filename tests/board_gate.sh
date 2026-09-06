@@ -289,7 +289,12 @@ fi
 # Layer 2. albc: launch on top of agent_launch, verify process stays alive continuously for 30s
 echo "--- Launch 2/3 (Layer 2): albc_control albc.launch ---"
 log_albc=$(mktemp /tmp/albc_launch.XXXXXX.log)
-setsid env PYTHONUNBUFFERED=1 roslaunch albc_control albc.launch < /dev/null > "$log_albc" 2>&1 &
+# record:=false. albc.launch now includes run_record.launch, and this gate stops
+# its children with SIGTERM escalating to SIGKILL (cleanup(), the kill -TERM on
+# the process group). rosbag record writes its index on SIGINT only, so every
+# gate run would leave an unclosed .bag.active in ~/albc_bags/ -- the directory
+# the analysis tools glob. The gate is a liveness check, not a data run.
+setsid env PYTHONUNBUFFERED=1 roslaunch albc_control albc.launch record:=false < /dev/null > "$log_albc" 2>&1 &
 pid_albc=$!
 SPAWNED_PGIDS+=("$pid_albc")
 

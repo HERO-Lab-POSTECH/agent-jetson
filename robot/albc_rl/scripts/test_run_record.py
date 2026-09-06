@@ -125,6 +125,60 @@ def check_data_launches_record():
                 "not start the recorder")
 
 
+def _resolve_includes(path, seen=None):
+    """Every launch file reachable from `path`, following $(find pkg) includes."""
+    seen = seen if seen is not None else []
+    if path in seen or not os.path.isfile(path):
+        return seen
+    seen.append(path)
+    robot_dir = os.path.dirname(_PKG)
+    dom = xml.dom.minidom.parse(path)
+    for inc in dom.getElementsByTagName("include"):
+        ref = inc.getAttribute("file")
+        # only $(find <pkg>)/... is used in this tree; anything else is skipped
+        if not ref.startswith("$(find "):
+            continue
+        pkg = ref[len("$(find "):ref.index(")")]
+        rest = ref[ref.index(")") + 1:].lstrip("/")
+        _resolve_includes(os.path.join(robot_dir, pkg, rest), seen)
+    return seen
+
+
+def check_one_recorder_per_graph():
+    """At most ONE rosbag record node in any launch graph an operator starts.
+
+    ROS kills the older node of a duplicate name without an error, and a killed
+    recorder leaves a .bag.active with no index -- unreadable until someone
+    reindexes it, and nothing announces that it happened. run_record.launch's
+    own comment cites thruster_mixer as "same hazard, same idiom", but the
+    mixer has an arg gate AND test_exactly_one_thruster_mixer_per_launch, and
+    the recorder had neither. There are now three paths that can start one
+    (albc.launch, launch_albc.sh, albc_rl_fieldtest.launch), so this is the
+    half of that idiom that was missing.
+    """
+    robot_dir = os.path.dirname(_PKG)
+    entry_points = [
+        os.path.join(LAUNCH_DIR, "albc_rl_fieldtest.launch"),
+        os.path.join(LAUNCH_DIR, "albc_rl.launch"),
+        os.path.join(robot_dir, "albc_control", "launch", "albc.launch"),
+    ]
+    for top in entry_points:
+        if not os.path.isfile(top):
+            continue
+        n = 0
+        where = []
+        for f in _resolve_includes(top):
+            dom = xml.dom.minidom.parse(f)
+            for node in dom.getElementsByTagName("node"):
+                if node.getAttribute("type") == "record":
+                    n += 1
+                    where.append(os.path.basename(f))
+        assert n <= 1, (
+            "%s resolves to %d rosbag record nodes (%s). ROS kills the older "
+            "one silently and its bag is left unindexed."
+            % (os.path.basename(top), n, ", ".join(where)))
+
+
 def check_schema():
     run_log.demo()
 
@@ -160,6 +214,7 @@ def main():
     check_no_double_hyphen_in_comments()
     recorded = check_every_topic_is_recorded()
     check_data_launches_record()
+    check_one_recorder_per_graph()
     check_schema()
     print("test_run_record: OK (%d topics recorded)" % len(recorded))
 
