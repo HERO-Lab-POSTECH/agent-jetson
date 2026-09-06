@@ -61,12 +61,20 @@ fi
 # to be reindexed before anything can read it.
 cleanup() {
     # `|| true` on BOTH waits. `set -e` is on (line 12) and `wait` returns the
-    # child's status: 128+signum for a signalled child, non-zero for a roslaunch
-    # whose node died. Without it the shell exits INSIDE cleanup, before
-    # `kill "$JAC_PID"` runs, and joint_angle_command survives as an orphan.
-    # That is the most expensive fingerprint in this project: the next launch
-    # starts a node of the same name, ROS kills the older one without an error,
-    # and the dying one calls disableTorque() on the same physical motors.
+    # child's exit status, so ANY non-zero one ends the shell INSIDE cleanup,
+    # before `kill "$JAC_PID"` runs, and joint_angle_command survives as an
+    # orphan. That is the most expensive fingerprint in this project: the next
+    # launch starts a node of the same name, ROS kills the older one without an
+    # error, and the dying one calls disableTorque() on the same motors.
+    #
+    # MEASURED 2026-09-06, so the guard is kept for the right reason: a healthy
+    # launcher stopped with SIGINT returns 0 here, NOT 128+signum -- it installs
+    # its own handler, reaps its children and exits normally. So the common path
+    # would not have tripped it. What is still open is the path a review raised
+    # and this measurement does not cover: a child node that dies on its own
+    # makes the launcher exit non-zero. The guard costs nothing and the failure
+    # it prevents is the torque-loss one, so it stays; the 128+signum reasoning
+    # it was first written with does not.
     if [ -n "$REC_PID" ]; then
         kill -INT "$REC_PID" 2>/dev/null || true
         wait "$REC_PID" 2>/dev/null || true
