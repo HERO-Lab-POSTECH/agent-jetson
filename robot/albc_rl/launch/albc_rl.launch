@@ -124,7 +124,15 @@
        ROS would silently kill one of them. -->
 
 
+  <!-- RUN RECORD (2026-09-06): the node publishes /albc/run_meta itself,
+       because only it knows which weights it loaded. These two labels are the
+       only human-written strings that survive into the bag. -->
+  <arg name="scenario"            default="" />
+  <arg name="notes"               default="" />
+
   <node pkg="albc_rl" name="rl_inference_node" type="rl_inference_node.py" output="screen">
+    <param name="scenario"           value="$(arg scenario)" />
+    <param name="notes"              value="$(arg notes)" />
     <param name="encoder_type"       value="$(arg encoder_type)" />
     <param name="control_hz"         value="$(arg control_hz)" />
     <param name="use_board_rates"    value="$(arg use_board_rates)" />

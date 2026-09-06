@@ -30,9 +30,12 @@ catkin_install_python(PROGRAMS
   scripts/thruster_mixer.py
   scripts/b1_channel_probe.py
   scripts/hold_joint.py
+  scripts/run_meta_node.py
+  scripts/scenario_runner.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
 install(DIRECTORY launch/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch)
 install(DIRECTORY numpy_port/ DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/numpy_port)
-install(FILES scripts/deployed_tam.json DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)
+install(FILES scripts/deployed_tam.json scripts/objects.example.json
+        DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts)

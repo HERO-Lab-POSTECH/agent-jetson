@@ -22,8 +22,45 @@ rosparam load "$(rospack find albc_control)/config/albc_controller.yaml" /albc_c
 rosrun albc_control joint_angle_command > /dev/null 2>&1 &
 JAC_PID=$!
 
-# Cleanup on exit: kill background node
+# --- RUN RECORD (2026-09-06) ------------------------------------------------
+# THIS script, not albc.launch, is what the operator actually runs for TDC (it
+# keeps albc_controller in the foreground so stdin still reaches the runtime
+# keys). So until now EVERY TDC run went unrecorded: the RL path had been
+# bagging since August and the baseline had nothing, which is fatal to a
+# comparison whose whole purpose is the baseline column.
+#
+# Env, not flags, because this script takes no arguments today and the operator
+# types it as a bare alias:
+#   ALBC_RECORD=0                 skip the bag (bench check)
+#   ALBC_SCENARIO=s1_attitude     scenario label -> /albc/run_meta
+#   ALBC_NOTES="payload B, 400 g" operator note  -> /albc/run_meta
+#   ALBC_CONTROLLER=tdc           override when this shell drives something else
+#
+# Backgrounded, and its failure is NOT fatal: `set -e` is on, and a recorder
+# that cannot start must not stop the robot from coming up. A missing bag is a
+# lost run; a robot that will not launch is a lost session.
+REC_PID=""
+if [ "${ALBC_RECORD:-1}" != "0" ]; then
+    roslaunch albc_rl run_record.launch \
+        controller:="${ALBC_CONTROLLER:-tdc}" \
+        scenario:="${ALBC_SCENARIO:-}" \
+        notes:="${ALBC_NOTES:-}" \
+        bag_prefix:=tdc > /tmp/albc_run_record.log 2>&1 &
+    REC_PID=$!
+    echo "run record: PID $REC_PID (log /tmp/albc_run_record.log). ALBC_RECORD=0 to skip."
+else
+    echo "run record: SKIPPED (ALBC_RECORD=0). This run leaves no bag."
+fi
+
+# Cleanup on exit: kill background nodes.
+# The recorder is stopped FIRST and with SIGINT, because rosbag writes its index
+# only on a clean shutdown. A SIGKILLed recorder leaves a .bag.active that has
+# to be reindexed before anything can read it.
 cleanup() {
+    if [ -n "$REC_PID" ]; then
+        kill -INT "$REC_PID" 2>/dev/null
+        wait "$REC_PID" 2>/dev/null
+    fi
     kill "$JAC_PID" 2>/dev/null
     wait "$JAC_PID" 2>/dev/null
     exit

@@ -1,0 +1,68 @@
+[
+  {
+    "_README": "S3 payload set. COPY this file, replace the values with MEASURED ones, delete this first entry, and pass the copy as scenario_runner.py --objects. Every field except id/mass_g/volume_ml is optional, but each one omitted is an axis the analysis cannot separate afterwards.",
+    "_WHY_THESE_AXES": "YCB (Calli et al. 2015, arXiv:1502.03143) picks objects to span shape, size, texture, weight and rigidity, but those axes are chosen for GRASP difficulty. Nothing found in the survey measures vehicle attitude WHILE grasping, so the axes here are re-derived for DISTURBANCE magnitude: what a payload does to this vehicle is set by its net underwater weight and by the lever arm it hangs on. mass_g and volume_ml give the first (W_net = (m - rho*V) * g, and rho*V is why a large buoyant object can pull the vehicle the OTHER way); cog_offset_m gives the second.",
+    "_SELECTION_RULE": "Span the grid, do not sample it randomly. Two levels of net underwater weight (near neutral, clearly negative) crossed with two of volume (compact, bulky) is four objects and already separates heavy from draggy. Add a positively buoyant one if you have it: it is the only object that tests the SIGN of the disturbance rather than its size, and no run so far has done that.",
+    "_MEASURING_VOLUME": "By displacement, not by calipers. volume_ml sets the buoyant term, and a calipered bounding box overstates it for anything that is not a solid block.",
+    "_SAFETY": "Net underwater weight acts on arm2 through the same lever that broke it on 2026-08-25. Order the set lightest first and watch /albc/joint_currents. The guard cap is a decision, not a measured strength limit; arm2's allowable stress is still unmeasured.",
+    "id": "_TEMPLATE_DELETE_ME",
+    "mass_g": 0,
+    "volume_ml": 0,
+    "shape": "cylinder | sphere | plate | irregular",
+    "rigidity": "rigid | compliant",
+    "cog_offset_m": 0.0,
+    "grasp_pose": "how it sits in the gripper, so the run can be repeated",
+    "notes": ""
+  },
+
+  {
+    "id": "A_compact_neutral",
+    "mass_g": 250,
+    "volume_ml": 240,
+    "shape": "cylinder",
+    "rigidity": "rigid",
+    "cog_offset_m": 0.02,
+    "grasp_pose": "axis vertical, gripped at mid height",
+    "notes": "near neutral, W_net about +0.10 N. The control case: if attitude moves here it is the grasp geometry, not the load."
+  },
+  {
+    "id": "B_compact_heavy",
+    "mass_g": 600,
+    "volume_ml": 240,
+    "shape": "cylinder",
+    "rigidity": "rigid",
+    "cog_offset_m": 0.02,
+    "grasp_pose": "axis vertical, gripped at mid height",
+    "notes": "same volume as A, mass varied alone: isolates net weight from drag and added mass."
+  },
+  {
+    "id": "C_bulky_neutral",
+    "mass_g": 600,
+    "volume_ml": 580,
+    "shape": "sphere",
+    "rigidity": "rigid",
+    "cog_offset_m": 0.02,
+    "grasp_pose": "gripped at the equator",
+    "notes": "same mass as B, volume varied alone: isolates displaced volume (and added mass) from net weight."
+  },
+  {
+    "id": "D_offset_lever",
+    "mass_g": 600,
+    "volume_ml": 240,
+    "shape": "plate",
+    "rigidity": "rigid",
+    "cog_offset_m": 0.09,
+    "grasp_pose": "gripped at one end, long axis horizontal",
+    "notes": "same as B but hung on a longer lever: isolates moment arm from net weight."
+  },
+  {
+    "id": "E_positively_buoyant",
+    "mass_g": 120,
+    "volume_ml": 400,
+    "shape": "irregular",
+    "rigidity": "compliant",
+    "cog_offset_m": 0.02,
+    "grasp_pose": "gripped at the densest point",
+    "notes": "W_net NEGATIVE, it pushes up. The only object in the set that tests the SIGN of the disturbance rather than its magnitude. Optional, but the one that cannot be inferred from the others."
+  }
+]

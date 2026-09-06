@@ -10,4 +10,31 @@
 
   <!-- Joint Angle Command (Dynamixel driver) -->
   <node pkg="albc_control" name="joint_angle_command" type="joint_angle_command" output="log" />
+
+  <!-- ROSBAG + RUN MANIFEST (2026-09-06). Until this line the TDC path
+       recorded NOTHING: every TDC run existed only as terminal scrollback,
+       while the RL path had been bagging since August. That asymmetry is fatal
+       to the whole point of running TDC, which is to be the baseline column of
+       a comparison table.
+
+       controller:=tdc is what the analysis groups by. Override scenario/notes
+       per run; record:=false for a bench check where a bag would be noise.
+
+       The topic list lives in albc_rl/launch/run_record.launch, one file for
+       every controller, so a comparison stays apples to apples. That makes
+       this package launch-time dependent on albc_rl. Both are built in the
+       same workspace and albc_rl is a catkin python package, so there is
+       nothing extra to install, but a workspace carrying only albc_control
+       would need run_record.launch copied across. -->
+  <arg name="controller"  default="tdc" />
+  <arg name="scenario"    default="" />
+  <arg name="notes"       default="" />
+  <arg name="record"      default="true" />
+  <include file="$(find albc_rl)/launch/run_record.launch">
+    <arg name="controller" value="$(arg controller)" />
+    <arg name="scenario"   value="$(arg scenario)" />
+    <arg name="notes"      value="$(arg notes)" />
+    <arg name="record"     value="$(arg record)" />
+    <arg name="bag_prefix" value="tdc" />
+  </include>
 </launch>

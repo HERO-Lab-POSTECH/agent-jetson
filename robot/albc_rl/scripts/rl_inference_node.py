@@ -80,6 +80,12 @@ ROSPARAMS (all defaults are field-safe)
                                the board has no /albc/thruster_cmd subscriber yet.
   ~thruster_max_s     : 0.0    if > 0, thrusters live for this many seconds after
                                the first tick, then latch to 0 (joints keep going).
+  ~scenario           : ""     free-text scenario id, into /albc/run_meta. Use the
+                               scenario script's own name (s1_attitude, s2_mission,
+                               s3_payload) so runs group without a lookup table.
+  ~notes              : ""     operator note, into /albc/run_meta. The one place a
+                               human sentence survives into the data: payload id,
+                               tank condition, "arm2 re-seated this morning".
 
 NOT RUNNABLE ON A DEV MAC (no ROS). Build + run on the board.
 """
@@ -97,12 +103,18 @@ from sensor_msgs.msg import JointState
 
 from hero_msgs.msg import hero_agent_sensor
 
+from albc_rl import contract
 from albc_rl.build_proprio import ProprioBuilder, rotate_imu, rotate_gyro
 from albc_rl.contract import TOPICS
 # pure predicate, deliberately rospy-free so test_arm_guard.py can run it
 # ANYWHERE rather than only on the board -- see arm_guard.py's header
 from albc_rl.arm_guard import over_current_held
 from albc_rl.np_policy import NumpyStudentPolicy, DELTA_SCALE
+# run provenance + segment marks, published AS DATA on /albc/run_meta and
+# /albc/run_event. Before this the only record of which checkpoint produced a
+# bag was a loginfo line, and the only record of a setpoint change was another
+# one -- see run_log.py's header for what that cost.
+from albc_rl.run_log import RunLogger, git_provenance, pack_provenance
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
 
@@ -134,6 +146,15 @@ class RLInferenceNode(object):
         # _on_reconfigure synchronously with the initial config, so anything that
         # callback touches has to already exist.
         self._command = np.zeros(3, dtype=np.float32)
+        # Same rule as _command, and for a sharper reason: Server() fires
+        # _on_reconfigure synchronously with the INITIAL config, and that
+        # initial config is whatever dynparam values survived the last run.
+        # A stale setpoint silently becoming the next run's initial condition
+        # is a trap this project has already paid for (run 3 started at
+        # pitch 30 deg that way), so the logger must exist in time to record it.
+        self._runlog = RunLogger("rl_inference_node", "rl",
+                                 scenario=rospy.get_param("~scenario", "") or None)
+        self._initial = {}
         self._dyn_srv = Server(GyroOffsetConfig, self._on_reconfigure)
         self.sensor_timeout = float(rospy.get_param("~sensor_timeout_s", 0.2))
         self.joint_timeout = float(rospy.get_param("~joint_timeout_s", 0.5))
@@ -152,6 +173,7 @@ class RLInferenceNode(object):
         # /albc/joint_guard rather than clipped, so the number stays comparable
         # across TDC, classic PID and RL.
         self._first_tick_t = None   # set on the first published tick (thruster_max_s)
+        self._thr_latch_logged = False   # one-shot: the latch event, not per tick
 
         student_npz = os.path.join(weights_dir, "weights_%s.npz" % self.encoder_type)
         teacher_npz = os.path.join(weights_dir, "weights_teacher.npz")
@@ -201,6 +223,12 @@ class RLInferenceNode(object):
         self._halt_reason = ""
         self._start_checked = False       # tilt re-checked on the first publishing tick
 
+        # RUN RECORD: _runlog and _initial are created above, before the
+        # dynamic_reconfigure server. The two start gates stash what they
+        # already read into _initial, so the initial condition in the manifest
+        # costs no extra wait_for_message.
+        self._weights_dir = weights_dir
+
         # terminal status bookkeeping (1 Hz line so the operator can SEE it run)
         self._tick_count = 0
         self._pub_count = 0
@@ -239,6 +267,13 @@ class RLInferenceNode(object):
         # unwind it (it stops at the nearest 0-equivalent), so a wound arm must not
         # reach it. Do not move this below _home_arm or the Timer.
         if not self._gate_start_pose():
+            # A REFUSED run is data too, and until now it left nothing behind
+            # but a logerr. Publish the manifest first so the bag records what
+            # the robot was in when it refused -- that is the whole content of
+            # the finding.
+            self._publish_run_meta()
+            self._runlog.guard("start_refused", gate="joint1_start_pose",
+                               initial=self._initial)
             rospy.signal_shutdown("joint1 start-pose gate")
             return
 
@@ -247,8 +282,17 @@ class RLInferenceNode(object):
         # broke arm2; this one would have refused it twice over. Same placement
         # rule -- BEFORE _home_arm, which commands the arm.
         if not self._gate_start_state():
+            self._publish_run_meta()
+            self._runlog.guard("start_refused", gate="start_state",
+                               initial=self._initial)
             rospy.signal_shutdown("start-state gate")
             return
+
+        # Manifest goes out HERE: after both gates (so `initial` carries what
+        # they measured) and BEFORE homing (so it records the pose the run
+        # actually began from, not the pose homing moved it to). Homing is a
+        # commanded move and belongs in the event stream, not the manifest.
+        self._publish_run_meta()
 
         # Home the arm BEFORE the policy starts, so every run begins from the same
         # pose. Without this the operator had to launch-albc, press 3 (FIXED ramps
@@ -261,6 +305,10 @@ class RLInferenceNode(object):
         # joint2 = 2.985 rad, 0.157 from the pi abort threshold and at 8 % of the
         # available moment arm.
         if rospy.get_param("~home_on_start", False):
+            self._runlog.phase("home_start",
+                               joint1=float(rospy.get_param("~home_joint1", 0.0)),
+                               joint2=float(rospy.get_param(
+                                   "~home_joint2", 2.6179938779914944)))
             self._home_arm(
                 float(rospy.get_param("~home_joint1", 0.0)),
                 # 150 deg (2.6179938779914944 rad), NOT pi/2. decision/061 C:
@@ -276,7 +324,42 @@ class RLInferenceNode(object):
                 float(rospy.get_param("~home_tol", 0.05)),
                 float(rospy.get_param("~home_timeout_s", 25.0)))
 
+        # t0 of the run, as an event rather than as the first row of some
+        # topic: "when did the policy actually start" is otherwise inferred,
+        # and inferring it differently in two analyses is how two people get
+        # two settling times from one bag.
+        self._runlog.phase("policy_start", control_hz=self.hz,
+                           delta_scale=self.policy.delta_scale,
+                           thruster_scale=self.thruster_scale)
         self._timer = rospy.Timer(rospy.Duration(1.0 / self.hz), self._tick)
+
+    # ------------------------------------------------------------- run record
+    def _publish_run_meta(self):
+        """Emit the latched manifest. Never raises -- provenance is not a gate.
+
+        `initial` comes from what the start gates already read, so this costs no
+        extra wait_for_message. A field missing here means that gate was
+        skipped or disabled, which is itself worth knowing.
+        """
+        try:
+            self._runlog.publish_meta(
+                params=rospy.get_param("~", {}),
+                pack=pack_provenance(self._weights_dir),
+                git=git_provenance(self._weights_dir),
+                mixer=rospy.get_param("/thruster_mixer", {}),
+                contract={
+                    "POLICY_OBS_DIM": contract.POLICY_OBS_DIM,
+                    "ACTION_DIM": contract.ACTION_DIM,
+                    "DELTA_SCALE": contract.DELTA_SCALE,
+                    "CONTROL_DT": contract.CONTROL_DT,
+                    "L_LINK": contract.L_LINK,
+                    "topics": dict(TOPICS),
+                },
+                initial=self._initial,
+                notes=rospy.get_param("~notes", ""))
+        except Exception:
+            rospy.logwarn("run_meta failed to publish (run continues):\n%s",
+                          traceback.format_exc())
 
     def _gate_start_pose(self):
         """Refuse to start the policy from an already-wound joint1.
@@ -318,6 +401,12 @@ class RLInferenceNode(object):
             return True
 
         theta1 = float(msg.position[0])
+        # stash for the manifest: this sample IS the run's initial arm pose,
+        # and re-reading it later would get a different (already-moved) one
+        self._initial["joint1_rad"] = theta1
+        if len(msg.position) >= 2:
+            self._initial["joint2_rad"] = float(msg.position[1])
+            self._initial["joint2_deg"] = float(np.degrees(msg.position[1]))
         if abs(theta1) > limit:
             rospy.logerr("START REFUSED: joint1 is at %.3f rad (%.2f turns), past the "
                          "%.3f rad start limit. The arm is still wound -- unwind it "
@@ -374,6 +463,18 @@ class RLInferenceNode(object):
             if msg is not None:
                 eul = rotate_imu(msg.ROLL, msg.PITCH, msg.YAW, self.imu_yaw_offset)
                 tilt = float(np.degrees(np.hypot(eul[0], eul[1])))
+                # stash for the manifest, in the CORRECTED frame. Recording raw
+                # ROLL/PITCH here would seed every later analysis with the
+                # 2026-08-11 error, and the offset is carried alongside because
+                # the angles are meaningless without it.
+                self._initial.update({
+                    "roll_deg": float(np.degrees(eul[0])),
+                    "pitch_deg": float(np.degrees(eul[1])),
+                    "yaw_deg": float(np.degrees(eul[2])),
+                    "tilt_deg": tilt,
+                    "imu_yaw_offset_deg": float(np.rad2deg(self.imu_yaw_offset)),
+                    "frame": "body (rotate_imu applied)",
+                })
                 if not np.isfinite(tilt):
                     rospy.logerr("START REFUSED: attitude unreadable (non-finite). "
                                  "An unreadable IMU is not a reason to start a policy "
@@ -454,6 +555,17 @@ class RLInferenceNode(object):
         def trip(reason):
             self._halted = True
             self._halt_reason = reason
+            # As DATA, before the logerr: a trip ENDS the usable part of a run,
+            # so the analysis needs its timestamp to truncate the window rather
+            # than average a stalled arm into the steady-state statistics.
+            self._runlog.guard(
+                "arm_guard_trip", reason=reason,
+                joint_current_ma=(None if self._joint_cur is None
+                                  else [float(self._joint_cur[0]),
+                                        float(self._joint_cur[1])]),
+                joint_pos=[float(self._joint_pos[0]), float(self._joint_pos[1])],
+                tilt_deg=float(np.degrees(np.hypot(self._euler[0], self._euler[1]))),
+                tick=self._tick_count, published=self._pub_count)
             rospy.logerr("ARM GUARD TRIPPED: %s. Joint commands STOPPED and thrusters "
                          "zeroed; the driver holds the arm at its last target with "
                          "torque on. NOTE: Ctrl-C on THIS node does not release that "
@@ -622,6 +734,16 @@ class RLInferenceNode(object):
                       "pitch %.1f deg yawrate %.3f rad/s",
                       config.imu_yaw_offset_deg, config.cmd_roll_deg,
                       config.cmd_pitch_deg, config.cmd_yaw_rate)
+        # ...and the same thing as DATA. t4_step_analyze.py segments runs by
+        # regexing the loginfo above out of /rosout_agg; reword that line and
+        # every analysis silently returns zero segments. This event is the
+        # replacement, and the log line stays only for the operator.
+        self._runlog.setpoint("dynparam",
+                              source="dynamic_reconfigure",
+                              roll_deg=float(config.cmd_roll_deg),
+                              pitch_deg=float(config.cmd_pitch_deg),
+                              yaw_rate=float(config.cmd_yaw_rate),
+                              imu_yaw_offset_deg=float(config.imu_yaw_offset_deg))
         return config
 
     def _on_sensor(self, msg):
@@ -679,7 +801,19 @@ class RLInferenceNode(object):
 
     def _on_command(self, msg):
         if len(msg.data) >= 3:
-            self._command = np.array(msg.data[:3], dtype=np.float32)
+            new = np.array(msg.data[:3], dtype=np.float32)
+            # Only a CHANGE is an event. A scenario script republishes its
+            # setpoint continuously (a topic with no subscriber-side latch is
+            # not a setpoint you can rely on arriving once), so logging every
+            # message would bury the run's actual segment boundaries under
+            # thousands of identical rows. 1e-6 rad is far below any commanded
+            # resolution and far above float32 noise.
+            if not np.allclose(new, self._command, atol=1e-6):
+                self._runlog.setpoint("rl_command", source=TOPICS["rl_command"],
+                                      roll_deg=float(np.degrees(new[0])),
+                                      pitch_deg=float(np.degrees(new[1])),
+                                      yaw_rate=float(new[2]))
+            self._command = new
 
     # ------------------------------------------------------------- control loop
     def _tick(self, _evt):
@@ -796,6 +930,15 @@ class RLInferenceNode(object):
                     rospy.logwarn_throttle(
                         30.0, "thruster time limit %.1fs reached -- latched to 0"
                         % self.thruster_max_s)
+                    # ONCE, on the transition. `scale` is re-read from
+                    # self.thruster_scale every tick, so the branch above is
+                    # true on every tick past the limit -- the logwarn survives
+                    # that because it is throttled, an event would not.
+                    if not self._thr_latch_logged:
+                        self._thr_latch_logged = True
+                        self._runlog.phase("thrusters_latched_off",
+                                           after_s=self.thruster_max_s,
+                                           was_scale=scale)
                 scale = 0.0  # latch thrusters off; joints keep running
         thr_msg = Float32MultiArray()
         thr_msg.data = [float(x) * scale for x in action[2:8]]

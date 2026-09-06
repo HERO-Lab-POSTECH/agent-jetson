@@ -20,6 +20,13 @@
 
   <!-- Pass-through args mirror albc_rl.launch so CLI override works:  -->
   <!--   roslaunch albc_rl albc_rl_fieldtest.launch thruster_scale:=1.0 -->
+  <!-- RUN RECORD (2026-09-06). scenario/notes go into /albc/run_meta and are
+       the only labels that survive into the data; record:=false is for a dry
+       rehearsal where a bag would just be noise. -->
+  <arg name="scenario"            default="" />
+  <arg name="notes"               default="" />
+  <arg name="record"              default="true" />
+
   <arg name="encoder_type"        default="gru" />   <!-- shipped pack is 72D gru -->
   <arg name="control_hz"          default="50.0" />
   <arg name="use_board_rates"     default="false" />
@@ -138,6 +145,8 @@
 
   <!-- 2) RL student-policy inference node (reuse albc_rl.launch node def via include) -->
   <include file="$(find albc_rl)/launch/albc_rl.launch">
+    <arg name="scenario"           value="$(arg scenario)" />
+    <arg name="notes"              value="$(arg notes)" />
     <arg name="encoder_type"       value="$(arg encoder_type)" />
     <arg name="control_hz"         value="$(arg control_hz)" />
     <arg name="use_board_rates"    value="$(arg use_board_rates)" />
@@ -172,23 +181,30 @@
     <param name="thruster_deadband" value="$(arg thruster_deadband)" />
   </node>
 
-  <!-- ROSBAG: auto-record core topics for post-hoc field-test diagnosis.
-       Captures relay timing (/hero_agent/key_input), joint_states (the topic that
-       dropped out in run 1), thruster_cmd (safety), IMU, currents, and /rosout_agg
-       (every node log incl. read-fail reasons + STALE). Camera excluded (size).
-       Files land in ~/albc_bags/fieldtest_<timestamp>.bag (fixed dir, easy to find).
+  <!-- ROSBAG + RUN MANIFEST. The topic list moved to run_record.launch on
+       2026-09-06 and now lives in exactly one file. It was inline HERE and
+       nowhere else, so the TDC path recorded nothing at all and a TDC vs RL
+       table had no TDC column. Six topics were also missing from the list
+       itself (/albc/status, /hero_agent/state, /albc/joint_guard,
+       /hero_agent/dvl, and the two run-record topics); the reason for each is
+       written next to its name over there.
 
-       2026-09-05: /albc/rl_command added (PLAN 4-5 item F). The attitude setpoint
-       [roll_att, pitch_att, yaw_rate] can be set two ways and only one of them was
-       readable after the fact. dynparam goes through the reconfigure callback,
-       which loginfo's the setpoint into /rosout_agg; that log line is the only
-       reason t4_step_analyze.py can segment the 09-02 bags at all. This topic had
-       no equivalent: rl_inference_node's _on_command just assigns self._command,
-       with no log line and no republish, and the node publishes only
-       joint1/joint2/thruster_cmd. So a run driven by rostopic pub was unreadable
-       while a dynparam run was readable, with nothing in the bag to say which.
-       Note the rename: the old name /rl/command no longer exists, so recording
-       that string would silently capture nothing. -->
-  <node pkg="rosbag" type="record" name="albc_fieldtest_recorder" output="screen"
-        args="-o /home/nvidia/albc_bags/fieldtest /albc/rl_command /albc/joint_states /albc/joint1_cmd /albc/joint2_cmd /albc/thruster_cmd /hero_agent/thruster_pwm /hero_agent/key_input /hero_agent/sensors /albc/joint_currents /rosout_agg" />
+       Bag prefix stays "fieldtest" so existing readers and notes that name
+       ~/albc_bags/fieldtest_*.bag keep resolving.
+
+       The inline recorder this replaced was last edited by f6177fc
+       (2026-09-05), which added /albc/rl_command. That topic is NOT lost:
+       it is in run_record.launch's list, with f6177fc's reasoning kept
+       next to it.
+       publish_meta:=false because rl_inference_node publishes the manifest
+       itself - only it knows which weights it loaded. Two publishers on a
+       LATCHED topic is ambiguous provenance, which is worse than none. -->
+  <include file="$(find albc_rl)/launch/run_record.launch">
+    <arg name="controller"   value="rl" />
+    <arg name="scenario"     value="$(arg scenario)" />
+    <arg name="notes"        value="$(arg notes)" />
+    <arg name="record"       value="$(arg record)" />
+    <arg name="bag_prefix"   value="fieldtest" />
+    <arg name="publish_meta" value="false" />
+  </include>
 </launch>

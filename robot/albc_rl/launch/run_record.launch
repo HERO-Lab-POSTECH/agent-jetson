@@ -1,0 +1,143 @@
+<launch>
+  <!-- ==================================================================== -->
+  <!-- RUN RECORDING: the SINGLE OWNER of the bag's topic list.              -->
+  <!--                                                                      -->
+  <!-- Include this from every launch that produces data. Before 2026-09-06  -->
+  <!-- the list lived inline in albc_rl_fieldtest.launch and NOWHERE ELSE,   -->
+  <!-- which had two consequences that cost real experiments:                -->
+  <!--                                                                      -->
+  <!--   1. albc.launch / launch_albc.sh (the TDC path, i.e. the comparison  -->
+  <!--      BASELINE) recorded nothing at all. Every TDC run since the       -->
+  <!--      project began exists only as terminal scrollback.                -->
+  <!--   2. The list was nine signal topics with no manifest, so a bag could -->
+  <!--      not say which checkpoint or which parameters produced it. See    -->
+  <!--      the 2026-09-02 resume brief section 3: "4 runs the same          -->
+  <!--      checkpoint?" answered by "run 1 rosout has no md5".              -->
+  <!--                                                                      -->
+  <!-- One file, one list, every path. Adding a topic here adds it to every  -->
+  <!-- controller's runs at once, which is the only way a controller         -->
+  <!-- comparison stays apples to apples.                                    -->
+  <!--                                                                      -->
+  <!-- NOTE for editors: XML forbids a double hyphen inside a comment, and   -->
+  <!-- roslaunch parses with a STRICT parser. A stray one makes every launch -->
+  <!-- that includes this file fail to parse. Use a colon or a single dash.  -->
+  <!-- ==================================================================== -->
+
+  <!-- WHICH controller produced this run. Goes into the manifest, and a
+       comparison table groups by it. Allowed values are pinned in
+       albc_rl/src/albc_rl/run_log.py CONTROLLERS; an unknown one is not
+       refused here (a wet robot is worse than a mislabelled bag) but
+       validate_meta flags it on the analysis side. -->
+  <arg name="controller"    default="none" />
+  <!-- WHICH scenario. Free text, but use the scenario script's own name
+       (s1_attitude / s2_mission / s3_payload) so runs group without a lookup. -->
+  <arg name="scenario"      default="" />
+  <!-- Operator note. The one place a human sentence survives into the data:
+       payload id, tank condition, "arm2 re-seated this morning". -->
+  <arg name="notes"         default="" />
+
+  <arg name="record"        default="true" />
+  <arg name="bag_dir"       default="/home/nvidia/albc_bags" />
+  <!-- Prefix, not a filename: rosbag -o appends its own timestamp. That
+       timestamp comes from the BOARD clock and is routinely wrong (fake clock
+       snapshot, resume brief section 6), which is exactly why run_meta carries
+       a run_id that does not depend on it. Join on run_id, not on filename. -->
+  <arg name="bag_prefix"    default="albc" />
+
+  <!-- publish_meta:=false when a node in the same graph publishes the manifest
+       ITSELF. rl_inference_node does, because only it knows which weights were
+       loaded. /albc/run_meta is LATCHED, so two publishers would leave a late
+       subscriber holding whichever arrived last, and ambiguous provenance is
+       worse than none because it looks fine. -->
+  <arg name="publish_meta"  default="true" />
+
+  <group if="$(arg publish_meta)">
+    <node pkg="albc_rl" name="run_meta_node" type="run_meta_node.py" output="screen">
+      <param name="controller" value="$(arg controller)" />
+      <param name="scenario"   value="$(arg scenario)" />
+      <param name="notes"      value="$(arg notes)" />
+    </node>
+  </group>
+
+  <!-- ROSBAG.
+       Fixed node name on purpose, and only ONE may run: ROS kills the older
+       node of a duplicate name without an error, and the killed recorder
+       leaves a bag that is never closed. Same hazard, same idiom as
+       thruster_mixer's launch_mixer gate.
+
+       WHAT IS RECORDED, and why each one is not optional:
+
+         /hero_agent/sensors      attitude + gyro, in the RAW imu frame. Every
+                                  consumer applies rotate_imu itself and the
+                                  analysis replays it. Never read raw.
+         /hero_agent/state        Depth, Target_depth, Yaw, Target_yaw,
+                                  Cont_state, State_addit. ADDED 2026-09-06.
+                                  The descend/ascend half of the pick and place
+                                  scenario lives ENTIRELY in this message and
+                                  was not being recorded at all. State_addit&amp;4
+                                  is also the only readable relay state; without
+                                  it a relay left OFF and a dead joint bus both
+                                  present as -3001.
+         /albc/status             TDC target/current roll+pitch, target/current
+                                  x+y, 3 angular rates. ADDED 2026-09-06. This
+                                  is the BASELINE controller's setpoint AND its
+                                  measurement; without it a TDC vs RL table has
+                                  no TDC column.
+         /albc/rl_command         RL setpoint (f6177fc). The RL half of the same
+                                  thing. Before it, segmentation had to be
+                                  regexed out of /rosout_agg.
+         /albc/joint_states       arm position + velocity (driver differentiated)
+         /albc/joint1_cmd
+         /albc/joint2_cmd         commanded ABSOLUTE angle. Command versus
+                                  measured is what separates "the policy did not
+                                  ask" from "the arm did not go", and the
+                                  2026-09-02 pitch finding turned on exactly
+                                  that comparison.
+         /albc/joint_currents     load. The 1323.5 mA before the arm2 fracture
+                                  was measured, logged, bagged, and unwatched.
+         /albc/joint_guard        ADDED 2026-09-06. j1_over_count, j1_abs_max,
+                                  j2_over_pi, j2_abs_max, abort_flag. The
+                                  trained joint1 constraint is METERED here
+                                  rather than clipped, so this topic is the
+                                  constraint violation column of the comparison
+                                  table. It was published and recorded nowhere.
+         /albc/thruster_cmd       policy thrust request (already scaled)
+         /hero_agent/thruster_pwm what actually reached the ESCs
+         /hero_agent/dvl          ADDED 2026-09-06. TARGET_X/Y/Z. Low value
+                                  today, because firmware/agent/dvl_position.h
+                                  records that nothing reads these any more
+                                  (open circuit since 2026-09-04), but it is the
+                                  topic that would carry a translation setpoint
+                                  if that loop is ever closed, and it costs
+                                  nothing.
+         /hero_agent/key_input    operator keystrokes. With the depth setpoint
+                                  reachable ONLY by the firmware keys o and l,
+                                  this is part of the depth record rather than a
+                                  convenience.
+         /albc/run_meta           the manifest (latched)
+         /albc/run_event          phase / setpoint / guard / mark events
+         /rosout_agg              every node's log, including read failure
+                                  reasons and STALE warnings
+
+       Camera stays excluded (size). -->
+  <group if="$(arg record)">
+    <node pkg="rosbag" type="record" name="albc_recorder" output="screen"
+          args="-o $(arg bag_dir)/$(arg bag_prefix)
+                /hero_agent/sensors
+                /hero_agent/state
+                /albc/status
+                /albc/rl_command
+                /albc/joint_states
+                /albc/joint1_cmd
+                /albc/joint2_cmd
+                /albc/joint_currents
+                /albc/joint_guard
+                /albc/thruster_cmd
+                /hero_agent/thruster_pwm
+                /hero_agent/dvl
+                /hero_agent/key_input
+                /albc/run_meta
+                /albc/run_event
+                /rosout_agg" />
+  </group>
+</launch>
