@@ -114,7 +114,8 @@ from albc_rl.np_policy import NumpyStudentPolicy, DELTA_SCALE
 # /albc/run_event. Before this the only record of which checkpoint produced a
 # bag was a loginfo line, and the only record of a setpoint change was another
 # one -- see run_log.py's header for what that cost.
-from albc_rl.run_log import RunLogger, git_provenance, pack_provenance
+from albc_rl.run_log import (RunLogger, git_provenance, pack_provenance,
+                             operator_notes)
 from dynamic_reconfigure.server import Server  # noqa: E402
 from albc_rl.cfg import GyroOffsetConfig  # noqa: E402
 
@@ -369,7 +370,7 @@ class RLInferenceNode(object):
                     "topics": dict(TOPICS),
                 },
                 initial=self._initial,
-                notes=rospy.get_param("~notes", ""))
+                notes=operator_notes(rospy.get_param("~notes", "")))
         except Exception:
             rospy.logwarn("run_meta failed to publish (run continues):\n%s",
                           traceback.format_exc())

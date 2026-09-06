@@ -31,7 +31,8 @@ from hero_msgs.msg import hero_agent_sensor
 from albc_rl import contract
 from albc_rl.build_proprio import rotate_imu
 from albc_rl.contract import TOPICS
-from albc_rl.run_log import RunLogger, git_provenance, pack_provenance
+from albc_rl.run_log import (RunLogger, git_provenance, pack_provenance,
+                             operator_notes)
 
 # How long to wait for one sample of each state topic before giving up on that
 # field of the initial condition. Short on purpose: a missing initial attitude
@@ -105,7 +106,8 @@ def main():
 
     controller = rospy.get_param("~controller", "none")
     scenario = rospy.get_param("~scenario", "") or None
-    notes = rospy.get_param("~notes", "")
+    # via ALBC_NOTES when non-ASCII: roslaunch cannot substitute one
+    notes = operator_notes(rospy.get_param("~notes", ""))
 
     # The TDC controller's knobs live in its own namespace (launch_albc.sh does
     # a rosparam load into /albc_controller), so they are NOT under this node's

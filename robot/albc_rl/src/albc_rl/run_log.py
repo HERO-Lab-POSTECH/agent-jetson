@@ -211,6 +211,32 @@ def _text(v):
     return v
 
 
+NOTES_ENV = "ALBC_NOTES"
+
+
+def operator_notes(param_value=""):
+    """The operator's note, taking the route that survives a non-ASCII one.
+
+    MEASURED on the board 2026-09-06, ROS lunar / python 2.7: roslaunch's
+    substitution layer decodes an argument as ASCII, so BOTH
+
+        <param name="notes" value="$(arg notes)"/>
+        <rosparam param="notes" subst_value="True">"$(arg notes)"</rosparam>
+
+    raise RLException on a Korean note and the WHOLE LAUNCH REFUSES TO START.
+    Not "the manifest is lost" -- the controller does not come up either, on
+    any path where the recorder is included rather than backgrounded.
+
+    A node inherits roslaunch's environment untouched, so ALBC_NOTES arrives as
+    a py2 str of UTF-8 bytes and decodes cleanly (measured in the same probe).
+    So: the param wins when it has something, and ALBC_NOTES is the channel for
+    anything a person would actually type in Korean.
+    """
+    if param_value:
+        return _text(param_value)
+    return _text(os.environ.get(NOTES_ENV, ""))
+
+
 def build_meta(run_id, node, controller, scenario=None, params=None,
                pack=None, git=None, contract=None, initial=None,
                mixer=None, notes=None, wall_clock=None):
@@ -499,6 +525,22 @@ def demo():
         assert pack_provenance(d)["tag"] == "pack_gru_X"
     finally:
         shutil.rmtree(d)
+
+    # the operator note has to survive the ONE route roslaunch cannot carry
+    old = os.environ.get(NOTES_ENV)
+    try:
+        os.environ[NOTES_ENV] = "\xed\x83\xb1\xed\x81\xac 3"    # UTF-8 bytes for "탱크 3"
+        assert operator_notes("") == _text("\xed\x83\xb1\xed\x81\xac 3")
+        assert operator_notes("explicit") == "explicit"   # param wins
+        m = build_meta("x", "n", "tdc", notes=operator_notes(""))
+        json.dumps(m)                                     # must not raise
+        del os.environ[NOTES_ENV]
+        assert operator_notes("") == ""
+    finally:
+        if old is None:
+            os.environ.pop(NOTES_ENV, None)
+        else:
+            os.environ[NOTES_ENV] = old
 
     print("run_log: OK")
 

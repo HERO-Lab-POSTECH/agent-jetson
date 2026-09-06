@@ -34,6 +34,10 @@ JAC_PID=$!
 #   ALBC_RECORD=0                 skip the bag (bench check)
 #   ALBC_SCENARIO=s1_attitude     scenario label -> /albc/run_meta
 #   ALBC_NOTES="payload B, 400 g" operator note  -> /albc/run_meta
+#     NOT passed as notes:= on purpose. roslaunch (lunar, py2) decodes a
+#     substitution argument as ASCII and raises RLException on a Korean note,
+#     which on an include-based path takes the whole launch down with it.
+#     run_meta_node reads ALBC_NOTES from the inherited environment instead.
 #   ALBC_CONTROLLER=tdc           override when this shell drives something else
 #
 # Backgrounded, and its failure is NOT fatal: `set -e` is on, and a recorder
@@ -44,7 +48,6 @@ if [ "${ALBC_RECORD:-1}" != "0" ]; then
     roslaunch albc_rl run_record.launch \
         controller:="${ALBC_CONTROLLER:-tdc}" \
         scenario:="${ALBC_SCENARIO:-}" \
-        notes:="${ALBC_NOTES:-}" \
         bag_prefix:=tdc > /tmp/albc_run_record.log 2>&1 &
     REC_PID=$!
     echo "run record: PID $REC_PID (log /tmp/albc_run_record.log). ALBC_RECORD=0 to skip."
